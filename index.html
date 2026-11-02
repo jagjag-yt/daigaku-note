@@ -15,84 +15,95 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- ノート一覧 -->
+  <!-- ノート一覧(本棚) -->
   <section id="library">
-    <header class="bar">
-      <h1>大学ノート</h1>
-      <input id="search" type="search" placeholder="ノートを検索(名前・PDFの文字)" autocomplete="off">
-      <div class="spacer"></div>
-      <button id="new-note" class="primary">新しいノート</button>
-      <button id="open-pdf">PDFを開く</button>
-      <button id="open-gn" title="GoodNotes のノート(.goodnotes)を取り込む">GoodNotesから取り込む</button>
-      <button id="sync-btn">同期</button>
-      <input id="pdf-input" type="file" accept="application/pdf,.pdf" hidden>
-      <input id="gn-input" type="file" accept=".goodnotes,application/zip" multiple hidden>
+    <header class="lib-top">
+      <div class="lib-row">
+        <h1>書類</h1>
+        <div class="spacer"></div>
+        <label class="search-box"><span data-icon="search" data-icon-size="18"></span><input id="search" type="search" placeholder="検索" aria-label="ノートを検索(名前・PDFの文字)" autocomplete="off"></label>
+        <button id="sync-btn" class="icon-btn" data-icon="cloud" title="同期" aria-label="同期"><span class="sync-dot" hidden></span></button>
+      </div>
+      <div class="substatus"><span class="sync-status"></span><span id="search-status"></span></div>
     </header>
-    <div class="substatus"><span class="sync-status"></span><span id="search-status"></span></div>
-    <p id="empty" class="empty" hidden>ノートはまだありません。「新しいノート」または「PDFを開く」から始めてください。</p>
+    <input id="pdf-input" type="file" accept="application/pdf,.pdf" hidden>
+    <input id="gn-input" type="file" accept=".goodnotes,application/zip" multiple hidden>
     <div id="results" class="results" hidden></div>
     <div id="notes" class="grid"></div>
+    <p id="empty" class="empty" hidden>ノートはまだありません。「新規」から作成するか、PDF を読み込んでください。</p>
   </section>
 
   <!-- エディタ -->
   <section id="editor" hidden>
-    <header class="bar tools">
-      <button id="back" title="ノート一覧へ">‹ 一覧</button>
-      <button id="title" class="title" title="名前を変更"></button>
-      <span id="saved" class="saved"></span>
-      <div class="spacer"></div>
-      <div class="group">
-        <button id="tool-pen" title="ペン (P)">ペン</button>
-        <button id="tool-marker" title="蛍光ペン (H)">蛍光ペン</button>
-        <button id="tool-eraser" title="消しゴム (E)">消しゴム</button>
-        <button id="tool-lasso" title="投げ縄で選択・移動 (L)">投げ縄</button>
+    <header class="ed-top">
+      <div class="ed-row nav">
+        <button id="back" class="icon-btn text" data-icon="back" title="書類へ戻る"><span class="btn-label">書類</span></button>
+        <button id="pages-btn" class="icon-btn" data-icon="thumbs" title="ページ一覧" aria-label="ページ一覧"></button>
+        <div class="ed-title">
+          <button id="title" class="title" title="名前を変更"></button>
+          <span id="saved" class="saved"></span>
+        </div>
+        <button id="undo" class="icon-btn" data-icon="undo" title="元に戻す (Ctrl+Z)" aria-label="元に戻す"></button>
+        <button id="redo" class="icon-btn" data-icon="redo" title="やり直す (Ctrl+Y)" aria-label="やり直す"></button>
+        <button id="more-btn" class="icon-btn" data-icon="more" title="その他" aria-label="その他"></button>
       </div>
-      <div id="colors" class="group"></div>
-      <div id="widths" class="group"></div>
-      <div class="group">
-        <button id="shapes" title="書き終わりでペンを止めると、直線・円・四角形などに整えます">図形補正</button>
-        <button id="undo" title="元に戻す (Ctrl+Z)">↶</button>
-        <button id="redo" title="やり直す (Ctrl+Y)">↷</button>
-      </div>
-      <div class="group">
-        <button id="zoom-out" title="縮小">−</button>
-        <button id="zoom-label" title="幅に合わせる">100%</button>
-        <button id="zoom-in" title="拡大">+</button>
-      </div>
-      <div class="group">
-        <button id="pages-btn" title="ページの並べ替え・テンプレート">ページ</button>
-        <button id="add-page" title="今のページの後ろに白紙を追加">+ページ</button>
-        <button id="add-pdf" title="PDFのページを末尾に追加">+PDF</button>
-        <button id="export-pdf" title="PDFに書き出す">PDF書き出し</button>
-        <button id="finger" title="指でも書く">指で書く</button>
+      <div class="ed-row toolbar" role="toolbar" aria-label="道具">
+        <div class="tool-group">
+          <button id="tool-pen" class="tool" data-icon="pen" data-icon-size="24" title="ペン (P)" aria-label="ペン"></button>
+          <button id="tool-marker" class="tool" data-icon="marker" data-icon-size="24" title="蛍光ペン (H)" aria-label="蛍光ペン"></button>
+          <button id="tool-eraser" class="tool" data-icon="eraser" data-icon-size="24" title="消しゴム (E)" aria-label="消しゴム"></button>
+          <button id="tool-lasso" class="tool" data-icon="lasso" data-icon-size="24" title="投げ縄で選択・移動 (L)" aria-label="投げ縄"></button>
+          <button id="shapes" class="tool" data-icon="shapes" data-icon-size="24" title="図形補正: 書き終わりでペンを止めると、直線・円・四角形などに整えます" aria-label="図形補正"></button>
+        </div>
+        <div class="tb-sep"></div>
+        <div id="colors" class="tool-group"></div>
+        <div class="tb-sep" id="sep-widths"></div>
+        <div id="widths" class="tool-group"></div>
       </div>
       <input id="pdf-add-input" type="file" accept="application/pdf,.pdf" hidden>
     </header>
-    <div id="scroller"><div id="pages"></div></div>
+    <div class="ed-body">
+      <aside id="sidebar" class="sidebar" hidden aria-label="ページ一覧">
+        <div class="sb-head"><span>ページ</span><button id="pages-close" class="icon-btn small" data-icon="close" data-icon-size="18" title="閉じる" aria-label="閉じる"></button></div>
+        <div id="pp-list" class="pp-list"></div>
+        <div class="sb-foot"><button id="sb-add" class="wide-btn" data-icon="plus" data-icon-size="18"><span>ページを追加</span></button></div>
+      </aside>
+      <div id="scroller"><div id="pages"></div></div>
+      <div id="page-ind" class="page-ind" aria-live="polite"></div>
+    </div>
   </section>
 
-  <dialog id="new-dialog">
+  <dialog id="new-dialog" class="wide">
     <form id="new-form">
       <h2>新しいノート</h2>
       <label class="field">名前<input id="nn-title" type="text" placeholder="無題のノート"></label>
-      <label class="field">テンプレート<select id="nn-tpl" class="tpl-select"></select></label>
-      <label class="field">用紙<select id="nn-size" class="size-select"></select></label>
-      <div class="row">
-        <button type="submit" class="primary">作成</button>
+      <div class="field">表紙<div id="nn-cover" class="cover-pick" role="radiogroup" aria-label="表紙の色"></div></div>
+      <div class="field">用紙<div id="nn-tpl" class="tpl-pick" role="radiogroup" aria-label="テンプレート"></div></div>
+      <label class="field">サイズ<select id="nn-size" class="size-select"></select></label>
+      <div class="row end">
         <button type="button" id="nn-cancel">キャンセル</button>
+        <button type="submit" class="primary">作成</button>
       </div>
     </form>
   </dialog>
 
-  <dialog id="pages-dialog" class="wide">
-    <h2>ページ</h2>
-    <div id="pp-list" class="pp-list"></div>
-    <div class="row pp-add">
-      <select id="pp-tpl" class="tpl-select" title="テンプレート"></select>
-      <select id="pp-size" class="size-select" title="用紙"></select>
-      <button id="pp-add" class="primary">末尾にページを追加</button>
-      <button id="pages-close">閉じる</button>
-    </div>
+  <dialog id="add-dialog" class="wide">
+    <form id="add-form">
+      <h2>ページを追加</h2>
+      <div class="field">場所<div class="seg" role="radiogroup">
+        <label><input type="radio" name="pp-where" value="after" checked><span>今のページの後ろ</span></label>
+        <label><input type="radio" name="pp-where" value="before"><span>今のページの前</span></label>
+        <label><input type="radio" name="pp-where" value="last"><span>最後</span></label>
+      </div></div>
+      <div class="field">用紙<div id="pp-tpl" class="tpl-pick" role="radiogroup" aria-label="テンプレート"></div></div>
+      <label class="field">サイズ<select id="pp-size" class="size-select"></select></label>
+      <div class="row end">
+        <button type="button" id="pp-pdf">PDF のページを追加…</button>
+        <div class="spacer"></div>
+        <button type="button" id="pp-cancel">キャンセル</button>
+        <button type="submit" id="pp-add" class="primary">追加</button>
+      </div>
+    </form>
   </dialog>
 
   <dialog id="sync-dialog" class="wide">

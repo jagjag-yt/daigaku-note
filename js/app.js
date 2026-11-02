@@ -8,12 +8,27 @@ import { importPdf, renderPdfPage, exportPdf } from './pdf.js';
 import { buildSyncFile, importSyncFile } from './sync.js';
 import * as search from './search.js';
 import * as dav from './webdav.js';
+import { icon, fillIcons, openPopover, closePopover, menu, popoverAnchor } from './ui.js';
 
 const $ = (s) => document.querySelector(s);
-const PEN_COLORS = ['#1f2937', '#2563eb', '#dc2626', '#16a34a', '#f59e0b'];
-const MARKER_COLORS = ['#fde047', '#86efac', '#f9a8d4', '#93c5fd', '#fdba74'];
+// 色と太さは道具ごとに3つずつ「よく使うもの」として並べる。選んでいるものをもう一度押すと入れ替えられる
+const PEN_COLORS = ['#1f2937', '#2563eb', '#dc2626'];
+const MARKER_COLORS = ['#fde047', '#86efac', '#f9a8d4'];
 const PEN_WIDTHS = [1.2, 2.2, 4];
 const MARKER_WIDTHS = [8, 14, 22];
+const PEN_PALETTE = [
+  '#000000', '#1f2937', '#4b5563', '#9ca3af', '#ffffff',
+  '#1e3a8a', '#2563eb', '#0ea5e9', '#0d9488', '#16a34a',
+  '#65a30d', '#ca8a04', '#f59e0b', '#ea580c', '#dc2626',
+  '#be185d', '#db2777', '#9333ea', '#6d28d9', '#78350f',
+];
+const MARKER_PALETTE = [
+  '#fde047', '#fef08a', '#fdba74', '#fca5a5', '#f9a8d4',
+  '#d8b4fe', '#a5b4fc', '#93c5fd', '#67e8f9', '#86efac',
+  '#bef264', '#d1d5db',
+];
+const WIDTH_RANGE = { pen: [0.5, 8, 0.1], marker: [4, 32, 1] };
+const COVERS = ['#2f5d9e', '#b33a3a', '#2f7d5b', '#7a4fa0', '#c27c1a', '#3a6f7a', '#4b5563', '#a8556f'];
 const MAX_CANVAS_PX = 4_000_000; // iPad Safari のキャンバス上限を避ける
 
 const S = {
@@ -23,6 +38,11 @@ const S = {
   tool: 'pen', // pen | marker | eraser | lasso
   pen: { color: PEN_COLORS[0], width: PEN_WIDTHS[1] },
   marker: { color: MARKER_COLORS[0], width: MARKER_WIDTHS[1] },
+  slots: {
+    pen: { colors: [...PEN_COLORS], widths: [...PEN_WIDTHS] },
+    marker: { colors: [...MARKER_COLORS], widths: [...MARKER_WIDTHS] },
+  },
+  sidebar: false,
   fingerDraw: false,
   shapes: true,
   undo: [],
@@ -46,6 +66,14 @@ async function init() {
   if (prefs.shapes === false) S.shapes = false;
   if (prefs.pen) S.pen = prefs.pen;
   if (prefs.marker) S.marker = prefs.marker;
+  if (prefs.sidebar) S.sidebar = true;
+  for (const k of ['pen', 'marker']) {
+    const sl = prefs.slots?.[k];
+    if (sl && sl.colors?.length === 3 && sl.widths?.length === 3) S.slots[k] = sl;
+    // 前の版で選んでいた色・太さが並びになければ、先頭に入れておく
+    if (!S.slots[k].colors.includes(S[k].color)) S.slots[k].colors[0] = S[k].color;
+    if (!S.slots[k].widths.includes(S[k].width)) S.slots[k].widths[0] = S[k].width;
+  }
 
   navigator.storage?.persist?.().catch(() => {});
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
@@ -58,10 +86,10 @@ async function init() {
       tryReload();
     });
   }
+  fillIcons();
   fillSelects();
   bindLibrary();
   bindEditor();
-  bindPagesPanel();
   await dav.init({ recorder: S.rec, onRemoteChange: onRemoteChange, onStatus: setSyncStatus });
   search.init({ onProgress: (msg) => { const el = $('#search-status'); if (el) el.textContent = msg; } });
   window.addEventListener('hashchange', route);
@@ -69,11 +97,13 @@ async function init() {
 }
 
 function savePrefs() {
-  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapes: S.shapes, pen: S.pen, marker: S.marker });
+  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapes: S.shapes, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar });
 }
 
 function route() {
   flushPen();
+  closePopover();
+  for (const d of document.querySelectorAll('dialog[open]')) d.close();
   const m = location.hash.match(/^#\/note\/(\w+)(?:\/p\/(\w+))?/);
   if (m) openNote(m[1], m[2]);
   else showLibrary();
@@ -111,6 +141,52 @@ function fillSelects() {
   for (const sel of document.querySelectorAll('select.size-select')) {
     sel.innerHTML = SIZES.map((s) => `<option value="${s.id}">${s.label}</option>`).join('');
   }
+  $('#pp-size').insertAdjacentHTML('afterbegin', '<option value="">今のページと同じ</option>');
+  $('#pp-size').value = '';
+  tplPicker($('#nn-tpl'), 'lines-b');
+  tplPicker($('#pp-tpl'), 'lines-b');
+  coverPicker($('#nn-cover'), COVERS[0]);
+}
+
+// 用紙(テンプレート)を見本の絵で選ぶ。選んだ値は el.dataset.value
+function tplPicker(el, value) {
+  el.innerHTML = '';
+  for (const t of TEMPLATES) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'tpl-opt';
+    b.dataset.tpl = t.id;
+    b.setAttribute('role', 'radio');
+    const w = 105, h = 148;
+    b.innerHTML = `<svg viewBox="0 0 ${PAGE_A4.w} ${PAGE_A4.h}" width="${w}" height="${h}" preserveAspectRatio="none" aria-hidden="true">${templateSvg({ type: 'blank', ruling: t.id }, PAGE_A4.w, PAGE_A4.h)}</svg><span></span>`;
+    b.querySelector('span').textContent = t.label;
+    b.onclick = () => setPick(el, t.id);
+    el.appendChild(b);
+  }
+  setPick(el, value);
+}
+function setPick(el, value) {
+  el.dataset.value = value;
+  for (const b of el.children) {
+    const on = (b.dataset.tpl || b.dataset.cover) === value;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-checked', on);
+  }
+}
+function coverPicker(el, value, onPick) {
+  el.innerHTML = '';
+  for (const c of COVERS) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'cover-opt';
+    b.dataset.cover = c;
+    b.style.setProperty('--cover', c);
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-label', '表紙の色');
+    b.onclick = () => { setPick(el, c); onPick?.(c); };
+    el.appendChild(b);
+  }
+  setPick(el, value);
 }
 
 // ---------- op の記録 ----------
@@ -124,11 +200,35 @@ async function commit(ops) {
     setSaved(true);
     dav.schedule();
     if (S.note) for (const op of ops) if (op.t === 'page.add') search.markDirty(S.note.id, op.p.page.id);
+    if (S.note) thumbsDirty(ops);
   } catch (e) {
     setSaved(false);
     toast('保存に失敗しました: ' + e.message, 6000);
   }
 }
+// 線が変わったページのサムネイルを少し後で描き直す
+const dirtyThumbs = new Set();
+let thumbTimer = 0;
+function thumbsDirty(ops) {
+  if (!S.sidebar || !S.thumbs?.size) return;
+  for (const op of ops) {
+    const p = op.p || {};
+    if (op.t === 'stroke.add') dirtyThumbs.add(p.s.pageId);
+    const ids = p.ids || Object.keys(p.tf || p.styles || {});
+    for (const id of ids) { const d = S.note.strokes.get(id)?.data; if (d) dirtyThumbs.add(d.pageId); }
+  }
+  clearTimeout(thumbTimer);
+  thumbTimer = setTimeout(function run() {
+    // 書いている最中は描き直さない(ペンの動きを邪魔しない)
+    if (active || penPending) { thumbTimer = setTimeout(run, 600); return; }
+    for (const id of dirtyThumbs) {
+      const row = S.thumbs.get(id), pg = S.note && pagesOf(S.note).find((x) => x.id === id);
+      if (row && pg) drawThumb(row.querySelector('canvas'), pg);
+    }
+    dirtyThumbs.clear();
+  }, 600);
+}
+
 function setSaved(ok) {
   const el = $('#saved');
   if (el) el.textContent = ok ? '端末に保存済み' : '保存エラー';
@@ -156,20 +256,28 @@ async function onRemoteChange(noteIds) {
 
 // ---------- ノート一覧 ----------
 function bindLibrary() {
-  $('#new-note').onclick = () => {
+  const newNote = () => {
     $('#nn-title').value = '';
+    setPick($('#nn-cover'), COVERS[Math.floor(Math.random() * COVERS.length)]);
     $('#new-dialog').showModal();
     $('#nn-title').focus();
   };
+  // 「新規」: ノートを作るか、ファイルを読み込むかを選ぶ
+  S.newMenu = (anchor) => openPopover(anchor, (body, close) => menu(body, [
+    { icon: 'notebook', label: 'ノート', id: 'new-notebook', onClick: newNote },
+    { icon: 'pdf', label: 'PDF を読み込む', id: 'open-pdf', onClick: () => $('#pdf-input').click() },
+    { icon: 'import', label: 'GoodNotes から取り込む(.goodnotes)', id: 'open-gn', onClick: () => $('#gn-input').click() },
+  ], close), { className: 'new-menu' });
   $('#nn-cancel').onclick = () => $('#new-dialog').close();
   $('#new-form').onsubmit = async (e) => {
     e.preventDefault();
     const title = $('#nn-title').value.trim() || '無題のノート';
     const size = sizeById($('#nn-size').value);
-    const ruling = $('#nn-tpl').value;
+    const ruling = $('#nn-tpl').dataset.value;
+    const cover = $('#nn-cover').dataset.value;
     const id = newId();
     const ops = [
-      S.rec.make(id, 'note.create', { title }),
+      S.rec.make(id, 'note.create', { title, cover }),
       S.rec.make(id, 'page.add', { page: { id: newId(), w: size.w, h: size.h, order: 1, bg: { type: 'blank', ruling } } }),
     ];
     await db.putOps(ops, S.rec.clock);
@@ -177,7 +285,6 @@ function bindLibrary() {
     $('#new-dialog').close();
     location.hash = '#/note/' + id;
   };
-  $('#open-pdf').onclick = () => $('#pdf-input').click();
   $('#pdf-input').onchange = async (e) => {
     const file = e.target.files[0];
     e.target.value = '';
@@ -197,7 +304,6 @@ function bindLibrary() {
       toast('PDFを読み込めませんでした: ' + err.message, 6000);
     }
   };
-  $('#open-gn').onclick = () => $('#gn-input').click();
   $('#gn-input').onchange = async (e) => {
     const files = [...e.target.files];
     e.target.value = '';
@@ -293,12 +399,19 @@ async function runSearch() {
     </a>`).join('');
 }
 
-function coverColor(id) {
-  const palette = ['#2f5d9e', '#b33a3a', '#2f7d5b', '#7a4fa0', '#c27c1a', '#3a6f7a'];
+function coverColor(n) {
+  if (n.cover) return n.cover;
   let h = 0;
-  for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return palette[h % palette.length];
+  for (const ch of n.id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return COVERS[h % 6];
 }
+
+const fmtDate = (t) => {
+  if (!t) return '';
+  const d = new Date(t), now = new Date();
+  if (d.toDateString() === now.toDateString()) return '今日 ' + d.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleDateString('ja-JP', d.getFullYear() === now.getFullYear() ? { month: 'long', day: 'numeric' } : { dateStyle: 'medium' });
+};
 
 async function showLibrary() {
   closeEditor();
@@ -312,108 +425,258 @@ async function showLibrary() {
   const grid = $('#notes');
   grid.innerHTML = '';
   $('#empty').hidden = notes.length > 0;
+  // 先頭は「新規」
+  const nt = document.createElement('div');
+  nt.className = 'card new-card';
+  nt.innerHTML = `<button id="new-note" class="cover new-cover" aria-haspopup="menu">${icon('plus', 40)}</button><div class="meta"><div class="name">新規</div></div>`;
+  nt.querySelector('#new-note').onclick = (e) => S.newMenu(e.currentTarget);
+  grid.appendChild(nt);
   for (const n of notes) {
     const card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = `
-      <a class="cover" href="#/note/${n.id}" style="--cover:${coverColor(n.id)}">
+      <a class="cover" href="#/note/${n.id}" style="--cover:${coverColor(n)}">
         <span class="label"><span class="label-title"></span></span>
-        <span class="brand">大学ノート</span>
       </a>
-      <div class="meta"><div class="name"></div><div class="date"></div></div>
-      <div class="actions">
-        <button data-act="rename" title="名前を変更">名前</button>
-        <button data-act="export" title="このノートだけ書き出す">書き出し</button>
-        <button data-act="delete" title="削除" class="danger">削除</button>
+      <div class="meta">
+        <button class="name-btn" aria-haspopup="menu" title="ノートの操作"><span class="name"></span>${icon('chevron', 16)}</button>
+        <div class="date"></div>
       </div>`;
     card.querySelector('.label-title').textContent = n.title;
     card.querySelector('.name').textContent = n.title;
-    const t = upd.get(n.id);
-    card.querySelector('.date').textContent = t ? new Date(t).toLocaleString('ja-JP', { dateStyle: 'short', timeStyle: 'short' }) : '';
-    card.querySelector('[data-act=rename]').onclick = async () => {
-      const title = prompt('新しい名前', n.title);
-      if (!title || title === n.title) return;
-      await db.putOps([S.rec.make(n.id, 'note.rename', { title })], S.rec.clock);
-      dav.schedule();
-      showLibrary();
-    };
-    card.querySelector('[data-act=export]').onclick = async () => {
-      const json = await buildSyncFile(S.rec.device, n.id);
-      download(JSON.stringify(json), `${safeName(n.title)}.daigaku.json`, 'application/json');
-    };
-    card.querySelector('[data-act=delete]').onclick = async () => {
-      if (!confirm(`「${n.title}」を削除しますか?`)) return;
-      await db.putOps([S.rec.make(n.id, 'note.delete', {})], S.rec.clock);
-      dav.schedule();
-      showLibrary();
-      toast('削除しました');
-    };
+    card.querySelector('.date').textContent = fmtDate(upd.get(n.id));
+    card.querySelector('.name-btn').onclick = (e) => noteMenu(e.currentTarget, n);
     grid.appendChild(card);
   }
   if ($('#search').value.trim()) runSearch();
 }
 
+function noteMenu(anchor, n) {
+  const covers = document.createElement('div');
+  covers.className = 'menu-covers';
+  covers.innerHTML = '<div class="menu-cap">表紙の色</div><div class="cover-pick small"></div>';
+  coverPicker(covers.querySelector('.cover-pick'), coverColor(n), async (c) => {
+    await db.putOps([S.rec.make(n.id, 'note.cover', { cover: c })], S.rec.clock);
+    dav.schedule();
+    closePopover();
+    showLibrary();
+  });
+  openPopover(anchor, (body, close) => menu(body, [
+    { icon: 'rename', label: '名前を変更', attrs: { 'data-act': 'rename' }, onClick: async () => {
+      const title = prompt('新しい名前', n.title);
+      if (!title || title === n.title) return;
+      await db.putOps([S.rec.make(n.id, 'note.rename', { title })], S.rec.clock);
+      dav.schedule();
+      showLibrary();
+    } },
+    { icon: 'export', label: '同期ファイルとして書き出す', attrs: { 'data-act': 'export' }, onClick: async () => {
+      const json = await buildSyncFile(S.rec.device, n.id);
+      download(JSON.stringify(json), `${safeName(n.title)}.daigaku.json`, 'application/json');
+    } },
+    '-',
+    { el: covers },
+    '-',
+    { icon: 'trash', label: '削除', danger: true, attrs: { 'data-act': 'delete' }, onClick: async () => {
+      if (!confirm(`「${n.title}」を削除しますか?`)) return;
+      await db.putOps([S.rec.make(n.id, 'note.delete', {})], S.rec.clock);
+      dav.schedule();
+      showLibrary();
+      toast('削除しました');
+    } },
+  ], close), { align: 'start' });
+}
+
 // ---------- エディタのツールバー ----------
-const toolState = () => (S.tool === 'marker' ? S.marker : S.pen);
+const inkTool = () => (S.tool === 'marker' ? 'marker' : 'pen');
+const toolState = () => S[inkTool()];
+let toolbarKey = '';
 
 function refreshToolbar() {
-  for (const t of ['pen', 'marker', 'eraser', 'lasso']) $('#tool-' + t).classList.toggle('on', S.tool === t);
-  const marker = S.tool === 'marker';
-  const st = toolState();
-  const colors = marker ? MARKER_COLORS : PEN_COLORS;
+  for (const t of ['pen', 'marker', 'eraser', 'lasso']) {
+    const b = $('#tool-' + t);
+    b.classList.toggle('on', S.tool === t);
+    b.setAttribute('aria-pressed', S.tool === t);
+  }
+  $('#tool-pen').style.setProperty('--tc', S.pen.color);
+  $('#tool-marker').style.setProperty('--tc', S.marker.color);
+  $('#shapes').classList.toggle('on', S.shapes);
+  $('#shapes').setAttribute('aria-pressed', S.shapes);
+  $('#undo').disabled = !S.undo.length;
+  $('#redo').disabled = !S.redo.length;
+  $('#pages-btn').classList.toggle('on', S.sidebar);
+  // 消しゴムでは色と太さを出さない。投げ縄では選んだ線の色を変えるのに色だけ出す
+  const showColors = S.tool !== 'eraser';
+  const showWidths = S.tool === 'pen' || S.tool === 'marker';
+  const k = inkTool(), st = toolState(), sl = S.slots[k];
+  const key = JSON.stringify([S.tool, st, sl]);
+  if (key === toolbarKey) return;
+  toolbarKey = key;
+  $('#colors').hidden = !showColors;
+  $('#colors').previousElementSibling.hidden = !showColors;
+  $('#widths').hidden = !showWidths;
+  $('#sep-widths').hidden = !showWidths;
   const sw = $('#colors');
   sw.innerHTML = '';
-  for (const c of colors) {
+  sl.colors.forEach((c, i) => {
     const b = document.createElement('button');
-    b.className = 'swatch' + (c === st.color ? ' on' : '');
+    const on = S.tool !== 'lasso' && c === st.color;
+    b.className = 'swatch' + (on ? ' on' : '');
     b.style.setProperty('--c', c);
-    b.title = '色';
+    b.title = on ? '色を変える' : '色';
+    b.setAttribute('aria-label', on ? '色(もう一度押すと変更)' : '色');
+    b.setAttribute('aria-pressed', on);
     b.onclick = () => {
       if (S.sel && S.tool === 'lasso') return recolorSelection(c);
-      toolState().color = c;
-      if (S.tool !== 'pen' && S.tool !== 'marker') S.tool = 'pen';
+      if (on) return colorPopover(b, k, i);
+      closePopover();
+      S[k].color = c;
       savePrefs();
       refreshToolbar();
     };
     sw.appendChild(b);
-  }
+  });
   const ws = $('#widths');
   ws.innerHTML = '';
-  (marker ? MARKER_WIDTHS : PEN_WIDTHS).forEach((w) => {
+  const [lo, hi] = WIDTH_RANGE[k];
+  sl.widths.forEach((w, i) => {
     const b = document.createElement('button');
-    b.className = 'width' + (w === st.width ? ' on' : '');
-    b.title = '太さ';
-    b.innerHTML = `<span style="height:${Math.min(14, Math.round(w * (marker ? 0.6 : 1.6)) + 1)}px"></span>`;
+    const on = w === st.width;
+    b.className = 'width' + (on ? ' on' : '');
+    b.title = on ? '太さを変える' : '太さ';
+    b.setAttribute('aria-label', on ? '太さ(もう一度押すと変更)' : '太さ');
+    b.setAttribute('aria-pressed', on);
+    // 見た目の太さは 2〜14px に収める
+    const px = 2 + Math.round(((w - lo) / (hi - lo)) * 12);
+    b.innerHTML = `<span style="height:${px}px;width:${px}px"></span>`;
     b.onclick = () => {
-      toolState().width = w;
-      if (S.tool !== 'pen' && S.tool !== 'marker') S.tool = 'pen';
+      if (on) return widthPopover(b, k, i);
+      closePopover();
+      S[k].width = w;
       savePrefs();
       refreshToolbar();
     };
     ws.appendChild(b);
   });
-  $('#finger').classList.toggle('on', S.fingerDraw);
-  $('#shapes').classList.toggle('on', S.shapes);
-  $('#undo').disabled = !S.undo.length;
-  $('#redo').disabled = !S.redo.length;
-  $('#zoom-label').textContent = Math.round(S.zoom * 100) + '%';
+}
+
+function colorPopover(anchor, k, i) {
+  openPopover(anchor, (body, close) => {
+    body.classList.add('palette');
+    const pal = k === 'marker' ? MARKER_PALETTE : PEN_PALETTE;
+    const grid = document.createElement('div');
+    grid.className = 'pal-grid';
+    const pick = (c) => {
+      S.slots[k].colors[i] = c;
+      S[k].color = c;
+      savePrefs();
+      refreshToolbar();
+    };
+    for (const c of pal) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'pal-c' + (c === S[k].color ? ' on' : '');
+      b.style.setProperty('--c', c);
+      b.setAttribute('aria-label', c);
+      b.onclick = () => { pick(c); close(); };
+      grid.appendChild(b);
+    }
+    const custom = document.createElement('label');
+    custom.className = 'pal-custom';
+    custom.innerHTML = `<input type="color" value="${S[k].color.length === 7 ? S[k].color : '#000000'}"><span>ほかの色…</span>`;
+    custom.querySelector('input').oninput = (e) => pick(e.target.value);
+    custom.querySelector('input').onchange = () => close();
+    body.append(grid, custom);
+  });
+}
+
+function widthPopover(anchor, k, i) {
+  openPopover(anchor, (body) => {
+    body.classList.add('width-pop');
+    const [lo, hi, step] = WIDTH_RANGE[k];
+    const color = S[k].color;
+    body.innerHTML = `<div class="wp-preview"><svg viewBox="0 0 200 40" width="200" height="40" aria-hidden="true"><path d="M10 28 C 50 4, 90 4, 110 20 S 170 36, 190 12" fill="none" stroke="${color}" stroke-linecap="round" ${k === 'marker' ? 'opacity=".45"' : ''}/></svg></div>
+      <div class="wp-row"><input type="range" min="${lo}" max="${hi}" step="${step}" aria-label="太さ"><output></output></div>`;
+    const r = body.querySelector('input'), out = body.querySelector('output'), path = body.querySelector('path');
+    r.value = S[k].width;
+    const show = () => {
+      const w = +r.value;
+      out.textContent = (k === 'marker' ? w.toFixed(0) : w.toFixed(1)) + ' pt';
+      path.setAttribute('stroke-width', Math.min(30, w * 1.2));
+    };
+    show();
+    r.oninput = () => {
+      const w = Math.round(+r.value / step) * step;
+      const v = Math.round(w * 10) / 10;
+      S.slots[k].widths[i] = v;
+      S[k].width = v;
+      show();
+    };
+    r.onchange = () => { savePrefs(); refreshToolbar(); };
+  }, { onClose: () => { savePrefs(); refreshToolbar(); } });
 }
 
 function setTool(t) {
   if (t !== 'lasso') clearSelection();
+  // 選んでいるペンをもう一度押すと色を変えられる
+  if (S.tool === t && (t === 'pen' || t === 'marker')) {
+    const sl = S.slots[t], i = sl.colors.indexOf(S[t].color);
+    colorPopover($('#tool-' + t), t, i < 0 ? 0 : i);
+    return;
+  }
+  closePopover();
   S.tool = t;
   refreshToolbar();
+}
+
+function moreMenu(anchor) {
+  const zoom = document.createElement('div');
+  zoom.className = 'menu-zoom';
+  zoom.innerHTML = `<span class="menu-cap">表示の大きさ</span>
+    <div class="zoom-row"><button type="button" id="zoom-out" aria-label="縮小">${icon('zoomOut', 20)}</button><button type="button" id="zoom-label" title="幅に合わせる"></button><button type="button" id="zoom-in" aria-label="拡大">${icon('zoomIn', 20)}</button></div>`;
+  const zl = zoom.querySelector('#zoom-label');
+  const showZ = () => (zl.textContent = Math.round(S.zoom * 100) + '%');
+  showZ();
+  zoom.querySelector('#zoom-in').onclick = () => { setZoom(S.zoom * 1.25); showZ(); };
+  zoom.querySelector('#zoom-out').onclick = () => { setZoom(S.zoom / 1.25); showZ(); };
+  zl.onclick = () => { setZoom(fitZoom()); showZ(); };
+  openPopover(anchor, (body, close) => menu(body, [
+    { el: zoom },
+    '-',
+    { icon: 'page', label: 'ページを追加…', id: 'add-page', onClick: () => openAddDialog() },
+    { icon: 'pdf', label: 'PDF のページを追加…', id: 'add-pdf', onClick: () => $('#pdf-add-input').click() },
+    { icon: 'export', label: 'PDF に書き出す', id: 'export-pdf', onClick: exportCurrentPdf },
+    '-',
+    { icon: 'rename', label: '名前を変更', onClick: renameNote },
+    { icon: 'finger', label: '指で書く', id: 'finger', on: S.fingerDraw, onClick: () => {
+      S.fingerDraw = !S.fingerDraw;
+      savePrefs();
+      toast(S.fingerDraw ? '指でも書けるようにしました' : 'ペンだけで書けるようにしました(指はスクロール)');
+    } },
+  ], close), { align: 'end' });
+}
+
+async function exportCurrentPdf() {
+  try {
+    toast('PDFを作成しています…', 60000);
+    const bytes = await exportPdf(S.note);
+    download(new Blob([bytes], { type: 'application/pdf' }), `${safeName(S.note.title)}.pdf`);
+    toast('PDFを書き出しました');
+  } catch (e) {
+    toast('PDFを書き出せませんでした: ' + e.message, 6000);
+  }
+}
+
+async function renameNote() {
+  const title = prompt('ノートの名前', S.note.title);
+  if (!title || title === S.note.title) return;
+  await commit([mk('note.rename', { title })]);
+  $('#title').textContent = S.note.title;
+  document.title = S.note.title + ' - 大学ノート';
 }
 
 function bindEditor() {
   $('#back').onclick = () => (location.hash = '#/');
   for (const t of ['pen', 'marker', 'eraser', 'lasso']) $('#tool-' + t).onclick = () => setTool(t);
-  $('#finger').onclick = () => {
-    S.fingerDraw = !S.fingerDraw;
-    savePrefs();
-    refreshToolbar();
-    toast(S.fingerDraw ? '指でも書けるようにしました' : 'ペンだけで書けるようにしました(指はスクロール)');
-  };
   $('#shapes').onclick = () => {
     S.shapes = !S.shapes;
     savePrefs();
@@ -422,44 +685,32 @@ function bindEditor() {
   };
   $('#undo').onclick = undo;
   $('#redo').onclick = redo;
-  $('#zoom-in').onclick = () => setZoom(S.zoom * 1.25);
-  $('#zoom-out').onclick = () => setZoom(S.zoom / 1.25);
-  $('#zoom-label').onclick = () => setZoom(fitZoom());
-  $('#add-page').onclick = () => addPage();
-  $('#pages-btn').onclick = openPagesPanel;
-  $('#add-pdf').onclick = () => $('#pdf-add-input').click();
+  $('#more-btn').onclick = (e) => moreMenu(e.currentTarget);
+  $('#pages-btn').onclick = () => toggleSidebar();
+  $('#pages-close').onclick = () => toggleSidebar(false);
+  $('#sb-add').onclick = () => openAddDialog();
   $('#pdf-add-input').onchange = addPdfPages;
-  $('#export-pdf').onclick = async () => {
-    try {
-      toast('PDFを作成しています…', 60000);
-      const bytes = await exportPdf(S.note);
-      download(new Blob([bytes], { type: 'application/pdf' }), `${safeName(S.note.title)}.pdf`);
-      toast('PDFを書き出しました');
-    } catch (e) {
-      toast('PDFを書き出せませんでした: ' + e.message, 6000);
-    }
-  };
-  $('#title').onclick = async () => {
-    const title = prompt('ノートの名前', S.note.title);
-    if (!title || title === S.note.title) return;
-    await commit([mk('note.rename', { title })]);
-    $('#title').textContent = S.note.title;
-    document.title = S.note.title + ' - 大学ノート';
-  };
+  $('#title').onclick = renameNote;
+  bindAddDialog();
   document.addEventListener('keydown', (e) => {
     if ($('#editor').hidden || e.target.closest('input, select, textarea, dialog')) return;
     const mod = e.ctrlKey || e.metaKey;
     const k = e.key.toLowerCase();
     if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
     else if (mod && k === 'y') { e.preventDefault(); redo(); }
-    else if (!mod && k === 'p') setTool('pen');
-    else if (!mod && k === 'h') setTool('marker');
-    else if (!mod && k === 'e') setTool('eraser');
-    else if (!mod && k === 'l') setTool('lasso');
+    else if (mod && (k === '=' || k === '+')) { e.preventDefault(); setZoom(S.zoom * 1.25); }
+    else if (mod && k === '-') { e.preventDefault(); setZoom(S.zoom / 1.25); }
+    else if (mod && k === '0') { e.preventDefault(); setZoom(fitZoom()); }
+    else if (mod) return;
+    else if (k === 'p') setTool('pen');
+    else if (k === 'h') setTool('marker');
+    else if (k === 'e') setTool('eraser');
+    else if (k === 'l') setTool('lasso');
     else if ((k === 'delete' || k === 'backspace') && S.sel) deleteSelection();
     else if (k === 'escape') clearSelection();
   });
   bindInput();
+  $('#scroller').addEventListener('scroll', onScroll, { passive: true });
   window.addEventListener('resize', () => { if (S.note) layoutPages(); });
 }
 
@@ -478,10 +729,12 @@ async function openNote(id, pageId) {
     $('#title').textContent = note.title;
     document.title = note.title + ' - 大学ノート';
     setSaved(true);
+    $('#sidebar').hidden = !S.sidebar;
     S.zoom = fitZoom();
     renderPages();
     $('#scroller').scrollTop = 0;
     refreshToolbar();
+    onScroll();
   }
   if (pageId) S.views.get(pageId)?.el.scrollIntoView({ block: 'start' });
 }
@@ -492,8 +745,11 @@ function closeEditor() {
   S.views.clear();
   S.note = null;
   S.sel = null;
+  closePopover();
   const pages = $('#pages');
   if (pages) pages.innerHTML = '';
+  $('#pp-list').innerHTML = '';
+  S.thumbs = new Map();
 }
 
 function fitZoom() {
@@ -524,9 +780,7 @@ function renderPages() {
     el.className = 'page';
     el.dataset.id = pg.id;
     el.innerHTML = `<canvas class="bg"></canvas>
-      <svg class="ink" xmlns="${SVGNS}" viewBox="0 0 ${pg.w} ${pg.h}" preserveAspectRatio="none"><g class="tpl"></g><g class="strokes"></g><g class="live"></g></svg>
-      <div class="page-foot"><span>${i + 1} / ${pages.length}</span><button class="del-page" title="このページを削除">ページを削除</button></div>`;
-    el.querySelector('.del-page').onclick = () => deletePage(pg.id);
+      <svg class="ink" xmlns="${SVGNS}" viewBox="0 0 ${pg.w} ${pg.h}" preserveAspectRatio="none"><g class="tpl"></g><g class="strokes"></g><g class="live"></g></svg>`;
     wrap.appendChild(el);
     const v = {
       pg, el, bg: el.querySelector('.bg'), tpl: el.querySelector('.tpl'), strokes: el.querySelector('.strokes'),
@@ -536,6 +790,23 @@ function renderPages() {
     sizeView(v);
     S.io.observe(el);
   });
+  // 最後のページの下に「ページを追加」
+  const add = document.createElement('button');
+  add.className = 'add-tile';
+  add.id = 'add-tile';
+  add.innerHTML = `${icon('plus', 22)}<span>ページを追加</span>`;
+  add.onclick = () => openAddDialog('last');
+  wrap.appendChild(add);
+  sizeAddTile();
+  renderSidebar();
+  onScroll();
+}
+
+function sizeAddTile() {
+  const pages = pagesOf(S.note);
+  const last = pages[pages.length - 1];
+  const t = $('#add-tile');
+  if (t && last) t.style.width = last.w * S.zoom + 'px';
 }
 
 function sizeView(v) {
@@ -546,6 +817,7 @@ function sizeView(v) {
 let bgTimer = 0;
 function layoutPages() {
   for (const v of S.views.values()) sizeView(v);
+  sizeAddTile();
   // PDF の背景は拡大率が決まってから描き直す(SVG はそのままで滑らか)
   clearTimeout(bgTimer);
   bgTimer = setTimeout(() => { for (const v of S.views.values()) if (v.visible && v.bgZoom !== S.zoom) paintBg(v); }, 250);
@@ -1228,18 +1500,25 @@ function currentPage() {
   return best;
 }
 
-// after: このページの後ろに入れる。tpl/size を省くと今のページと同じにする
-async function addPage(after = currentPage(), tpl, sizeId) {
+// where: after(今のページの後ろ)| before(前)| last(最後)。tpl/size を省くと今のページと同じにする
+async function addPage(where = 'after', tpl, sizeId, ref = currentPage()) {
   const pages = pagesOf(S.note);
-  after = after || pages[pages.length - 1];
-  const i = pages.indexOf(after);
-  const next = pages[i + 1];
-  const order = after ? (next ? (after.order + next.order) / 2 : after.order + 1) : 1;
-  const cbg = after && bgOf(after);
+  ref = ref || pages[pages.length - 1];
+  const i = pages.indexOf(ref);
+  let order;
+  if (where === 'before') {
+    const prev = pages[i - 1];
+    order = prev ? (prev.order + ref.order) / 2 : ref.order - 1;
+  } else if (where === 'last' || i === pages.length - 1) {
+    order = pages.length ? pages[pages.length - 1].order + 1 : 1;
+  } else {
+    order = (ref.order + pages[i + 1].order) / 2;
+  }
+  const cbg = ref && bgOf(ref);
   const ruling = tpl || (cbg && cbg.type === 'blank' ? cbg.ruling : 'lines-b');
   let w = PAGE_A4.w, h = PAGE_A4.h;
   if (sizeId) ({ w, h } = sizeById(sizeId));
-  else if (after && cbg?.type === 'blank') ({ w, h } = after);
+  else if (ref && cbg?.type === 'blank') ({ w, h } = ref);
   const id = newId();
   await commit([mk('page.add', { page: { id, w, h, order, bg: { type: 'blank', ruling } } })]);
   pushUndo({ undo: [['page.delete', { pageId: id }]], redo: [['page.restore', { pageId: id }]], relayout: true });
@@ -1258,6 +1537,51 @@ async function deletePage(id) {
   const top = $('#scroller').scrollTop;
   renderPages();
   $('#scroller').scrollTop = top;
+}
+
+// ---------- ページを追加(テンプレートを絵で選ぶ) ----------
+let addRef = null;
+function openAddDialog(where = 'after', ref = currentPage()) {
+  closePopover();
+  addRef = ref;
+  for (const r of document.querySelectorAll('input[name=pp-where]')) r.checked = r.value === where;
+  const bg = ref && bgOf(ref);
+  setPick($('#pp-tpl'), bg?.type === 'blank' ? (bg.ruling === 'lines' ? 'lines-b' : bg.ruling) : 'lines-b');
+  $('#pp-size').value = '';
+  $('#add-dialog').showModal();
+}
+function bindAddDialog() {
+  $('#pp-cancel').onclick = () => $('#add-dialog').close();
+  $('#pp-pdf').onclick = () => { $('#add-dialog').close(); $('#pdf-add-input').click(); };
+  $('#add-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const where = document.querySelector('input[name=pp-where]:checked')?.value || 'after';
+    $('#add-dialog').close();
+    await addPage(where, $('#pp-tpl').dataset.value, $('#pp-size').value || undefined, addRef || undefined);
+  };
+}
+
+// ---------- 今のページの表示(右下の「3 / 10」) ----------
+let scrollFrame = 0, indTimer = 0, curPageId = null;
+function onScroll() {
+  if (scrollFrame || !S.note) return;
+  scrollFrame = requestAnimationFrame(() => {
+    scrollFrame = 0;
+    if (!S.note) return;
+    const pages = pagesOf(S.note);
+    const pg = currentPage();
+    const n = pg ? pages.indexOf(pg) + 1 : 1;
+    const ind = $('#page-ind');
+    ind.textContent = `${n} / ${pages.length}`;
+    ind.classList.add('show');
+    clearTimeout(indTimer);
+    indTimer = setTimeout(() => ind.classList.remove('show'), 1400);
+    if (pg && pg.id !== curPageId) {
+      curPageId = pg.id;
+      for (const [id, t] of S.thumbs || []) t.classList.toggle('current', id === pg.id);
+      if (S.sidebar) S.thumbs?.get(pg.id)?.scrollIntoView({ block: 'nearest' });
+    }
+  });
 }
 
 async function addPdfPages(e) {
@@ -1280,56 +1604,68 @@ async function addPdfPages(e) {
   }
 }
 
-// ---------- ページ一覧(並べ替え・テンプレート) ----------
-function bindPagesPanel() {
-  $('#pages-close').onclick = () => $('#pages-dialog').close();
-  $('#pp-add').onclick = async () => {
-    const pages = pagesOf(S.note);
-    await addPage(pages[pages.length - 1], $('#pp-tpl').value, $('#pp-size').value);
-    renderPagesPanel();
-  };
+// ---------- ページ一覧(左のサイドバー) ----------
+function toggleSidebar(on = !S.sidebar) {
+  S.sidebar = on;
+  savePrefs();
+  const keep = currentPage();
+  $('#sidebar').hidden = !on;
+  refreshToolbar();
+  if (!S.note) return;
+  if (on) renderSidebar();
+  // 幅が変わるので、今のページが見える位置に戻す
+  requestAnimationFrame(() => { layoutPages(); keep && S.views.get(keep.id)?.el.scrollIntoView({ block: 'start' }); });
 }
 
-function openPagesPanel() {
-  renderPagesPanel();
-  $('#pages-dialog').showModal();
-}
-
-function renderPagesPanel() {
+function renderSidebar() {
+  S.thumbs = new Map();
   const list = $('#pp-list');
   list.innerHTML = '';
+  if (!S.sidebar || !S.note) return;
   const pages = pagesOf(S.note);
+  const cur = currentPage();
   pages.forEach((pg, i) => {
     const row = document.createElement('div');
-    row.className = 'pp-row';
-    const bg = bgOf(pg);
-    const tplSel = bg && bg.type === 'blank'
-      ? `<select class="pp-tpl" title="テンプレート">${TEMPLATES.map((t) => `<option value="${t.id}"${(bg.ruling === 'lines' ? 'lines-b' : bg.ruling) === t.id ? ' selected' : ''}>${t.label}</option>`).join('')}</select>`
-      : '<span class="pp-note">PDF</span>';
-    row.innerHTML = `<canvas class="pp-thumb"></canvas>
-      <div class="pp-info"><b>${i + 1}</b>${tplSel}</div>
-      <div class="pp-btns">
-        <button data-a="up" title="前へ" ${i === 0 ? 'disabled' : ''}>↑</button>
-        <button data-a="down" title="後ろへ" ${i === pages.length - 1 ? 'disabled' : ''}>↓</button>
-        <button data-a="go">表示</button>
-        <button data-a="del" class="danger">削除</button>
-      </div>`;
+    row.className = 'pp-row' + (cur && cur.id === pg.id ? ' current' : '');
+    row.dataset.id = pg.id;
+    row.innerHTML = `<button class="pp-go" title="${i + 1}ページ目を表示"><canvas class="pp-thumb"></canvas></button>
+      <div class="pp-info"><span class="pp-no">${i + 1}</span><button class="pp-menu icon-btn small" aria-haspopup="menu" title="ページの操作" aria-label="${i + 1}ページ目の操作">${icon('chevron', 16)}</button></div>`;
     list.appendChild(row);
+    S.thumbs.set(pg.id, row);
     drawThumb(row.querySelector('canvas'), pg);
-    row.querySelector('[data-a=up]').onclick = () => movePage(pg, pages[i - 2], pages[i - 1]);
-    row.querySelector('[data-a=down]').onclick = () => movePage(pg, pages[i + 1], pages[i + 2]);
-    row.querySelector('[data-a=go]').onclick = () => { $('#pages-dialog').close(); S.views.get(pg.id)?.el.scrollIntoView({ block: 'start' }); };
-    row.querySelector('[data-a=del]').onclick = async () => { await deletePage(pg.id); renderPagesPanel(); };
-    const ts = row.querySelector('.pp-tpl');
-    if (ts) ts.onchange = async () => {
+    row.querySelector('.pp-go').onclick = () => {
+      S.views.get(pg.id)?.el.scrollIntoView({ block: 'start' });
+      if (window.innerWidth <= 700) toggleSidebar(false);
+    };
+    row.querySelector('.pp-menu').onclick = (e) => pageMenu(e.currentTarget, pg, i, pages);
+  });
+}
+
+function pageMenu(anchor, pg, i, pages) {
+  const bg = bgOf(pg);
+  const items = [
+    { icon: 'up', label: '前へ移動', attrs: { 'data-a': 'up' }, disabled: i === 0, onClick: () => movePage(pg, pages[i - 2], pages[i - 1]) },
+    { icon: 'down', label: '後ろへ移動', attrs: { 'data-a': 'down' }, disabled: i === pages.length - 1, onClick: () => movePage(pg, pages[i + 1], pages[i + 2]) },
+    '-',
+    { icon: 'page', label: '前にページを追加…', onClick: () => openAddDialog('before', pg) },
+    { icon: 'page', label: '後ろにページを追加…', onClick: () => openAddDialog('after', pg) },
+  ];
+  if (bg && bg.type === 'blank') {
+    const sel = document.createElement('label');
+    sel.className = 'menu-select';
+    sel.innerHTML = `<span class="menu-cap">このページの用紙</span><select class="pp-tpl">${TEMPLATES.map((t) => `<option value="${t.id}"${(bg.ruling === 'lines' ? 'lines-b' : bg.ruling) === t.id ? ' selected' : ''}>${t.label}</option>`).join('')}</select>`;
+    sel.querySelector('select').onchange = async (e) => {
       const before = bgOf(pg);
-      const nb = { type: 'blank', ruling: ts.value };
+      const nb = { type: 'blank', ruling: e.target.value };
+      closePopover();
       await commit([mk('page.bg', { pageId: pg.id, bg: nb })]);
       pushUndo({ undo: [['page.bg', { pageId: pg.id, bg: before }]], redo: [['page.bg', { pageId: pg.id, bg: nb }]], relayout: true });
       renderPages();
-      renderPagesPanel();
     };
-  });
+    items.push('-', { el: sel });
+  }
+  items.push('-', { icon: 'trash', label: 'ページを削除', danger: true, attrs: { 'data-a': 'del' }, disabled: pages.length <= 1, onClick: () => deletePage(pg.id) });
+  openPopover(anchor, (body, close) => menu(body, items, close), { align: 'start' });
 }
 
 // pg を a と b の間に動かす
@@ -1339,11 +1675,10 @@ async function movePage(pg, a, b) {
   await commit([mk('page.move', { pageId: pg.id, order })]);
   pushUndo({ undo: [['page.move', { pageId: pg.id, order: before }]], redo: [['page.move', { pageId: pg.id, order }]], relayout: true });
   renderPages();
-  renderPagesPanel();
 }
 
 function drawThumb(canvas, pg) {
-  const W = 84;
+  const W = 120;
   canvas.width = W * 2;
   canvas.height = Math.round((W * 2 * pg.h) / pg.w);
   const ctx = canvas.getContext('2d');
