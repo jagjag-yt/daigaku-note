@@ -748,11 +748,11 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v10\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v11\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 書いている線の入力の中身(1回の move にまとめられた点の数、座標が整数か、筆圧)
 const debugOn = /[?&]debug/.test(location.search);
-const dbgIn = { frames: 0, co: 0, coInt: 0, mainInt: 0, p0: 0, pr: new Set(), skipped: 0, at: [0, 0, 0] };
+const dbgIn = { frames: 0, co: 0, coInt: 0, mainInt: 0, p0: 0, pr: new Set(), skipped: 0, at: [0, 0, 0], old: 0, zig: 0, dup: 0 };
 function debugInput(e, evs) {
   const isInt = (ev) => Number.isInteger(ev.clientX) && Number.isInteger(ev.clientY);
   dbgIn.frames++;
@@ -762,8 +762,22 @@ function debugInput(e, evs) {
   evs.forEach((ev, i) => { if (isInt(ev)) dbgIn.at[i === 0 ? 0 : i === evs.length - 1 ? 2 : 1]++; });
   for (const ev of evs) { if (!(ev.pressure > 0)) dbgIn.p0++; dbgIn.pr.add(Math.round(ev.pressure * 1000)); }
   const last = evs[evs.length - 1];
-  debugCounts['move'] = `${dbgIn.frames} 点/回 ${(dbgIn.co / dbgIn.frames).toFixed(1)} 整数 ${dbgIn.coInt}/${dbgIn.co} 本体整数 ${dbgIn.mainInt} 筆圧0 ${dbgIn.p0} 筆圧の種類 ${dbgIn.pr.size} 最後とずれ ${last ? Math.hypot(last.clientX - e.clientX, last.clientY - e.clientY).toFixed(2) : '-'}\n整数の位置(先頭/途中/最後) ${dbgIn.at.join('/')} 使わなかった点 ${dbgIn.skipped}`;
+  debugCounts['move'] = `${dbgIn.frames} 点/回 ${(dbgIn.co / dbgIn.frames).toFixed(1)} 整数 ${dbgIn.coInt}/${dbgIn.co} 本体整数 ${dbgIn.mainInt} 筆圧0 ${dbgIn.p0} 筆圧の種類 ${dbgIn.pr.size} 最後とずれ ${last ? Math.hypot(last.clientX - e.clientX, last.clientY - e.clientY).toFixed(2) : '-'}\n整数の位置(先頭/途中/最後) ${dbgIn.at.join('/')} 使わなかった点 ${dbgIn.skipped}\n古い点 ${dbgIn.old} 同じ位置 ${dbgIn.dup} 折り返し ${dbgIn.zig}`;
   if (dbgIn.frames % 10 === 0) debugCount(null);
+}
+
+// 点が行ったり来たりしていないか(短い間隔で向きが 120° 以上変わる)を数える
+function debugZig(a, ev) {
+  const q = [ev.clientX, ev.clientY], h = (a.dbgHist ||= []);
+  if (h.length && h[h.length - 1][0] === q[0] && h[h.length - 1][1] === q[1]) { dbgIn.dup++; return; }
+  if (h.length >= 2) {
+    const [p0, p1] = h.slice(-2);
+    const ux = p1[0] - p0[0], uy = p1[1] - p0[1], vx = q[0] - p1[0], vy = q[1] - p1[1];
+    const lu = Math.hypot(ux, uy), lv = Math.hypot(vx, vy);
+    if (lu && lv && (ux * vx + uy * vy) / (lu * lv) < -0.5) dbgIn.zig++;
+  }
+  h.push(q);
+  if (h.length > 3) h.shift();
 }
 
 // ペンが途切れて再開したときの間隔(時間・距離・つないだか)
@@ -877,8 +891,12 @@ function onMove(e) {
       // 丸められた点は本当の位置から最大 0.5px ずれ、線に周期的なカクつきができるので、
       // ペンで小数の座標が来ている線では、整数の点を使わない
       const int = Number.isInteger(ev.clientX) && Number.isInteger(ev.clientY);
+      // 前に使った点より古い点(同じ点が2回届いたもの)は使わない。使うと線が行ったり来たりして太って見える
+      if (ev.timeStamp && a.lastTs && ev.timeStamp < a.lastTs) { if (debugOn) dbgIn.old++; continue; }
       if (!int) a.frac = true;
       else if (a.pen && (a.frac || evs.some((x) => !Number.isInteger(x.clientX)))) { if (debugOn) dbgIn.skipped++; continue; }
+      if (debugOn) debugZig(a, ev);
+      if (ev.timeStamp) a.lastTs = ev.timeStamp;
       addPoint(ev);
     }
     else if (a.kind === 'lasso') {
