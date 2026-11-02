@@ -741,20 +741,21 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v8\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v9\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 書いている線の入力の中身(1回の move にまとめられた点の数、座標が整数か、筆圧)
 const debugOn = /[?&]debug/.test(location.search);
-const dbgIn = { frames: 0, co: 0, coInt: 0, mainInt: 0, p0: 0, pr: new Set() };
+const dbgIn = { frames: 0, co: 0, coInt: 0, mainInt: 0, p0: 0, pr: new Set(), skipped: 0, at: [0, 0, 0] };
 function debugInput(e, evs) {
   const isInt = (ev) => Number.isInteger(ev.clientX) && Number.isInteger(ev.clientY);
   dbgIn.frames++;
   dbgIn.co += evs.length;
   dbgIn.coInt += evs.filter(isInt).length;
   if (isInt(e)) dbgIn.mainInt++;
+  evs.forEach((ev, i) => { if (isInt(ev)) dbgIn.at[i === 0 ? 0 : i === evs.length - 1 ? 2 : 1]++; });
   for (const ev of evs) { if (!(ev.pressure > 0)) dbgIn.p0++; dbgIn.pr.add(Math.round(ev.pressure * 1000)); }
   const last = evs[evs.length - 1];
-  debugCounts['move'] = `${dbgIn.frames} 点/回 ${(dbgIn.co / dbgIn.frames).toFixed(1)} 整数 ${dbgIn.coInt}/${dbgIn.co} 本体整数 ${dbgIn.mainInt} 筆圧0 ${dbgIn.p0} 筆圧の種類 ${dbgIn.pr.size} 最後とずれ ${last ? Math.hypot(last.clientX - e.clientX, last.clientY - e.clientY).toFixed(2) : '-'}`;
+  debugCounts['move'] = `${dbgIn.frames} 点/回 ${(dbgIn.co / dbgIn.frames).toFixed(1)} 整数 ${dbgIn.coInt}/${dbgIn.co} 本体整数 ${dbgIn.mainInt} 筆圧0 ${dbgIn.p0} 筆圧の種類 ${dbgIn.pr.size} 最後とずれ ${last ? Math.hypot(last.clientX - e.clientX, last.clientY - e.clientY).toFixed(2) : '-'}\n整数の位置(先頭/途中/最後) ${dbgIn.at.join('/')} 使わなかった点 ${dbgIn.skipped}`;
   if (dbgIn.frames % 10 === 0) debugCount(null);
 }
 
@@ -864,7 +865,15 @@ function onMove(e) {
   if (debugOn && a.kind === 'draw') debugInput(e, evs);
   for (const ev of evs.length ? evs : [e]) {
     if (a.kind === 'erase') eraseAt(ev);
-    else if (a.kind === 'draw') addPoint(ev);
+    else if (a.kind === 'draw') {
+      // iPad Safari では、まとめて届く点のうち一部だけ座標が整数に丸められている。
+      // 丸められた点は本当の位置から最大 0.5px ずれ、線に周期的なカクつきができるので、
+      // ペンで小数の座標が来ている線では、整数の点を使わない
+      const int = Number.isInteger(ev.clientX) && Number.isInteger(ev.clientY);
+      if (!int) a.frac = true;
+      else if (a.pen && (a.frac || evs.some((x) => !Number.isInteger(x.clientX)))) { if (debugOn) dbgIn.skipped++; continue; }
+      addPoint(ev);
+    }
     else if (a.kind === 'lasso') {
       const p = pagePoint(a.v, ev);
       const l = a.poly[a.poly.length - 1];
