@@ -66,6 +66,7 @@ function savePrefs() {
 }
 
 function route() {
+  flushPen();
   const m = location.hash.match(/^#\/note\/(\w+)(?:\/p\/(\w+))?/);
   if (m) openNote(m[1], m[2]);
   else showLibrary();
@@ -697,14 +698,23 @@ function paintLive(v, svg) {
 let active = null; // 書いている最中の線 / 消している最中 / 投げ縄
 const touches = new Map();
 let pinch = null, inertia = null, lastPenTime = 0, liveFrame = 0;
+// ペンを離した直後の線。iPad では手のひらが触れたときなどに、書いている途中で
+// ペンの入力がいったん途切れる(pointercancel / pointerup)ことがある。すぐに同じ場所から
+// 続きが来たら同じ線としてつなぐため、確定を少し待つ。
+let penPending = null;
+const PEN_JOIN_MS = 120, PEN_JOIN_PX = 48;
+const palmRecent = () => !!active || !!penPending || Date.now() - lastPenTime < 600;
 
 function bindInput() {
   const sc = $('#scroller');
   // iPad Safari: Apple Pencil でスクロールしないようにする
   sc.addEventListener('touchstart', (e) => {
-    if ([...e.touches].some((t) => t.touchType === 'stylus')) e.preventDefault();
+    if ([...e.touches].some((t) => t.touchType === 'stylus') || palmRecent()) e.preventDefault();
   }, { passive: false });
   sc.addEventListener('touchmove', (e) => { if (active || touches.size) e.preventDefault(); }, { passive: false });
+  if (/[?&]debug/.test(location.search)) {
+    for (const t of ['pointerdown', 'pointerup', 'pointercancel']) sc.addEventListener(t, (e) => debugCount(`${t.slice(7)}:${e.pointerType}`), true);
+  }
   sc.addEventListener('pointerdown', onDown);
   sc.addEventListener('pointermove', onMove);
   sc.addEventListener('pointerup', onUp);
@@ -718,6 +728,21 @@ function bindInput() {
   }, { passive: false });
 }
 
+// ?debug を付けて開くと、入力イベントの回数を画面の隅に表示する(不具合の調査用)
+const debugCounts = {};
+function debugCount(k) {
+  if (!/[?&]debug/.test(location.search)) return;
+  debugCounts[k] = (debugCounts[k] || 0) + 1;
+  let el = document.getElementById('debug-box');
+  if (!el) {
+    el = document.createElement('pre');
+    el.id = 'debug-box';
+    el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
+    document.body.appendChild(el);
+  }
+  el.textContent = Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n');
+}
+
 function pagePoint(v, e) {
   const r = v.el.getBoundingClientRect();
   return [(e.clientX - r.left) / S.zoom, (e.clientY - r.top) / S.zoom];
@@ -727,9 +752,30 @@ function onDown(e) {
   if (!S.note) return;
   if (e.target.closest('.sel-bar')) return;
   const isTouch = e.pointerType === 'touch';
+  // ペンで書いている最中・直後の指は手のひらとみなして無視する
+  if (isTouch && palmRecent()) return;
   if (isTouch && !S.fingerDraw) return gestureDown(e);
-  // ペンを使ってすぐの指は手のひらとみなして無視
-  if (isTouch && Date.now() - lastPenTime < 500) return;
+  if (e.pointerType === 'pen') {
+    // 手のひらを先に置いていた場合: 指の操作(スクロール・ズーム)を止める
+    if (touches.size) { touches.clear(); pinch = null; $('#pages').style.transform = ''; }
+    // 途切れた線の続きならつなぐ
+    if (!active && penPending && S.tool !== 'lasso' && S.tool !== 'eraser' && !(e.buttons & 32) && e.button !== 5) {
+      const pp = penPending;
+      if (Math.hypot(e.clientX - pp.x, e.clientY - pp.y) < PEN_JOIN_PX && performance.now() - pp.t < PEN_JOIN_MS) {
+        clearTimeout(pp.timer);
+        penPending = null;
+        e.preventDefault();
+        lastPenTime = Date.now();
+        try { $('#scroller').setPointerCapture(e.pointerId); } catch {}
+        active = pp.a;
+        active.id = e.pointerId;
+        debugCount('joined');
+        addPoint(e);
+        return;
+      }
+    }
+  }
+  flushPen();
   if (active) return;
   if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 5) return;
   const pageEl = e.target.closest?.('.page');
@@ -762,9 +808,13 @@ function onDown(e) {
 }
 
 function onMove(e) {
-  if (e.pointerType === 'touch' && touches.has(e.pointerId)) return gestureMove(e);
+  if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
+    if (palmRecent()) return; // 手のひらが動いてもスクロールしない
+    return gestureMove(e);
+  }
   if (!active || e.pointerId !== active.id) return;
   if (e.pointerType === 'pen') lastPenTime = Date.now();
+  if (active.kind === 'draw') active.lastXY = [e.clientX, e.clientY];
   const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
   const a = active;
   for (const ev of evs.length ? evs : [e]) {
@@ -875,6 +925,26 @@ async function onUp(e) {
     return;
   }
   clearTimeout(a.holdTimer);
+  if (e.pointerType === 'pen' && !a.shaped && a.d.pts.length) {
+    const [x, y] = a.lastXY || [e.clientX, e.clientY];
+    penPending = { a, x, y, t: performance.now(), timer: setTimeout(flushPen, PEN_JOIN_MS) };
+    paintLive(a.v, strokeSvg('live', a.d, geometry(a.d)));
+    lastPenTime = Date.now();
+    return;
+  }
+  return finishStroke(a);
+}
+
+// 確定を待っている線があれば確定する
+function flushPen() {
+  if (!penPending) return;
+  const { a, timer } = penPending;
+  clearTimeout(timer);
+  penPending = null;
+  finishStroke(a);
+}
+
+async function finishStroke(a) {
   const d = a.d;
   if (!d.pts.length) return paintLive(a.v, '');
   pushUndo({ undo: [['stroke.del', { ids: [d.id] }]], redo: [['stroke.undel', { ids: [d.id] }]], pages: [a.v.pg.id] });
@@ -1048,12 +1118,14 @@ async function runEntry(list, entry) {
   refreshToolbar();
 }
 async function undo() {
+  flushPen();
   const e = S.undo.pop();
   if (!e) return;
   S.redo.push(e);
   await runEntry(e.undo, e);
 }
 async function redo() {
+  flushPen();
   const e = S.redo.pop();
   if (!e) return;
   S.undo.push(e);
