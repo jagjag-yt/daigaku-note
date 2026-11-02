@@ -749,7 +749,7 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v12\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v13\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 書いている線の入力の中身(1回の move にまとめられた点の数、座標が整数か、筆圧)
 const debugOn = /[?&]debug/.test(location.search);
@@ -860,6 +860,8 @@ function onDown(e) {
   } else {
     const st = toolState();
     const d = { id: newId(), pageId: v.pg.id, tool: S.tool, color: st.color, width: st.width, pr: e.pointerType === 'pen' && S.tool === 'pen', pts: [] };
+    // ならす強さ: 画面上で約 2.5px 分。拡大して書くほど小さくして、小さな字の形を崩さない
+    d.sm = Math.round(Math.max(0.3, Math.min(1.5, 2.5 / S.zoom)) * 100) / 100;
     active = { id: e.pointerId, v, kind: 'draw', pen: e.pointerType === 'pen', d, lastMove: performance.now() };
     addPoint(e);
   }

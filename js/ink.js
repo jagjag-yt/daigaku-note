@@ -20,7 +20,9 @@ export function centerline(d) {
   if (d.shape || n < 3) return raw; // 図形は角を残す
 
   // 1) 一定の間隔で並べ直す
-  const step = Math.max(0.5, Math.min(1.5, d.width * 0.5));
+  // sm: ならす強さ(pt)。書いたときの拡大率から決めて線に保存してある(拡大して小さな字を書くと小さくなる)
+  const sm = d.sm || 1.5;
+  const step = Math.max(0.25, Math.min(1.5, d.width * 0.5, sm));
   const rs = [raw[0]];
   let carry = 0; // 最後に置いた点からの距離
   for (let i = 1; i < n; i++) {
@@ -40,22 +42,23 @@ export function centerline(d) {
   else rs.push(last);
   if (rs.length < 3) return rs;
 
-  // 2) 手ぶれをならす(両端は動かさない)。筆圧は特に強くならして、太さのガタつきを消す
-  const smooth = (k, passes) => {
-    for (let p = 0; p < passes; p++) {
-      let prev = rs[0][k];
-      for (let i = 1; i < rs.length - 1; i++) {
-        const cur = rs[i][k];
-        rs[i][k] = (prev + 2 * cur + rs[i + 1][k]) / 4;
-        prev = cur;
-      }
+  // 2) 手ぶれをならす(ガウスの重み付き平均)。両端に近い点ほど平均する範囲を狭め、端の点は動かさない。
+  //    平均する範囲を画面上で数 px に限っているので、書いている最中に新しい点が来ても形が変わるのは
+  //    ペン先のごく近くだけ(以前は広い範囲が毎回動き、線がペン先につられて揺れていた)
+  const blur = (k, sigmaPt) => {
+    const sg = sigmaPt / step, R = Math.ceil(sg * 2);
+    const wt = []; for (let j = 0; j <= R; j++) wt.push(Math.exp(-(j * j) / (2 * sg * sg)));
+    const src = rs.map((q) => q[k]), n = src.length;
+    for (let i = 1; i < n - 1; i++) {
+      const r = Math.min(R, i, n - 1 - i);
+      let sum = src[i] * wt[0], w = wt[0];
+      for (let j = 1; j <= r; j++) { sum += (src[i - j] + src[i + j]) * wt[j]; w += 2 * wt[j]; }
+      rs[i][k] = sum / w;
     }
   };
-  // 位置: 約 1.5pt の幅でならす(ペン先の細かい揺れを消し、文字の形は残す)
-  const passes = Math.max(3, Math.round(4.5 / (step * step)));
-  smooth(0, passes);
-  smooth(1, passes);
-  smooth(2, 8);
+  blur(0, sm);
+  blur(1, sm);
+  blur(2, sm * 2);
   return rs;
 }
 
@@ -73,12 +76,12 @@ export function outline(d, line = centerline(d)) {
     const last = side[side.length - 1];
     if (!last || i === m - 1 || (q[0] - last[0]) * tx + (q[1] - last[1]) * ty > 0) side.push(q);
   };
-  // 向き(法線)は前後 約2pt 離れた点から求める。隣の点だけで求めると、小さな揺れで
+  // 向き(法線)は前後に少し離れた点(ならす強さに合わせる)から求める。隣の点だけで求めると、小さな揺れで
   // 向きがぶれて輪郭に段ができる
   let span = 1;
   if (m > 2) {
     const len = line.reduce((s, q, i) => (i ? s + dist(line[i - 1][0], line[i - 1][1], q[0], q[1]) : 0), 0);
-    span = Math.max(1, Math.min(4, Math.round(2 / (len / (m - 1) || 1))));
+    span = Math.max(1, Math.min(4, Math.round((d.sm || 1.5) * 1.3 / (len / (m - 1) || 1))));
   }
   for (let i = 0; i < m; i++) {
     const a = line[Math.max(0, i - span)], b = line[Math.min(m - 1, i + span)];
