@@ -172,20 +172,7 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
     await page.locator('.page').nth(n - 1).scrollIntoViewIfNeeded();
     await page.waitForTimeout(800);
     await shot(page, 'v2-6-goodnotes-last.png');
-    // 手書き文字の認識を待って検索
     await page.click('#back');
-    for (let i = 0; i < 90; i++) {
-      await page.waitForTimeout(2000);
-      const st = await page.textContent('#search-status');
-      if (!st) break;
-      if (i % 10 === 0) console.log('  ', st);
-    }
-    const sample = await page.evaluate(() => new Promise((res) => {
-      const r = indexedDB.open('daigaku-note');
-      r.onsuccess = () => { const q = r.result.transaction('search').objectStore('search').getAll(); q.onsuccess = () => res(q.result.filter((x) => x.ink).map((x) => x.ink.slice(0, 80))); };
-    }));
-    console.log('  認識結果の例:', sample.slice(0, 3));
-    log('手書き文字の認識:', sample.length, 'ページ分');
   }
 
   // クラウド同期(WebDAV): 端末Aから送り、端末Bで受け取り、Bの変更をAへ

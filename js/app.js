@@ -115,24 +115,11 @@ async function commit(ops) {
     await db.putOps(ops, S.rec.clock);
     setSaved(true);
     dav.schedule();
-    if (S.note) for (const pid of touchedPages(ops)) search.markDirty(S.note.id, pid);
+    if (S.note) for (const op of ops) if (op.t === 'page.add') search.markDirty(S.note.id, op.p.page.id);
   } catch (e) {
     setSaved(false);
     toast('保存に失敗しました: ' + e.message, 6000);
   }
-}
-function touchedPages(ops) {
-  const out = new Set();
-  const viaStroke = (id) => { const pid = S.note.strokes.get(id)?.data?.pageId; if (pid) out.add(pid); };
-  for (const op of ops) {
-    const p = op.p || {};
-    if (p.s) out.add(p.s.pageId);
-    if (p.pageId) out.add(p.pageId);
-    if (p.page) out.add(p.page.id);
-    (p.ids || []).forEach(viaStroke);
-    Object.keys(p.tf || p.styles || {}).forEach(viaStroke);
-  }
-  return out;
 }
 function setSaved(ok) {
   const el = $('#saved');
