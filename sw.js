@@ -1,9 +1,10 @@
 // オフラインでも起動できるように、アプリ本体を端末にキャッシュする。
 // 中身を変えたら VERSION を上げる。
-const VERSION = 'daigaku-note-v2';
+const VERSION = 'daigaku-note-v3';
 const ASSETS = [
   './', 'index.html', 'style.css', 'manifest.webmanifest',
   'js/app.js', 'js/db.js', 'js/model.js', 'js/pdf.js', 'js/sync.js',
+  'js/ink.js', 'js/templates.js', 'js/search.js', 'js/webdav.js', 'js/goodnotes.js',
   'vendor/pdf.min.mjs', 'vendor/pdf.worker.min.mjs', 'vendor/pdf-lib.min.js',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
 ];

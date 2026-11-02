@@ -1,6 +1,8 @@
 // PDF の読み込み(pdf.js)と書き出し(pdf-lib)。どちらも使うときだけ読み込む。
 import * as db from './db.js';
-import { pagesOf, strokesOf, widthAt } from './model.js';
+import { pagesOf, strokesOf, styleOf, bgOf } from './model.js';
+import { centerline, outline, smoothClosedPath, linePath, variableWidth } from './ink.js';
+import { templatePrims } from './templates.js';
 
 let pdfjsP = null;
 function pdfjs() {
@@ -93,29 +95,22 @@ function hexToRgb(hex) {
   return [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255];
 }
 
-// 罫線(白紙ページの背景)。canvas と PDF 書き出しの両方で使う線の位置。
-export function rulingLines(bg, w, h) {
-  const lines = [];
-  if (!bg || bg.type !== 'blank') return lines;
-  if (bg.ruling === 'lines') {
-    const gap = 17.01; // B罫 6mm
-    for (let y = 70; y < h - 30; y += gap) lines.push([24, y, w - 24, y]);
-  } else if (bg.ruling === 'grid') {
-    const gap = 14.17; // 5mm 方眼
-    for (let y = gap; y < h; y += gap) lines.push([0, y, w, y]);
-    for (let x = gap; x < w; x += gap) lines.push([x, 0, x, h]);
-  }
-  return lines;
+// PDF のページの文字(検索用)
+export async function pdfPageText(hash, pageNo) {
+  const doc = await loadDoc(hash);
+  const page = await doc.getPage(pageNo);
+  const tc = await page.getTextContent();
+  return tc.items.map((i) => i.str).join(' ');
 }
-export const RULING_COLOR = '#b9c8e3';
 
-// ノートを PDF にする。PDF 由来のページは元の PDF をそのまま使い、その上に手書きを重ねる。
+// ノートを PDF にする。PDF 由来のページは元の PDF をそのまま使い、その上に手書きをベクターで重ねる。
 export async function exportPdf(note) {
   const L = await pdfLib();
   const out = await L.PDFDocument.create();
   const srcDocs = new Map();
-  const [rr, rg, rb] = hexToRgb(RULING_COLOR);
+  const rgb = (hex) => L.rgb(...hexToRgb(hex));
   for (const pg of pagesOf(note)) {
+    const bg = bgOf(pg);
     let page;
     if (pg.bg && pg.bg.type === 'pdf') {
       let src = srcDocs.get(pg.bg.hash);
@@ -128,28 +123,30 @@ export async function exportPdf(note) {
       out.addPage(page);
     } else {
       page = out.addPage([pg.w, pg.h]);
-      for (const [x0, y0, x1, y1] of rulingLines(pg.bg, pg.w, pg.h)) {
-        page.drawLine({ start: { x: x0, y: pg.h - y0 }, end: { x: x1, y: pg.h - y1 }, thickness: 0.5, color: L.rgb(rr, rg, rb) });
+      const prim = templatePrims(bg, pg.w, pg.h);
+      for (const [x0, y0, x1, y1, t, c] of prim.lines) {
+        page.drawLine({ start: { x: x0, y: pg.h - y0 }, end: { x: x1, y: pg.h - y1 }, thickness: t, color: rgb(c) });
       }
+      for (const [x, y, r, c] of prim.dots) page.drawCircle({ x, y: pg.h - y, size: r, color: rgb(c) });
     }
-    const map = viewToPdf(page);
+    const toPdf = viewToPdf(page);
     for (const e of strokesOf(note, pg.id)) {
-      const d = e.data;
-      const [r, g, b] = hexToRgb(d.color);
-      const color = L.rgb(r, g, b);
-      const pts = d.pts;
-      if (pts.length === 3) {
-        const [x, y] = map(pts[0], pts[1]);
-        page.drawCircle({ x, y, size: widthAt(d, pts[2]) / 2, color });
-        continue;
-      }
-      for (let i = 3; i < pts.length; i += 3) {
-        const [ax, ay] = map(pts[i - 3], pts[i - 2]);
-        const [bx, by] = map(pts[i], pts[i + 1]);
-        page.drawLine({
-          start: { x: ax, y: ay }, end: { x: bx, y: by },
-          thickness: widthAt(d, (pts[i - 1] + pts[i + 2]) / 2),
-          color, lineCap: L.LineCapStyle.Round,
+      const d = styleOf(e);
+      const [ox, oy] = e.off;
+      // SVG のパスは y が下向きなので、PDF の座標 (X, Y) を (X, -Y) にして原点に置く
+      const map = (x, y) => { const [X, Y] = toPdf(x + ox, y + oy); return [X, -Y]; };
+      const marker = d.tool === 'marker';
+      const extra = marker ? { opacity: 0.38, borderOpacity: 0.38, blendMode: L.BlendMode.Multiply } : {};
+      const line = centerline(d);
+      if (variableWidth(d)) {
+        page.drawSvgPath(smoothClosedPath(outline(d, line), map), { x: 0, y: 0, color: rgb(d.color), ...extra });
+      } else if (line.length === 1) {
+        const [X, Y] = toPdf(line[0][0] + ox, line[0][1] + oy);
+        page.drawCircle({ x: X, y: Y, size: d.width / 2, color: rgb(d.color), ...extra });
+      } else {
+        page.drawSvgPath(linePath(line, map), {
+          x: 0, y: 0, borderColor: rgb(d.color), borderWidth: d.width,
+          borderLineCap: L.LineCapStyle.Round, ...extra,
         });
       }
     }

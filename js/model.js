@@ -60,7 +60,7 @@ export function emptyNote(id) {
 function pageEntry(note, id) {
   let e = note.pages.get(id);
   if (!e) {
-    e = { id, w: 0, h: 0, bg: null, order: 0, orderS: null, alive: false, aliveS: null };
+    e = { id, w: 0, h: 0, bg: null, bg2: null, bgS: null, order: 0, orderS: null, alive: false, aliveS: null };
     note.pages.set(id, e);
   }
   return e;
@@ -68,7 +68,7 @@ function pageEntry(note, id) {
 function strokeEntry(note, id) {
   let e = note.strokes.get(id);
   if (!e) {
-    e = { id, data: null, addS: null, alive: false, aliveS: null, bbox: null };
+    e = { id, data: null, addS: null, alive: false, aliveS: null, bbox: null, off: [0, 0], offS: null, color: null, colorS: null };
     note.strokes.set(id, e);
   }
   return e;
@@ -118,6 +118,14 @@ export function applyOp(note, op) {
     case 'page.restore':
       setAlive(pageEntry(note, p.pageId), op.t === 'page.restore', s);
       break;
+    case 'page.bg': {
+      const e = pageEntry(note, p.pageId);
+      if (newer(s, e.bgS)) {
+        e.bg2 = p.bg;
+        e.bgS = s;
+      }
+      break;
+    }
     case 'page.move': {
       const e = pageEntry(note, p.pageId);
       if (newer(s, e.orderS)) {
@@ -138,6 +146,24 @@ export function applyOp(note, op) {
       set.add(d.id);
       break;
     }
+    case 'stroke.tf': // 移動(絶対位置のずれ)
+      for (const [id, off] of Object.entries(p.tf)) {
+        const e = strokeEntry(note, id);
+        if (newer(s, e.offS)) {
+          e.off = off;
+          e.offS = s;
+        }
+      }
+      break;
+    case 'stroke.style': // 色の変更
+      for (const [id, st] of Object.entries(p.styles)) {
+        const e = strokeEntry(note, id);
+        if (newer(s, e.colorS)) {
+          e.color = st.color;
+          e.colorS = s;
+        }
+      }
+      break;
     case 'stroke.del':
     case 'stroke.undel':
       for (const id of p.ids) setAlive(strokeEntry(note, id), op.t === 'stroke.undel', s);
@@ -152,6 +178,14 @@ export function buildNote(id, ops) {
   const note = emptyNote(id);
   for (const op of ops) applyOp(note, op);
   return note;
+}
+
+// ページの背景(テンプレート変更があればそちらを優先)
+export const bgOf = (pg) => (pg.bgS ? pg.bg2 : pg.bg);
+
+// 線の見た目(色の変更・移動を反映したもの)
+export function styleOf(e) {
+  return e.color ? { ...e.data, color: e.color } : e.data;
 }
 
 export function pagesOf(note) {
@@ -207,6 +241,8 @@ function nearSeg(px, py, ax, ay, bx, by, r) {
 }
 
 export function strokeHit(e, x, y, r) {
+  x -= e.off[0];
+  y -= e.off[1];
   const b = e.bbox;
   if (x < b.x0 - r || x > b.x1 + r || y < b.y0 - r || y > b.y1 + r) return false;
   const pts = e.data.pts;

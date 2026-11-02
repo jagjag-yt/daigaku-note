@@ -1,21 +1,29 @@
-# 大学ノート(MVP v0.1)
+# 大学ノート(v0.2)
 
 GoodNotes の代わりを目指す、無料・オフライン・クロスプラットフォームの手書きノート。
 Web 技術(PWA)1本で Windows と iPad の両方で動く。ビルド不要、依存ライブラリは `vendor/` に同梱。
 
 ## できること
 
-- ペン(Apple Pencil / Windows のペンの筆圧に対応、5色・3段階の太さ)
+- ペン(Apple Pencil / Windows のペンの筆圧に対応)。線は滑らかなベクター(輪郭を塗ったパス)なので、拡大しても PDF にしても滑らか
+- 蛍光ペン(下の文字が透けて見える)
+- 図形補正:書き終わりでペンを止めると、直線・円・楕円・三角形・四角形に整える(「図形補正」でオン/オフ)
 - 消しゴム(線ごとに消す。ペンの消しゴムボタンにも対応)
+- 投げ縄:囲んで選び、ドラッグで移動。削除・複製・色の変更もできる
 - 元に戻す / やり直す(Ctrl+Z / Ctrl+Y)
-- 複数ページ(B罫6mm・方眼5mm・無地)、ページの追加と削除
+- テンプレート:A罫・B罫・C罫・方眼・ドット・コーネル式・五線譜・無地。用紙は A4 縦横・B5・A5・16:9
+- ページ一覧:並べ替え、テンプレートの変更、追加、削除
 - ノート一覧(作成・名前変更・削除・1冊ずつ書き出し)
 - 端末内(IndexedDB)に自動保存。ネットなしで全部使える
 - PDF を開いて上から書き込む / ノートに PDF のページを追加
-- PDF 書き出し(元の PDF はそのまま残し、その上に手書きを重ねるので文字の選択もできる)
-- 同期の土台:同期ファイルを書き出し → もう一方の端末で取り込む。両方で書いた線は消えずに合わさる
+- PDF 書き出し(元の PDF はそのまま残し、その上に手書きをベクターで重ねる)
+- 検索:ノートの名前、PDF の文字、手書き文字(端末内で文字認識)
+- クラウド同期(WebDAV / Nextcloud)と、ファイルでの同期
+- GoodNotes のノート(.goodnotes)の取り込み(手書きと用紙。画像・テキストは未対応)
 - 指はスクロールとピンチズーム、書くのはペンだけ(「指で書く」で切り替え)
-- ホーム画面に追加すればアプリとして起動、オフラインでも起動(https か localhost のとき)
+- ホーム画面に追加すればアプリとして起動、オフラインでも起動
+
+ショートカット:P ペン / H 蛍光ペン / E 消しゴム / L 投げ縄 / Delete 選択を削除 / Esc 選択解除
 
 ## 起動のしかた
 
@@ -32,13 +40,42 @@ Node.js が入っていれば、`start-windows.bat` をダブルクリック(ま
 試すだけなら、Windows で `node serve.mjs` を動かし、同じ Wi-Fi の iPad から表示された
 `http://192.168.x.x:8123/` を開く。ただし https でないのでオフライン起動はできない。
 
-## 同期のしかた(今の版)
+## 同期のしかた
+
+### クラウド同期(WebDAV / Nextcloud)
+
+一覧の「同期」から、WebDAV のフォルダの URL・ユーザー名・アプリパスワードを入れて「保存して今すぐ同期」。
+以後は変更の数秒後と1分ごとに自動で同期する。自前のサーバープログラムは要らない(Saber と同じ考え方)。
+
+- Nextcloud の URL の例:`https://<サーバー>/remote.php/dav/files/<ユーザー名>/`
+- パスワードは Nextcloud の「設定 → セキュリティ → アプリパスワード」で作ったものを使う
+- **CORS の許可が必要**:大学ノートはブラウザから直接 WebDAV に接続するので、サーバーが
+  `https://jagjag-yt.github.io` からの接続を許可していないと失敗する。Nextcloud なら
+  「WebAppPassword」アプリを入れて、許可するオリジンに `https://jagjag-yt.github.io` を追加する。
+  ほかの WebDAV サーバーでも、CORS(`Access-Control-Allow-Origin` など)を返す設定が必要
+- サーバーには `daigaku-note/ops/<端末ID>/*.json`(各端末の変更)と `daigaku-note/files/*.pdf` を置く
+
+### ファイルで同期
 
 1. 端末Aの一覧で「同期」→「同期ファイルを書き出す」
 2. そのファイルを OneDrive / Google ドライブ / AirDrop などで端末Bへ
 3. 端末Bで「同期」→「同期ファイルを取り込む」
 
-逆向きも同じ。何回取り込んでも、どの順で取り込んでも同じ結果になる。
+どちらの方法でも、何回取り込んでも、どの順で取り込んでも同じ結果になる。
+
+## GoodNotes からの取り込み
+
+一覧の「GoodNotesから取り込む」で `.goodnotes` を選ぶ(複数可)。
+GoodNotes の形式は公開されていないため、実物を調べて分かった範囲で読んでいる。
+
+- 取り込めるもの:ノートの名前、ページの順番と大きさ、手書きの線(色)、消した線の除外、背景の PDF
+- 取り込めないもの:画像、テキストボックス、ペンの種類ごとの太さ(一定の太さになる)、筆圧
+
+## 検索と手書き文字の認識
+
+ページを書き換えると、数秒後に端末の中でそのページの手書きを文字認識して(Tesseract.js、日本語+英語)、検索できるようにする。
+PDF のページは PDF の文字も検索できる。認識結果は端末ごとに作り、同期はしない。
+Tesseract は活字向けのため、手書きの日本語の認識精度は高くない(はっきり書いた数字や英字は比較的拾える)。
 
 ## しくみ
 
@@ -48,6 +85,11 @@ Node.js が入っていれば、`start-windows.bat` をダブルクリック(ま
 - PDF は SHA-256 で名前を付けて丸ごと1つ保存し、ページは「どの PDF の何ページ目か」を参照するだけ。
 - 主なファイル
   - `js/model.js` データモデルとマージ(DOM なし、Node でテスト可)
+  - `js/ink.js` 線の形(滑らかな中心線・筆圧の輪郭)、図形補正、投げ縄の判定
+  - `js/templates.js` テンプレートと用紙サイズ
+  - `js/search.js` 文字認識と検索
+  - `js/webdav.js` クラウド同期
+  - `js/goodnotes.js` .goodnotes の取り込み
   - `js/db.js` IndexedDB
   - `js/pdf.js` PDF の読み込み(pdf.js)と書き出し(pdf-lib)
   - `js/sync.js` 同期ファイル
@@ -64,24 +106,25 @@ Node.js が入っていれば、`start-windows.bat` をダブルクリック(ま
 }
 ```
 
-op の種類: `note.create / note.rename / note.delete / note.restore / page.add / page.delete / page.restore / page.move / stroke.add / stroke.del / stroke.undel`。
+op の種類: `note.create / note.rename / note.delete / note.restore / page.add / page.delete / page.restore / page.move / page.bg / stroke.add / stroke.del / stroke.undel / stroke.tf(移動) / stroke.style(色)`。
 線の点は `[x, y, 筆圧, x, y, 筆圧, ...]`(単位は pt、ページ左上が原点)。
 
 ## テスト
 
 ```
-npm test                     # マージのテスト(Node)
-node serve.mjs 8123 &        # 別に起動しておく
-npm i pdf-lib && node test/e2e.cjs /tmp   # ブラウザでの通し確認(Playwright)
+npm test                       # マージのテスト(Node)
+node serve.mjs 8124 &          # アプリ
+node test/davserver.mjs 8125 & # テスト用 WebDAV サーバー
+npm i pdf-lib && URL=http://localhost:8124/ GN=見本.goodnotes node test/e2e.cjs /tmp   # ブラウザでの通し確認(Playwright)
 ```
 
 ## まだないもの(次の候補)
 
-- クラウド自動同期(WebDAV / Nextcloud / Google ドライブ)
-- 投げ縄選択・移動、蛍光ペン、図形、テキスト、画像
-- 手書き文字の検索、ページの並べ替え・サムネイル、フォルダ
-- 実機(iPad + Apple Pencil)での細かい調整はまだ。手のひら誤反応などあれば直す
+- 画像・テキストの貼り付け、.goodnotes の画像・テキストの取り込み
+- 手書き文字認識の精度向上(手書き向けのモデル)
+- フォルダ分け、ページのサムネイル一覧からのドラッグでの並べ替え
+- Google ドライブ・OneDrive への直接の同期
 
 ## ライセンス
 
-大学ノート本体は MIT。同梱の pdf.js は Apache-2.0、pdf-lib は MIT(`vendor/` にライセンス文)。
+大学ノート本体は MIT。同梱の pdf.js は Apache-2.0、pdf-lib は MIT、Tesseract.js は Apache-2.0(`vendor/` にライセンス文)。

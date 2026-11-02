@@ -2,21 +2,28 @@
 import { NOTE_TYPES } from './model.js';
 
 const DB_NAME = 'daigaku-note';
-const VERSION = 1;
+const VERSION = 2;
 let dbp = null;
 
 export function openDB() {
   if (dbp) return dbp;
   dbp = new Promise((resolve, reject) => {
     const r = indexedDB.open(DB_NAME, VERSION);
-    r.onupgradeneeded = () => {
+    r.onupgradeneeded = (ev) => {
       const db = r.result;
-      const ops = db.createObjectStore('ops', { keyPath: 'id' });
-      ops.createIndex('n', 'n');
-      ops.createIndex('t', 't');
-      db.createObjectStore('meta');
-      db.createObjectStore('files', { keyPath: 'hash' });
-      db.createObjectStore('notemeta', { keyPath: 'id' });
+      if (ev.oldVersion < 1) {
+        const ops = db.createObjectStore('ops', { keyPath: 'id' });
+        ops.createIndex('n', 'n');
+        ops.createIndex('t', 't');
+        db.createObjectStore('meta');
+        db.createObjectStore('files', { keyPath: 'hash' });
+        db.createObjectStore('notemeta', { keyPath: 'id' });
+      }
+      if (ev.oldVersion < 2) {
+        r.transaction.objectStore('ops').createIndex('d', 'd');
+        // 検索用の文字(手書き認識・PDF の文字)。端末ごとに作り直せるので同期しない
+        db.createObjectStore('search', { keyPath: 'key' });
+      }
     };
     r.onsuccess = () => resolve(r.result);
     r.onerror = () => reject(r.error);
@@ -100,4 +107,24 @@ export async function hasFile(hash) {
   const db = await openDB();
   const k = await req(db.transaction('files').objectStore('files').getKey(hash));
   return k !== undefined;
+}
+
+export async function opsByDevice(device) {
+  const db = await openDB();
+  return req(db.transaction('ops').objectStore('ops').index('d').getAll(device));
+}
+
+export async function putSearch(rec) {
+  const db = await openDB();
+  const tx = db.transaction('search', 'readwrite');
+  tx.objectStore('search').put(rec);
+  return done(tx);
+}
+export async function getSearch(key) {
+  const db = await openDB();
+  return req(db.transaction('search').objectStore('search').get(key));
+}
+export async function allSearch() {
+  const db = await openDB();
+  return req(db.transaction('search').objectStore('search').getAll());
 }

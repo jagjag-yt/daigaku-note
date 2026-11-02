@@ -19,18 +19,18 @@
   <section id="library">
     <header class="bar">
       <h1>大学ノート</h1>
+      <input id="search" type="search" placeholder="ノートを検索(手書き・PDFの文字も)" autocomplete="off">
       <div class="spacer"></div>
-      <select id="new-ruling" title="新しいノートの罫線">
-        <option value="lines">B罫(6mm)</option>
-        <option value="grid">方眼(5mm)</option>
-        <option value="none">無地</option>
-      </select>
       <button id="new-note" class="primary">新しいノート</button>
       <button id="open-pdf">PDFを開く</button>
+      <button id="open-gn" title="GoodNotes のノート(.goodnotes)を取り込む">GoodNotesから取り込む</button>
       <button id="sync-btn">同期</button>
       <input id="pdf-input" type="file" accept="application/pdf,.pdf" hidden>
+      <input id="gn-input" type="file" accept=".goodnotes,application/zip" multiple hidden>
     </header>
+    <div class="substatus"><span class="sync-status"></span><span id="search-status"></span></div>
     <p id="empty" class="empty" hidden>ノートはまだありません。「新しいノート」または「PDFを開く」から始めてください。</p>
+    <div id="results" class="results" hidden></div>
     <div id="notes" class="grid"></div>
   </section>
 
@@ -38,16 +38,19 @@
   <section id="editor" hidden>
     <header class="bar tools">
       <button id="back" title="ノート一覧へ">‹ 一覧</button>
-      <button id="title" class="title" title="名前を変える"></button>
+      <button id="title" class="title" title="名前を変更"></button>
       <span id="saved" class="saved"></span>
       <div class="spacer"></div>
       <div class="group">
         <button id="tool-pen" title="ペン (P)">ペン</button>
+        <button id="tool-marker" title="蛍光ペン (H)">蛍光ペン</button>
         <button id="tool-eraser" title="消しゴム (E)">消しゴム</button>
+        <button id="tool-lasso" title="投げ縄で選択・移動 (L)">投げ縄</button>
       </div>
       <div id="colors" class="group"></div>
       <div id="widths" class="group"></div>
       <div class="group">
+        <button id="shapes" title="書き終わりでペンを止めると、直線・円・四角形などに整えます">図形補正</button>
         <button id="undo" title="元に戻す (Ctrl+Z)">↶</button>
         <button id="redo" title="やり直す (Ctrl+Y)">↷</button>
       </div>
@@ -57,6 +60,7 @@
         <button id="zoom-in" title="拡大">+</button>
       </div>
       <div class="group">
+        <button id="pages-btn" title="ページの並べ替え・テンプレート">ページ</button>
         <button id="add-page" title="今のページの後ろに白紙を追加">+ページ</button>
         <button id="add-pdf" title="PDFのページを末尾に追加">+PDF</button>
         <button id="export-pdf" title="PDFに書き出す">PDF書き出し</button>
@@ -67,13 +71,52 @@
     <div id="scroller"><div id="pages"></div></div>
   </section>
 
-  <dialog id="sync-dialog">
+  <dialog id="new-dialog">
+    <form id="new-form">
+      <h2>新しいノート</h2>
+      <label class="field">名前<input id="nn-title" type="text" placeholder="無題のノート"></label>
+      <label class="field">テンプレート<select id="nn-tpl" class="tpl-select"></select></label>
+      <label class="field">用紙<select id="nn-size" class="size-select"></select></label>
+      <div class="row">
+        <button type="submit" class="primary">作成</button>
+        <button type="button" id="nn-cancel">キャンセル</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="pages-dialog" class="wide">
+    <h2>ページ</h2>
+    <div id="pp-list" class="pp-list"></div>
+    <div class="row pp-add">
+      <select id="pp-tpl" class="tpl-select" title="テンプレート"></select>
+      <select id="pp-size" class="size-select" title="用紙"></select>
+      <button id="pp-add" class="primary">末尾にページを追加</button>
+      <button id="pages-close">閉じる</button>
+    </div>
+  </dialog>
+
+  <dialog id="sync-dialog" class="wide">
     <h2>端末どうしの同期</h2>
-    <p>現在はファイルで同期します。片方の端末で「同期ファイルを書き出す」を押し、できたファイルを OneDrive・Google ドライブ・AirDrop などでもう一方の端末に送って「同期ファイルを取り込む」を押してください。</p>
+    <h3>クラウド同期(WebDAV / Nextcloud)</h3>
+    <p>Nextcloud などの WebDAV に対応した保存先を使って、自動で同期します。自分のサーバーを用意する必要はありません。</p>
+    <form id="dav-form">
+      <label class="field">フォルダのURL<input id="dav-url" type="url" placeholder="https://example.com/remote.php/dav/files/ユーザー名/" autocomplete="off"></label>
+      <label class="field">ユーザー名<input id="dav-user" type="text" autocomplete="username"></label>
+      <label class="field">アプリパスワード<input id="dav-pass" type="password" autocomplete="current-password"></label>
+      <label class="check"><input id="dav-auto" type="checkbox" checked> 変更したら自動で同期する</label>
+      <p class="small">指定したフォルダの中に「daigaku-note」フォルダを作り、そこに保存します。ブラウザから接続するため、サーバー側で CORS を許可する必要があります(README を参照してください)。パスワードはこの端末の中だけに保存します。</p>
+      <div class="row">
+        <button type="submit" class="primary">保存して今すぐ同期</button>
+        <button type="button" id="dav-off">クラウド同期をオフにする</button>
+      </div>
+      <p class="small sync-status"></p>
+    </form>
+    <h3>ファイルで同期</h3>
+    <p>片方の端末で「同期ファイルを書き出す」を押し、できたファイルを OneDrive・Google ドライブ・AirDrop などでもう一方の端末に送って「同期ファイルを取り込む」を押してください。</p>
     <p>両方の端末で書いた内容は消えずに統合されます。同じファイルを何度取り込んでも結果は変わりません。</p>
     <p class="small">この端末のID: <code id="device-id"></code></p>
     <div class="row">
-      <button id="sync-export" class="primary">同期ファイルを書き出す</button>
+      <button id="sync-export">同期ファイルを書き出す</button>
       <button id="sync-import">同期ファイルを取り込む</button>
       <button id="sync-close">閉じる</button>
     </div>
