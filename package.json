@@ -1,0 +1,12 @@
+{
+  "name": "daigaku-note",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "大学ノート: 無料・オフライン・クロスプラットフォームの手書きノート(PWA)",
+  "scripts": {
+    "start": "node serve.mjs 8123",
+    "test": "node --test test/model.test.mjs"
+  },
+  "license": "MIT"
+}

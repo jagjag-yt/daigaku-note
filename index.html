@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>大学ノート</title>
+  <meta name="description" content="無料・オフラインで使える手書きノート">
+  <meta name="theme-color" content="#2f5d9e">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="大学ノート">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- ノート一覧 -->
+  <section id="library">
+    <header class="bar">
+      <h1>大学ノート</h1>
+      <div class="spacer"></div>
+      <select id="new-ruling" title="新しいノートの罫線">
+        <option value="lines">B罫(6mm)</option>
+        <option value="grid">方眼(5mm)</option>
+        <option value="none">無地</option>
+      </select>
+      <button id="new-note" class="primary">新しいノート</button>
+      <button id="open-pdf">PDFを開く</button>
+      <button id="sync-btn">同期</button>
+      <input id="pdf-input" type="file" accept="application/pdf,.pdf" hidden>
+    </header>
+    <p id="empty" class="empty" hidden>まだノートがないよ。「新しいノート」か「PDFを開く」から始めてね。</p>
+    <div id="notes" class="grid"></div>
+  </section>
+
+  <!-- エディタ -->
+  <section id="editor" hidden>
+    <header class="bar tools">
+      <button id="back" title="ノート一覧へ">‹ 一覧</button>
+      <button id="title" class="title" title="名前を変える"></button>
+      <span id="saved" class="saved"></span>
+      <div class="spacer"></div>
+      <div class="group">
+        <button id="tool-pen" title="ペン (P)">ペン</button>
+        <button id="tool-eraser" title="消しゴム (E)">消しゴム</button>
+      </div>
+      <div id="colors" class="group"></div>
+      <div id="widths" class="group"></div>
+      <div class="group">
+        <button id="undo" title="元に戻す (Ctrl+Z)">↶</button>
+        <button id="redo" title="やり直す (Ctrl+Y)">↷</button>
+      </div>
+      <div class="group">
+        <button id="zoom-out" title="縮小">−</button>
+        <button id="zoom-label" title="幅に合わせる">100%</button>
+        <button id="zoom-in" title="拡大">+</button>
+      </div>
+      <div class="group">
+        <button id="add-page" title="今のページの後ろに白紙を追加">+ページ</button>
+        <button id="add-pdf" title="PDFのページを末尾に追加">+PDF</button>
+        <button id="export-pdf" title="PDFに書き出す">PDF書き出し</button>
+        <button id="finger" title="指でも書く">指で書く</button>
+      </div>
+      <input id="pdf-add-input" type="file" accept="application/pdf,.pdf" hidden>
+    </header>
+    <div id="scroller"><div id="pages"></div></div>
+  </section>
+
+  <dialog id="sync-dialog">
+    <h2>端末どうしの同期</h2>
+    <p>今はファイルで同期するよ。片方の端末で「書き出す」→ できたファイルを OneDrive・Google ドライブ・AirDrop などでもう一方に送って「取り込む」。</p>
+    <p>どちらの端末で書いた線も消えずに合わさるから、両方で書いてから交換しても大丈夫。何回取り込んでも同じ結果になるよ。</p>
+    <p class="small">この端末のID: <code id="device-id"></code></p>
+    <div class="row">
+      <button id="sync-export" class="primary">同期ファイルを書き出す</button>
+      <button id="sync-import">同期ファイルを取り込む</button>
+      <button id="sync-close">閉じる</button>
+    </div>
+    <input id="sync-input" type="file" accept="application/json,.json" multiple hidden>
+  </dialog>
+
+  <div id="toast" hidden></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
