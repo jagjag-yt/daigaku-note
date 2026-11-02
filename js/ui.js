@@ -56,6 +56,7 @@ export function closePopover() {
   document.removeEventListener('pointerdown', c.outside, true);
   document.removeEventListener('keydown', c.key, true);
   window.removeEventListener('resize', c.reposition);
+  document.removeEventListener('scroll', c.onScroll, true);
   c.onClose?.();
 }
 
@@ -76,7 +77,7 @@ export function openPopover(anchor, build, { className = '', onClose, align = 'c
   body.className = 'pop-body';
   el.append(arrow, body);
   document.body.appendChild(el);
-  const c = { el, anchor, onClose };
+  const c = { el, anchor, onClose, align };
   current = c;
   anchor?.classList.add('open');
   build(body, closePopover);
@@ -85,7 +86,17 @@ export function openPopover(anchor, build, { className = '', onClose, align = 'c
   c.outside = (e) => {
     if (el.contains(e.target)) return;
     if (anchor && anchor.contains(e.target)) return; // ボタン自身の onclick に任せる
+    // ページの上を触ったときは閉じるだけにして、線は書かない
+    if (e.target.closest?.('#scroller')) { e.stopPropagation(); e.preventDefault(); }
     closePopover();
+  };
+  // 一覧などをスクロールしたらボタンに付いていく。ボタンが消えた・見えなくなったら閉じる
+  c.onScroll = (e) => {
+    if (el.contains(e.target)) return;
+    if (!anchor || !anchor.isConnected) return closePopover();
+    const r = anchor.getBoundingClientRect();
+    if (r.bottom < 0 || r.top > window.innerHeight) return closePopover();
+    c.reposition();
   };
   c.key = (e) => { if (e.key === 'Escape') { e.stopPropagation(); closePopover(); } };
   setTimeout(() => {
@@ -93,11 +104,24 @@ export function openPopover(anchor, build, { className = '', onClose, align = 'c
     document.addEventListener('pointerdown', c.outside, true);
     document.addEventListener('keydown', c.key, true);
     window.addEventListener('resize', c.reposition);
+    document.addEventListener('scroll', c.onScroll, true);
   });
+  // キーボードで開いたときのために、最初の項目へフォーカスを移す(画面は動かさない)
+  if (!matchMedia('(pointer: coarse)').matches) el.querySelector('button:not(:disabled), input, select')?.focus({ preventScroll: true });
   return el;
 }
 
 export function repositionPopover() { current?.reposition(); }
+
+// アンカーのボタンが作り直されたときに付け替える
+export function retargetPopover(oldAnchor, newAnchor) {
+  if (!current || current.anchor !== oldAnchor) return;
+  oldAnchor.classList.remove('open');
+  current.anchor = newAnchor;
+  newAnchor.classList.add('open');
+  current.reposition = () => place(current.el, current.el.querySelector('.pop-arrow'), newAnchor, current.align);
+  current.reposition();
+}
 
 function place(el, arrow, anchor, align) {
   const vw = window.innerWidth, vh = window.innerHeight, m = 8;
@@ -128,9 +152,10 @@ export function menu(body, items, close) {
     b.className = 'menu-item' + (it.danger ? ' danger' : '') + (it.on ? ' checked' : '');
     if (it.id) b.id = it.id;
     if (it.attrs) for (const [k, v] of Object.entries(it.attrs)) b.setAttribute(k, v);
-    b.innerHTML = `${it.icon ? icon(it.icon, 20) : '<span class="ic-space"></span>'}<span class="menu-label"></span>${it.on != null ? `<span class="menu-check">${it.on ? 'オン' : 'オフ'}</span>` : ''}`;
+    b.innerHTML = `${it.icon ? icon(it.icon, 20) : '<span class="ic-space"></span>'}<span class="menu-label"></span>${it.on != null ? `<span class="switch${it.on ? ' on' : ''}" aria-hidden="true"></span>` : ''}`;
     b.querySelector('.menu-label').textContent = it.label;
     if (it.disabled) b.disabled = true;
+    if (it.on != null) { b.setAttribute('role', 'menuitemcheckbox'); b.setAttribute('aria-checked', !!it.on); }
     b.onclick = () => {
       if (!it.keepOpen) close();
       it.onClick?.(b);

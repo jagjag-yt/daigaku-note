@@ -68,8 +68,9 @@
         <div id="pp-list" class="pp-list"></div>
         <div class="sb-foot"><button id="sb-add" class="wide-btn" data-icon="plus" data-icon-size="18"><span>ページを追加</span></button></div>
       </aside>
+      <div id="sb-scrim" class="sb-scrim" hidden></div>
       <div id="scroller"><div id="pages"></div></div>
-      <div id="page-ind" class="page-ind" aria-live="polite"></div>
+      <button id="page-ind" class="page-ind" title="ページを指定して移動"></button>
     </div>
   </section>
 
@@ -91,8 +92,8 @@
     <form id="add-form">
       <h2>ページを追加</h2>
       <div class="field">場所<div class="seg" role="radiogroup">
-        <label><input type="radio" name="pp-where" value="after" checked><span>今のページの後ろ</span></label>
-        <label><input type="radio" name="pp-where" value="before"><span>今のページの前</span></label>
+        <label><input type="radio" name="pp-where" value="after" checked><span id="pp-after-label">今のページの後ろ</span></label>
+        <label><input type="radio" name="pp-where" value="before"><span id="pp-before-label">今のページの前</span></label>
         <label><input type="radio" name="pp-where" value="last"><span>最後</span></label>
       </div></div>
       <div class="field">用紙<div id="pp-tpl" class="tpl-pick" role="radiogroup" aria-label="テンプレート"></div></div>
@@ -134,7 +135,18 @@
     <input id="sync-input" type="file" accept="application/json,.json" multiple hidden>
   </dialog>
 
-  <div id="toast" hidden></div>
+  <dialog id="rename-dialog">
+    <form id="rename-form">
+      <h2 id="rename-heading">名前を変更</h2>
+      <label class="field"><span class="sr">名前</span><input id="rename-input" type="text" autocomplete="off"></label>
+      <div class="row end">
+        <button type="button" id="rename-cancel">キャンセル</button>
+        <button type="submit" class="primary">変更</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" hidden><span id="toast-msg"></span><button id="toast-act" type="button" hidden></button></div>
   <script type="module" src="js/app.js"></script>
 </body>
 </html>

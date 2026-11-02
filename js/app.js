@@ -29,6 +29,7 @@ const MARKER_PALETTE = [
 ];
 const WIDTH_RANGE = { pen: [0.5, 8, 0.1], marker: [4, 32, 1] };
 const COVERS = ['#2f5d9e', '#b33a3a', '#2f7d5b', '#7a4fa0', '#c27c1a', '#3a6f7a', '#4b5563', '#a8556f'];
+const COVER_NAMES = ['紺', '赤', '緑', '紫', '黄土', '青緑', '灰', '桃'];
 const MAX_CANVAS_PX = 4_000_000; // iPad Safari のキャンバス上限を避ける
 
 const S = {
@@ -43,6 +44,8 @@ const S = {
     marker: { colors: [...MARKER_COLORS], widths: [...MARKER_WIDTHS] },
   },
   sidebar: false,
+  eraser: { si: 1, markerOnly: false },
+  fit: true, // 幅に合わせた拡大率のままか(手で拡大したら false)
   fingerDraw: false,
   shapes: true,
   undo: [],
@@ -73,7 +76,12 @@ async function init() {
     // 前の版で選んでいた色・太さが並びになければ、先頭に入れておく
     if (!S.slots[k].colors.includes(S[k].color)) S.slots[k].colors[0] = S[k].color;
     if (!S.slots[k].widths.includes(S[k].width)) S.slots[k].widths[0] = S[k].width;
+    // 選んでいるのは何番目の枠か(同じ色が2つの枠に入っていても区別できるように)
+    if (!(S[k].ci >= 0 && S.slots[k].colors[S[k].ci] === S[k].color)) S[k].ci = S.slots[k].colors.indexOf(S[k].color);
+    if (!(S[k].wi >= 0 && S.slots[k].widths[S[k].wi] === S[k].width)) S[k].wi = S.slots[k].widths.indexOf(S[k].width);
   }
+  if (prefs.eraser) S.eraser = { ...S.eraser, ...prefs.eraser };
+  if (['pen', 'marker', 'eraser', 'lasso'].includes(prefs.tool)) S.tool = prefs.tool;
 
   navigator.storage?.persist?.().catch(() => {});
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
@@ -87,8 +95,10 @@ async function init() {
     });
   }
   fillIcons();
+  bindDialogs();
   fillSelects();
   bindLibrary();
+  buildToolbar();
   bindEditor();
   await dav.init({ recorder: S.rec, onRemoteChange: onRemoteChange, onStatus: setSyncStatus });
   search.init({ onProgress: (msg) => { const el = $('#search-status'); if (el) el.textContent = msg; } });
@@ -97,7 +107,7 @@ async function init() {
 }
 
 function savePrefs() {
-  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapes: S.shapes, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar });
+  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapes: S.shapes, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool });
 }
 
 function route() {
@@ -109,12 +119,62 @@ function route() {
   else showLibrary();
 }
 
-function toast(msg, ms = 2500) {
+// action: { label, run } を渡すと「元に戻す」などのボタンを付ける
+function toast(msg, ms = 2500, action) {
   const t = $('#toast');
-  t.textContent = msg;
+  $('#toast-msg').textContent = msg;
+  const b = $('#toast-act');
+  b.hidden = !action;
+  if (action) {
+    b.textContent = action.label;
+    b.onclick = () => { t.hidden = true; action.run(); };
+    ms = Math.max(ms, 5000);
+  }
   t.hidden = false;
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => (t.hidden = true), ms);
+}
+
+const coarse = () => matchMedia('(pointer: coarse)').matches;
+// ダイアログを開く。iPad などでは勝手にキーボードを出さない
+function showDialog(d, focusEl) {
+  d.showModal();
+  if (coarse()) { d.focus(); } else if (focusEl) { focusEl.focus(); focusEl.select?.(); }
+}
+// どのダイアログにも右上の × と、背景を押したら閉じる動きを付ける
+function bindDialogs() {
+  for (const d of document.querySelectorAll('dialog')) {
+    d.tabIndex = -1;
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'dlg-close icon-btn small';
+    x.setAttribute('aria-label', '閉じる');
+    x.innerHTML = icon('close', 18);
+    x.onclick = () => d.close();
+    d.prepend(x);
+    d.addEventListener('pointerdown', (e) => { d._downOnBackdrop = e.target === d; });
+    d.addEventListener('click', (e) => {
+      if (e.target !== d || !d._downOnBackdrop) return;
+      const r = d.getBoundingClientRect();
+      if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) d.close();
+    });
+  }
+}
+
+// 名前を入力してもらう(ブラウザ標準の prompt の代わり)
+function askName(heading, value) {
+  return new Promise((resolve) => {
+    const d = $('#rename-dialog'), inp = $('#rename-input');
+    $('#rename-heading').textContent = heading;
+    inp.value = value || '';
+    let result = null;
+    $('#rename-form').onsubmit = (e) => { e.preventDefault(); result = inp.value.trim(); d.close(); };
+    $('#rename-cancel').onclick = () => d.close();
+    d.addEventListener('close', () => resolve(result), { once: true });
+    d.showModal();
+    inp.focus();
+    inp.select();
+  });
 }
 
 function download(data, name, type) {
@@ -145,20 +205,25 @@ function fillSelects() {
   $('#pp-size').value = '';
   tplPicker($('#nn-tpl'), 'lines-b');
   tplPicker($('#pp-tpl'), 'lines-b');
+  $('#nn-size').onchange = () => tplPicker($('#nn-tpl'), $('#nn-tpl').dataset.value, sizeById($('#nn-size').value));
+  $('#pp-size').onchange = () => tplPicker($('#pp-tpl'), $('#pp-tpl').dataset.value, $('#pp-size').value ? sizeById($('#pp-size').value) : addRef || PAGE_A4);
   coverPicker($('#nn-cover'), COVERS[0]);
 }
 
 // 用紙(テンプレート)を見本の絵で選ぶ。選んだ値は el.dataset.value
-function tplPicker(el, value) {
+// size: { w, h } 見本の縦横比(選んだ用紙サイズに合わせる)
+function tplPicker(el, value, size = PAGE_A4) {
   el.innerHTML = '';
+  const { w, h } = size;
+  // 見本は小さいので、罫線を画面で 1px 以上の太さにして見分けられるようにする
+  const minW = (w / 100) * 0.8;
   for (const t of TEMPLATES) {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'tpl-opt';
     b.dataset.tpl = t.id;
     b.setAttribute('role', 'radio');
-    const w = 105, h = 148;
-    b.innerHTML = `<svg viewBox="0 0 ${PAGE_A4.w} ${PAGE_A4.h}" width="${w}" height="${h}" preserveAspectRatio="none" aria-hidden="true">${templateSvg({ type: 'blank', ruling: t.id }, PAGE_A4.w, PAGE_A4.h)}</svg><span></span>`;
+    b.innerHTML = `<svg viewBox="0 0 ${w} ${h}" style="--ar:${w} / ${h}" preserveAspectRatio="none" aria-hidden="true">${templateSvg({ type: 'blank', ruling: t.id }, w, h, minW)}</svg><span></span>`;
     b.querySelector('span').textContent = t.label;
     b.onclick = () => setPick(el, t.id);
     el.appendChild(b);
@@ -182,7 +247,8 @@ function coverPicker(el, value, onPick) {
     b.dataset.cover = c;
     b.style.setProperty('--cover', c);
     b.setAttribute('role', 'radio');
-    b.setAttribute('aria-label', '表紙の色');
+    b.setAttribute('aria-label', '表紙の色: ' + COVER_NAMES[COVERS.indexOf(c)]);
+    b.title = COVER_NAMES[COVERS.indexOf(c)];
     b.onclick = () => { setPick(el, c); onPick?.(c); };
     el.appendChild(b);
   }
@@ -223,7 +289,7 @@ function thumbsDirty(ops) {
     if (active || penPending) { thumbTimer = setTimeout(run, 600); return; }
     for (const id of dirtyThumbs) {
       const row = S.thumbs.get(id), pg = S.note && pagesOf(S.note).find((x) => x.id === id);
-      if (row && pg) drawThumb(row.querySelector('canvas'), pg);
+      if (row && pg && row.dataset.drawn) drawThumb(row.querySelector('canvas'), pg);
     }
     dirtyThumbs.clear();
   }, 600);
@@ -235,6 +301,9 @@ function setSaved(ok) {
 }
 function setSyncStatus(msg) {
   for (const el of document.querySelectorAll('.sync-status')) el.textContent = msg;
+  const bad = /失敗|エラー|できません/.test(msg || '');
+  $('.sync-dot').hidden = !bad;
+  $('#sync-btn').title = bad ? '同期: ' + msg : '同期';
 }
 
 // 他の端末の変更が届いたとき
@@ -259,8 +328,7 @@ function bindLibrary() {
   const newNote = () => {
     $('#nn-title').value = '';
     setPick($('#nn-cover'), COVERS[Math.floor(Math.random() * COVERS.length)]);
-    $('#new-dialog').showModal();
-    $('#nn-title').focus();
+    showDialog($('#new-dialog'), $('#nn-title'));
   };
   // 「新規」: ノートを作るか、ファイルを読み込むかを選ぶ
   S.newMenu = (anchor) => openPopover(anchor, (body, close) => menu(body, [
@@ -330,7 +398,7 @@ function bindLibrary() {
     $('#dav-user').value = cfg.user || '';
     $('#dav-pass').value = cfg.pass || '';
     $('#dav-auto').checked = cfg.auto !== false;
-    $('#sync-dialog').showModal();
+    showDialog($('#sync-dialog'));
   };
   $('#sync-close').onclick = () => $('#sync-dialog').close();
   $('#dav-form').onsubmit = async (e) => {
@@ -374,7 +442,9 @@ function bindLibrary() {
   };
 }
 
+let searchSeq = 0;
 async function runSearch() {
+  const seq = ++searchSeq;
   const q = $('#search').value.trim();
   const box = $('#results');
   if (!q) {
@@ -385,6 +455,7 @@ async function runSearch() {
   const lib = buildLibrary(await db.noteLevelOps());
   const live = new Map([...lib.values()].filter((n) => !n.deleted && n.titleS).map((n) => [n.id, n]));
   const hits = await search.query(q, live);
+  if (seq !== searchSeq) return; // もっと新しい検索が始まっている
   box.hidden = false;
   $('#notes').hidden = true;
   if (!hits.length) {
@@ -393,8 +464,8 @@ async function runSearch() {
   }
   box.innerHTML = hits.slice(0, 100).map((h) => `
     <a class="hit" href="#/note/${h.noteId}${h.pageId ? '/p/' + h.pageId : ''}">
-      <span class="hit-title">${esc(h.title)}${h.pageNo ? ` <span class="hit-page">${h.pageNo}ページ目</span>` : ''}</span>
-      <span class="hit-snip">${h.snippet}</span>
+      <span class="hit-title">${h.pageId ? esc(h.title) : h.snippet}${h.pageNo ? ` <span class="hit-page">${h.pageNo}ページ目</span>` : ''}</span>
+      ${h.pageId ? `<span class="hit-snip">${h.snippet}</span>` : ''}
       <span class="hit-src">${h.source}</span>
     </a>`).join('');
 }
@@ -403,7 +474,7 @@ function coverColor(n) {
   if (n.cover) return n.cover;
   let h = 0;
   for (const ch of n.id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return COVERS[h % 6];
+  return COVERS[h % 6]; // 表紙を選べるようになる前のノートは、前と同じ6色から決める
 }
 
 const fmtDate = (t) => {
@@ -415,6 +486,7 @@ const fmtDate = (t) => {
 
 async function showLibrary() {
   closeEditor();
+  closePopover();
   $('#library').hidden = false;
   $('#editor').hidden = true;
   document.title = '大学ノート';
@@ -445,10 +517,30 @@ async function showLibrary() {
     card.querySelector('.label-title').textContent = n.title;
     card.querySelector('.name').textContent = n.title;
     card.querySelector('.date').textContent = fmtDate(upd.get(n.id));
-    card.querySelector('.name-btn').onclick = (e) => noteMenu(e.currentTarget, n);
+    const nb = card.querySelector('.name-btn');
+    nb.onclick = () => noteMenu(nb, n);
+    longPress(card.querySelector('.cover'), () => noteMenu(nb, n));
     grid.appendChild(card);
   }
   if ($('#search').value.trim()) runSearch();
+}
+
+// 長押し(指・ペン)と右クリックでメニューを出す。長押しのあとの「開く」は止める
+function longPress(el, fn) {
+  let timer = 0, start = null, fired = false;
+  el.addEventListener('pointerdown', (e) => {
+    fired = false;
+    if (e.pointerType === 'mouse') return;
+    start = [e.clientX, e.clientY];
+    timer = setTimeout(() => { fired = true; navigator.vibrate?.(10); fn(); }, 480);
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (start && Math.hypot(e.clientX - start[0], e.clientY - start[1]) > 10) { clearTimeout(timer); start = null; }
+  });
+  for (const t of ['pointerup', 'pointercancel', 'pointerleave']) el.addEventListener(t, () => { clearTimeout(timer); start = null; });
+  // 先に登録しておけば、長押しのあとの click を後の onclick より先に止められる
+  el.addEventListener('click', (e) => { if (fired) { e.preventDefault(); e.stopImmediatePropagation(); fired = false; } });
+  el.addEventListener('contextmenu', (e) => { e.preventDefault(); if (!fired) fn(); });
 }
 
 function noteMenu(anchor, n) {
@@ -463,7 +555,7 @@ function noteMenu(anchor, n) {
   });
   openPopover(anchor, (body, close) => menu(body, [
     { icon: 'rename', label: '名前を変更', attrs: { 'data-act': 'rename' }, onClick: async () => {
-      const title = prompt('新しい名前', n.title);
+      const title = await askName('名前を変更', n.title);
       if (!title || title === n.title) return;
       await db.putOps([S.rec.make(n.id, 'note.rename', { title })], S.rec.clock);
       dav.schedule();
@@ -477,19 +569,38 @@ function noteMenu(anchor, n) {
     { el: covers },
     '-',
     { icon: 'trash', label: '削除', danger: true, attrs: { 'data-act': 'delete' }, onClick: async () => {
-      if (!confirm(`「${n.title}」を削除しますか?`)) return;
       await db.putOps([S.rec.make(n.id, 'note.delete', {})], S.rec.clock);
       dav.schedule();
       showLibrary();
-      toast('削除しました');
+      toast(`「${n.title}」を削除しました`, 6000, { label: '元に戻す', run: async () => {
+        await db.putOps([S.rec.make(n.id, 'note.restore', {})], S.rec.clock);
+        dav.schedule();
+        showLibrary();
+      } });
     } },
   ], close), { align: 'start' });
 }
 
 // ---------- エディタのツールバー ----------
+const ERASER_SIZES = [5, 10, 22]; // 画面上の半径(px)
 const inkTool = () => (S.tool === 'marker' ? 'marker' : 'pen');
 const toolState = () => S[inkTool()];
-let toolbarKey = '';
+
+// ツールバーのボタンは最初に作って使い回す(作り直すと、開いているポップオーバーの位置がずれるため)
+function buildToolbar() {
+  const sw = $('#colors'), ws = $('#widths');
+  for (let i = 0; i < 3; i++) {
+    const c = document.createElement('button');
+    c.className = 'swatch';
+    c.onclick = () => onColorSlot(c, i);
+    sw.appendChild(c);
+    const w = document.createElement('button');
+    w.className = 'width';
+    w.innerHTML = '<span></span>';
+    w.onclick = () => onWidthSlot(w, i);
+    ws.appendChild(w);
+  }
+}
 
 function refreshToolbar() {
   for (const t of ['pen', 'marker', 'eraser', 'lasso']) {
@@ -499,65 +610,92 @@ function refreshToolbar() {
   }
   $('#tool-pen').style.setProperty('--tc', S.pen.color);
   $('#tool-marker').style.setProperty('--tc', S.marker.color);
-  $('#shapes').classList.toggle('on', S.shapes);
-  $('#shapes').setAttribute('aria-pressed', S.shapes);
+  const sh = $('#shapes');
+  sh.classList.toggle('on', S.shapes);
+  sh.setAttribute('aria-pressed', S.shapes);
+  sh.classList.toggle('dim', S.tool !== 'pen' && S.tool !== 'marker');
   $('#undo').disabled = !S.undo.length;
   $('#redo').disabled = !S.redo.length;
   $('#pages-btn').classList.toggle('on', S.sidebar);
-  // 消しゴムでは色と太さを出さない。投げ縄では選んだ線の色を変えるのに色だけ出す
-  const showColors = S.tool !== 'eraser';
-  const showWidths = S.tool === 'pen' || S.tool === 'marker';
+  const eraser = S.tool === 'eraser', lasso = S.tool === 'lasso';
   const k = inkTool(), st = toolState(), sl = S.slots[k];
-  const key = JSON.stringify([S.tool, st, sl]);
-  if (key === toolbarKey) return;
-  toolbarKey = key;
-  $('#colors').hidden = !showColors;
-  $('#colors').previousElementSibling.hidden = !showColors;
-  $('#widths').hidden = !showWidths;
-  $('#sep-widths').hidden = !showWidths;
-  const sw = $('#colors');
-  sw.innerHTML = '';
-  sl.colors.forEach((c, i) => {
-    const b = document.createElement('button');
-    const on = S.tool !== 'lasso' && c === st.color;
-    b.className = 'swatch' + (on ? ' on' : '');
+  // 色: 消しゴムでは出さない(場所は残して、道具のボタンが横に動かないようにする)。
+  // 投げ縄では、選んだ線の色を変えるのに使う(選んでいないときは押せない)
+  $('#colors').classList.toggle('invisible', eraser);
+  $('#sep-widths').classList.toggle('invisible', lasso);
+  $('#widths').classList.toggle('invisible', lasso);
+  [...$('#colors').children].forEach((b, i) => {
+    const c = sl.colors[i], on = !lasso && i === st.ci;
     b.style.setProperty('--c', c);
-    b.title = on ? '色を変える' : '色';
-    b.setAttribute('aria-label', on ? '色(もう一度押すと変更)' : '色');
+    b.classList.toggle('on', on);
+    b.disabled = lasso && !S.sel;
+    b.title = lasso ? '選んだ線をこの色にする' : on ? '色を変える' : '色';
+    b.setAttribute('aria-label', (lasso ? '選んだ線の色: ' : on ? '色(もう一度押すと変更): ' : '色: ') + colorName(c));
     b.setAttribute('aria-pressed', on);
-    b.onclick = () => {
-      if (S.sel && S.tool === 'lasso') return recolorSelection(c);
-      if (on) return colorPopover(b, k, i);
-      closePopover();
-      S[k].color = c;
-      savePrefs();
-      refreshToolbar();
-    };
-    sw.appendChild(b);
   });
-  const ws = $('#widths');
-  ws.innerHTML = '';
-  const [lo, hi] = WIDTH_RANGE[k];
-  sl.widths.forEach((w, i) => {
-    const b = document.createElement('button');
-    const on = w === st.width;
-    b.className = 'width' + (on ? ' on' : '');
-    b.title = on ? '太さを変える' : '太さ';
-    b.setAttribute('aria-label', on ? '太さ(もう一度押すと変更)' : '太さ');
+  [...$('#widths').children].forEach((b, i) => {
+    let px, on, label;
+    if (eraser) {
+      on = i === S.eraser.si;
+      px = [6, 11, 18][i];
+      label = ['小さい消しゴム', '中くらいの消しゴム', '大きい消しゴム'][i];
+      b.style.setProperty('--wc', 'transparent');
+      b.classList.add('ring');
+    } else {
+      const [lo, hi] = WIDTH_RANGE[k], w = sl.widths[i];
+      on = i === st.wi;
+      // 見た目の太さは 4〜16px に収める
+      px = 4 + Math.round(((w - lo) / (hi - lo)) * 12);
+      label = `太さ ${w}pt`;
+      b.style.setProperty('--wc', k === 'marker' ? st.color + '99' : st.color);
+      b.classList.remove('ring');
+    }
+    b.classList.toggle('on', on);
+    b.firstChild.style.width = b.firstChild.style.height = px + 'px';
+    b.title = on && !eraser ? '太さを変える' : label;
+    b.setAttribute('aria-label', on && !eraser ? label + '(もう一度押すと変更)' : label);
     b.setAttribute('aria-pressed', on);
-    // 見た目の太さは 2〜14px に収める
-    const px = 2 + Math.round(((w - lo) / (hi - lo)) * 12);
-    b.innerHTML = `<span style="height:${px}px;width:${px}px"></span>`;
-    b.onclick = () => {
-      if (on) return widthPopover(b, k, i);
-      closePopover();
-      S[k].width = w;
-      savePrefs();
-      refreshToolbar();
-    };
-    ws.appendChild(b);
   });
 }
+
+function onColorSlot(b, i) {
+  const k = inkTool();
+  if (S.tool === 'lasso') {
+    if (S.sel) recolorSelection(S.slots.pen.colors[i]);
+    return;
+  }
+  if (S.tool === 'eraser') return;
+  if (S[k].ci === i) return colorPopover(b, k, i);
+  closePopover();
+  S[k].ci = i;
+  S[k].color = S.slots[k].colors[i];
+  savePrefs();
+  refreshToolbar();
+}
+
+function onWidthSlot(b, i) {
+  if (S.tool === 'eraser') {
+    S.eraser.si = i;
+    savePrefs();
+    return refreshToolbar();
+  }
+  const k = inkTool();
+  if (S[k].wi === i) return widthPopover(b, k, i);
+  closePopover();
+  S[k].wi = i;
+  S[k].width = S.slots[k].widths[i];
+  savePrefs();
+  refreshToolbar();
+}
+
+const COLOR_NAMES = {
+  '#000000': '黒', '#1f2937': '墨', '#4b5563': '濃い灰', '#9ca3af': '灰', '#ffffff': '白', '#1e3a8a': '紺', '#2563eb': '青',
+  '#0ea5e9': '水色', '#0d9488': '青緑', '#16a34a': '緑', '#65a30d': '黄緑', '#ca8a04': '黄土', '#f59e0b': '山吹', '#ea580c': '橙',
+  '#dc2626': '赤', '#be185d': '臙脂', '#db2777': '桃', '#9333ea': '紫', '#6d28d9': '菫', '#78350f': '茶',
+  '#fde047': '黄', '#fef08a': '薄い黄', '#fdba74': '橙', '#fca5a5': '赤', '#f9a8d4': '桃', '#d8b4fe': '藤', '#a5b4fc': '青紫',
+  '#93c5fd': '空色', '#67e8f9': '水色', '#86efac': '緑', '#bef264': '黄緑', '#d1d5db': '灰',
+};
+const colorName = (c) => COLOR_NAMES[c] || c;
 
 function colorPopover(anchor, k, i) {
   openPopover(anchor, (body, close) => {
@@ -567,7 +705,9 @@ function colorPopover(anchor, k, i) {
     grid.className = 'pal-grid';
     const pick = (c) => {
       S.slots[k].colors[i] = c;
+      S[k].ci = i;
       S[k].color = c;
+      for (const x of grid.children) x.classList.toggle('on', x.dataset.c === c);
       savePrefs();
       refreshToolbar();
     };
@@ -575,8 +715,10 @@ function colorPopover(anchor, k, i) {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'pal-c' + (c === S[k].color ? ' on' : '');
+      b.dataset.c = c;
       b.style.setProperty('--c', c);
-      b.setAttribute('aria-label', c);
+      b.title = colorName(c);
+      b.setAttribute('aria-label', colorName(c));
       b.onclick = () => { pick(c); close(); };
       grid.appendChild(b);
     }
@@ -605,26 +747,38 @@ function widthPopover(anchor, k, i) {
     };
     show();
     r.oninput = () => {
-      const w = Math.round(+r.value / step) * step;
-      const v = Math.round(w * 10) / 10;
+      const v = Math.round(Math.round(+r.value / step) * step * 10) / 10;
       S.slots[k].widths[i] = v;
+      S[k].wi = i;
       S[k].width = v;
       show();
+      refreshToolbar();
     };
-    r.onchange = () => { savePrefs(); refreshToolbar(); };
-  }, { onClose: () => { savePrefs(); refreshToolbar(); } });
+    r.onchange = () => savePrefs();
+  }, { onClose: savePrefs });
+}
+
+function eraserPopover(anchor) {
+  openPopover(anchor, (body, close) => menu(body, [
+    { label: '蛍光ペンだけ消す', id: 'eraser-marker-only', on: S.eraser.markerOnly, onClick: () => {
+      S.eraser.markerOnly = !S.eraser.markerOnly;
+      savePrefs();
+      toast(S.eraser.markerOnly ? '蛍光ペンの線だけを消します' : 'すべての線を消します');
+    } },
+  ], close));
 }
 
 function setTool(t) {
   if (t !== 'lasso') clearSelection();
-  // 選んでいるペンをもう一度押すと色を変えられる
-  if (S.tool === t && (t === 'pen' || t === 'marker')) {
-    const sl = S.slots[t], i = sl.colors.indexOf(S[t].color);
-    colorPopover($('#tool-' + t), t, i < 0 ? 0 : i);
+  // 選んでいる道具をもう一度押すと、その道具の設定を出す
+  if (S.tool === t) {
+    if (t === 'pen' || t === 'marker') colorPopover($('#tool-' + t), t, Math.max(0, S[t].ci));
+    else if (t === 'eraser') eraserPopover($('#tool-eraser'));
     return;
   }
   closePopover();
   S.tool = t;
+  savePrefs();
   refreshToolbar();
 }
 
@@ -667,7 +821,7 @@ async function exportCurrentPdf() {
 }
 
 async function renameNote() {
-  const title = prompt('ノートの名前', S.note.title);
+  const title = await askName('ノートの名前', S.note.title);
   if (!title || title === S.note.title) return;
   await commit([mk('note.rename', { title })]);
   $('#title').textContent = S.note.title;
@@ -688,12 +842,14 @@ function bindEditor() {
   $('#more-btn').onclick = (e) => moreMenu(e.currentTarget);
   $('#pages-btn').onclick = () => toggleSidebar();
   $('#pages-close').onclick = () => toggleSidebar(false);
+  $('#sb-scrim').onclick = () => toggleSidebar(false);
+  $('#page-ind').onclick = (e) => gotoPagePopover(e.currentTarget);
   $('#sb-add').onclick = () => openAddDialog();
   $('#pdf-add-input').onchange = addPdfPages;
   $('#title').onclick = renameNote;
   bindAddDialog();
   document.addEventListener('keydown', (e) => {
-    if ($('#editor').hidden || e.target.closest('input, select, textarea, dialog')) return;
+    if ($('#editor').hidden || e.repeat || e.target.closest('input, select, textarea, dialog')) return;
     const mod = e.ctrlKey || e.metaKey;
     const k = e.key.toLowerCase();
     if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
@@ -711,7 +867,10 @@ function bindEditor() {
   });
   bindInput();
   $('#scroller').addEventListener('scroll', onScroll, { passive: true });
-  window.addEventListener('resize', () => { if (S.note) layoutPages(); });
+  window.addEventListener('resize', () => {
+    if (!S.note) return;
+    keepPosition(() => { if (S.fit) S.zoom = fitZoom(); layoutPages(); });
+  });
 }
 
 async function openNote(id, pageId) {
@@ -730,7 +889,9 @@ async function openNote(id, pageId) {
     document.title = note.title + ' - 大学ノート';
     setSaved(true);
     $('#sidebar').hidden = !S.sidebar;
+    $('#sb-scrim').hidden = !S.sidebar;
     S.zoom = fitZoom();
+    S.fit = true;
     renderPages();
     $('#scroller').scrollTop = 0;
     refreshToolbar();
@@ -795,7 +956,9 @@ function renderPages() {
   add.className = 'add-tile';
   add.id = 'add-tile';
   add.innerHTML = `${icon('plus', 22)}<span>ページを追加</span>`;
-  add.onclick = () => openAddDialog('last');
+  add.title = '最後のページと同じ用紙で追加(長押し・右クリックで用紙を選ぶ)';
+  longPress(add, () => openAddDialog('last', pagesOf(S.note).at(-1)));
+  add.onclick = () => addPage('last', undefined, undefined, pagesOf(S.note).at(-1));
   wrap.appendChild(add);
   sizeAddTile();
   renderSidebar();
@@ -832,9 +995,29 @@ function setZoom(z, focus) {
   const fy = focus ? focus.y : sc.clientHeight / 2;
   const cx = (sc.scrollLeft + fx) / S.zoom, cy = (sc.scrollTop + fy) / S.zoom;
   S.zoom = z;
+  S.fit = Math.abs(z - fitZoom()) < 0.005;
   layoutPages();
   sc.scrollLeft = cx * z - fx;
   sc.scrollTop = cy * z - fy;
+}
+
+// 表示を作り直しても、今見ているページの同じ場所(ページの何割目か)に戻す
+function keepPosition(fn) {
+  const sc = $('#scroller');
+  const pg = currentPage();
+  let frac = 0, fx = 0;
+  const v = pg && S.views.get(pg.id);
+  if (v) {
+    const r = v.el.getBoundingClientRect(), sr = sc.getBoundingClientRect();
+    frac = (sr.top - r.top) / r.height;
+    fx = sc.scrollWidth > sc.clientWidth ? sc.scrollLeft / (sc.scrollWidth - sc.clientWidth) : 0;
+  }
+  fn();
+  const nv = pg && S.views.get(pg.id);
+  if (!nv) return;
+  const r = nv.el.getBoundingClientRect(), sr = sc.getBoundingClientRect();
+  sc.scrollTop += r.top - sr.top + frac * r.height;
+  sc.scrollLeft = fx * Math.max(0, sc.scrollWidth - sc.clientWidth);
 }
 
 function onIntersect(entries) {
@@ -890,7 +1073,7 @@ function paintBg(v) {
   }
 }
 
-function templateSvg(bg, w, h) {
+function templateSvg(bg, w, h, minW = 0) {
   const prim = templatePrims(bg, w, h);
   const groups = new Map();
   for (const [x0, y0, x1, y1, t, c] of prim.lines) {
@@ -900,21 +1083,21 @@ function templateSvg(bg, w, h) {
   let out = '';
   for (const [k, d] of groups) {
     const [t, c] = k.split('|');
-    out += `<path d="${d}" stroke="${c}" stroke-width="${t}" fill="none"/>`;
+    out += `<path d="${d}" stroke="${c}" stroke-width="${Math.max(+t, minW)}" fill="none"/>`;
   }
   if (prim.dots.length) {
     const [, , r, c] = prim.dots[0];
-    out += `<path d="${prim.dots.map(([x, y]) => `M${x.toFixed(2)} ${y.toFixed(2)}h0`).join('')}" stroke="${c}" stroke-width="${r * 2}" stroke-linecap="round" fill="none"/>`;
+    out += `<path d="${prim.dots.map(([x, y]) => `M${x.toFixed(2)} ${y.toFixed(2)}h0`).join('')}" stroke="${c}" stroke-width="${Math.max(r * 2, minW * 1.6)}" stroke-linecap="round" fill="none"/>`;
   }
   return out;
 }
 
 // サムネイル用(キャンバス)
-function paintTemplate(ctx, bg, w, h) {
+function paintTemplate(ctx, bg, w, h, minW = 0) {
   const prim = templatePrims(bg, w, h);
   for (const [x0, y0, x1, y1, t, c] of prim.lines) {
     ctx.strokeStyle = c;
-    ctx.lineWidth = t;
+    ctx.lineWidth = Math.max(t, minW);
     ctx.beginPath();
     ctx.moveTo(x0, y0);
     ctx.lineTo(x1, y1);
@@ -1232,9 +1415,10 @@ function addPoint(e) {
 function eraseAt(e) {
   const a = active;
   const [x, y] = pagePoint(a.v, e);
-  const r = 9 / S.zoom;
+  const r = ERASER_SIZES[S.eraser.si ?? 1] / S.zoom;
   let changed = false;
   for (const st of strokesOf(S.note, a.v.pg.id, a.hits)) {
+    if (S.eraser.markerOnly && st.data.tool !== 'marker') continue;
     if (strokeHit(st, x, y, r)) { a.hits.add(st.id); changed = true; }
   }
   if (changed) paintInk(a.v, a.hits);
@@ -1260,6 +1444,7 @@ async function onUp(e) {
     const ids = new Set(strokesOf(S.note, a.v.pg.id).filter((st) => strokeInLasso(st, a.poly)).map((st) => st.id));
     if (ids.size) {
       S.sel = { pageId: a.v.pg.id, ids };
+      refreshToolbar();
       drawSelection();
     }
     return;
@@ -1343,8 +1528,10 @@ function drawSelection(dx = 0, dy = 0) {
 }
 
 function clearSelection() {
+  const had = !!S.sel;
   S.sel = null;
   document.querySelectorAll('.sel-box').forEach((el) => el.remove());
+  if (had) refreshToolbar();
 }
 
 async function deleteSelection() {
@@ -1371,6 +1558,7 @@ async function duplicateSelection() {
   pushUndo({ undo: [['stroke.del', { ids: [...ids] }]], redo: [['stroke.undel', { ids: [...ids] }]], pages: [pid] });
   await commit(ops);
   S.sel = { pageId: pid, ids };
+  refreshToolbar();
   const v = S.views.get(pid);
   if (v) paintInk(v);
   drawSelection();
@@ -1395,7 +1583,10 @@ function gestureDown(e) {
   const sc = $('#scroller');
   try { sc.setPointerCapture(e.pointerId); } catch {}
   stopInertia();
-  touches.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now(), vx: 0, vy: 0 });
+  // 2本指・3本指で軽くたたくと、元に戻す・やり直す
+  if (!touches.size) fingerTap = { t: performance.now(), n: 0, moved: false };
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t: performance.now(), vx: 0, vy: 0 });
+  if (fingerTap) fingerTap.n = Math.max(fingerTap.n, touches.size);
   if (touches.size === 2) {
     const [a, b] = [...touches.values()];
     const r = sc.getBoundingClientRect();
@@ -1404,8 +1595,10 @@ function gestureDown(e) {
     pages.style.transformOrigin = `${sc.scrollLeft + pinch.fx - pages.offsetLeft}px ${sc.scrollTop + pinch.fy - pages.offsetTop}px`;
   }
 }
+let fingerTap = null;
 function gestureMove(e) {
   const t = touches.get(e.pointerId);
+  if (fingerTap && Math.hypot(e.clientX - t.x0, e.clientY - t.y0) > 12) fingerTap.moved = true;
   const sc = $('#scroller');
   const now = performance.now();
   const dx = e.clientX - t.x, dy = e.clientY - t.y;
@@ -1426,6 +1619,19 @@ function gestureMove(e) {
 function gestureUp(e) {
   const t = touches.get(e.pointerId);
   touches.delete(e.pointerId);
+  // 複数の指が動かずにすぐ離れたら「たたいた」とみなす(最初の指が離れた時点で決める)
+  if (fingerTap && fingerTap.n >= 2) {
+    const ft = fingerTap;
+    fingerTap = null;
+    if (e.type === 'pointerup' && !ft.moved && performance.now() - ft.t < 320) {
+      touches.clear();
+      pinch = null;
+      $('#pages').style.transform = '';
+      if (ft.n === 2) undo(); else redo();
+      return;
+    }
+  }
+  if (!touches.size) fingerTap = null;
   if (pinch) {
     if (touches.size < 2) {
       const p = pinch;
@@ -1467,7 +1673,8 @@ function pushUndo(entry) {
 }
 async function runEntry(list, entry) {
   await commit(list.map(([t, p]) => mk(t, p)));
-  if (entry.relayout) renderPages();
+  if (entry.relayout) keepPosition(() => renderPages());
+  else if (entry.bg) for (const id of entry.pages || []) repaintPage(id);
   else for (const id of entry.pages || []) { const v = S.views.get(id); if (v) paintInk(v); }
   if (S.sel) drawSelection();
   refreshToolbar();
@@ -1506,19 +1713,14 @@ async function addPage(where = 'after', tpl, sizeId, ref = currentPage()) {
   ref = ref || pages[pages.length - 1];
   const i = pages.indexOf(ref);
   let order;
-  if (where === 'before') {
-    const prev = pages[i - 1];
-    order = prev ? (prev.order + ref.order) / 2 : ref.order - 1;
-  } else if (where === 'last' || i === pages.length - 1) {
-    order = pages.length ? pages[pages.length - 1].order + 1 : 1;
-  } else {
-    order = (ref.order + pages[i + 1].order) / 2;
-  }
+  if (where === 'before') order = await freeOrder(pages[i - 1], ref);
+  else if (where === 'last' || i === pages.length - 1) order = pages.length ? pages[pages.length - 1].order + 1 : 1;
+  else order = await freeOrder(ref, pages[i + 1]);
   const cbg = ref && bgOf(ref);
   const ruling = tpl || (cbg && cbg.type === 'blank' ? cbg.ruling : 'lines-b');
   let w = PAGE_A4.w, h = PAGE_A4.h;
   if (sizeId) ({ w, h } = sizeById(sizeId));
-  else if (ref && cbg?.type === 'blank') ({ w, h } = ref);
+  else if (ref) ({ w, h } = ref); // PDF のページの後ろでも同じ大きさにする
   const id = newId();
   await commit([mk('page.add', { page: { id, w, h, order, bg: { type: 'blank', ruling } } })]);
   pushUndo({ undo: [['page.delete', { pageId: id }]], redo: [['page.restore', { pageId: id }]], relayout: true });
@@ -1531,12 +1733,12 @@ async function addPage(where = 'after', tpl, sizeId, ref = currentPage()) {
 
 async function deletePage(id) {
   if (pagesOf(S.note).length <= 1) return toast('最後の1ページは削除できません');
-  if (!confirm('このページを削除しますか?(「元に戻す」で復元できます)')) return;
+  const no = pagesOf(S.note).findIndex((p) => p.id === id) + 1;
   await commit([mk('page.delete', { pageId: id })]);
-  pushUndo({ undo: [['page.restore', { pageId: id }]], redo: [['page.delete', { pageId: id }]], relayout: true });
-  const top = $('#scroller').scrollTop;
-  renderPages();
-  $('#scroller').scrollTop = top;
+  const entry = { undo: [['page.restore', { pageId: id }]], redo: [['page.delete', { pageId: id }]], relayout: true };
+  pushUndo(entry);
+  keepPosition(() => renderPages());
+  toast(`${no}ページ目を削除しました`, 6000, { label: '元に戻す', run: () => { if (S.undo[S.undo.length - 1] === entry) undo(); } });
 }
 
 // ---------- ページを追加(テンプレートを絵で選ぶ) ----------
@@ -1545,10 +1747,17 @@ function openAddDialog(where = 'after', ref = currentPage()) {
   closePopover();
   addRef = ref;
   for (const r of document.querySelectorAll('input[name=pp-where]')) r.checked = r.value === where;
+  // 基準のページが今見ているページと違うときは、何ページ目かを書く
+  const cur = currentPage();
+  const no = ref ? pagesOf(S.note).indexOf(ref) + 1 : 0;
+  const lbl = ref && cur && ref.id !== cur.id ? `${no}ページ目` : '今のページ';
+  $('#pp-after-label').textContent = lbl + 'の後ろ';
+  $('#pp-before-label').textContent = lbl + 'の前';
+  $('#pp-size').options[0].textContent = lbl + 'と同じ';
   const bg = ref && bgOf(ref);
-  setPick($('#pp-tpl'), bg?.type === 'blank' ? (bg.ruling === 'lines' ? 'lines-b' : bg.ruling) : 'lines-b');
   $('#pp-size').value = '';
-  $('#add-dialog').showModal();
+  tplPicker($('#pp-tpl'), bg?.type === 'blank' ? (bg.ruling === 'lines' ? 'lines-b' : bg.ruling) : 'lines-b', ref || PAGE_A4);
+  showDialog($('#add-dialog'));
 }
 function bindAddDialog() {
   $('#pp-cancel').onclick = () => $('#add-dialog').close();
@@ -1579,7 +1788,7 @@ function onScroll() {
     if (pg && pg.id !== curPageId) {
       curPageId = pg.id;
       for (const [id, t] of S.thumbs || []) t.classList.toggle('current', id === pg.id);
-      if (S.sidebar) S.thumbs?.get(pg.id)?.scrollIntoView({ block: 'nearest' });
+      if (S.sidebar) thumbIntoView(pg.id);
     }
   });
 }
@@ -1608,40 +1817,156 @@ async function addPdfPages(e) {
 function toggleSidebar(on = !S.sidebar) {
   S.sidebar = on;
   savePrefs();
-  const keep = currentPage();
-  $('#sidebar').hidden = !on;
   refreshToolbar();
-  if (!S.note) return;
+  $('#sb-scrim').hidden = !on;
+  if (!S.note) { $('#sidebar').hidden = !on; return; }
+  // 幅が変わるので、幅に合わせた表示ならページの大きさも合わせ直し、見ていた場所に戻す
+  keepPosition(() => {
+    $('#sidebar').hidden = !on;
+    if (S.fit) S.zoom = fitZoom();
+    layoutPages();
+  });
   if (on) renderSidebar();
-  // 幅が変わるので、今のページが見える位置に戻す
-  requestAnimationFrame(() => { layoutPages(); keep && S.views.get(keep.id)?.el.scrollIntoView({ block: 'start' }); });
 }
 
 function renderSidebar() {
   S.thumbs = new Map();
+  S.thumbIO?.disconnect();
   const list = $('#pp-list');
   list.innerHTML = '';
   if (!S.sidebar || !S.note) return;
   const pages = pagesOf(S.note);
   const cur = currentPage();
+  curPageId = cur?.id;
+  // サムネイルは見えているものだけ描く(ページが多いノート・PDF でも重くならないように)
+  S.thumbIO = new IntersectionObserver((entries) => {
+    for (const en of entries) {
+      if (!en.isIntersecting || en.target.dataset.drawn) continue;
+      const pg = S.note && pagesOf(S.note).find((x) => x.id === en.target.dataset.id);
+      if (pg) { en.target.dataset.drawn = '1'; drawThumb(en.target.querySelector('canvas'), pg); }
+    }
+  }, { root: list, rootMargin: '400px 0px' });
   pages.forEach((pg, i) => {
     const row = document.createElement('div');
     row.className = 'pp-row' + (cur && cur.id === pg.id ? ' current' : '');
     row.dataset.id = pg.id;
-    row.innerHTML = `<button class="pp-go" title="${i + 1}ページ目を表示"><canvas class="pp-thumb"></canvas></button>
+    row.innerHTML = `<button class="pp-go" title="${i + 1}ページ目を表示(長押しで並べ替え)"><canvas class="pp-thumb" width="240" height="${Math.round((240 * pg.h) / pg.w)}"></canvas></button>
       <div class="pp-info"><span class="pp-no">${i + 1}</span><button class="pp-menu icon-btn small" aria-haspopup="menu" title="ページの操作" aria-label="${i + 1}ページ目の操作">${icon('chevron', 16)}</button></div>`;
     list.appendChild(row);
     S.thumbs.set(pg.id, row);
-    drawThumb(row.querySelector('canvas'), pg);
-    row.querySelector('.pp-go').onclick = () => {
+    S.thumbIO.observe(row);
+    const go = row.querySelector('.pp-go');
+    go.onclick = (e) => {
+      if (go._dragged) { go._dragged = false; e.preventDefault(); return; }
       S.views.get(pg.id)?.el.scrollIntoView({ block: 'start' });
       if (window.innerWidth <= 700) toggleSidebar(false);
     };
-    row.querySelector('.pp-menu').onclick = (e) => pageMenu(e.currentTarget, pg, i, pages);
+    bindThumbDrag(row, pg);
+    const mb = row.querySelector('.pp-menu');
+    mb.onclick = () => pageMenu(mb, pg);
+    go.addEventListener('contextmenu', (e) => { e.preventDefault(); pageMenu(mb, pg); });
   });
+  if (cur) thumbIntoView(cur.id, true);
 }
 
-function pageMenu(anchor, pg, i, pages) {
+// サイドバーの中だけをスクロールして、そのページのサムネイルを見せる
+function thumbIntoView(id, center) {
+  const list = $('#pp-list'), row = S.thumbs?.get(id);
+  if (!row) return;
+  const top = row.offsetTop, h = row.offsetHeight;
+  if (center) list.scrollTop = top - (list.clientHeight - h) / 2;
+  else if (top < list.scrollTop) list.scrollTop = top - 8;
+  else if (top + h > list.scrollTop + list.clientHeight) list.scrollTop = top + h - list.clientHeight + 8;
+}
+
+// サムネイルを長押し(マウスはそのまま引っぱる)して、ページを並べ替える
+let thumbDrag = null;
+function bindThumbDrag(row, pg) {
+  const go = row.querySelector('.pp-go');
+  let st = null;
+  const cancel = () => { if (st) clearTimeout(st.timer); st = null; };
+  go.addEventListener('pointerdown', (e) => {
+    if (e.button > 0 || thumbDrag) return;
+    st = { id: e.pointerId, x: e.clientX, y: e.clientY, type: e.pointerType, timer: 0 };
+    if (e.pointerType !== 'mouse') st.timer = setTimeout(() => startThumbDrag(e, row, pg, go), 380);
+  });
+  go.addEventListener('pointermove', (e) => {
+    if (thumbDrag && thumbDrag.row === row) return moveThumbDrag(e);
+    if (!st || e.pointerId !== st.id) return;
+    const d = Math.hypot(e.clientX - st.x, e.clientY - st.y);
+    if (st.type === 'mouse' && d > 6) { const s0 = st; cancel(); startThumbDrag({ ...s0, clientX: e.clientX, clientY: e.clientY, pointerId: s0.id }, row, pg, go); }
+    else if (st.type !== 'mouse' && d > 10) cancel(); // 一覧のスクロール
+  });
+  const up = (e) => {
+    cancel();
+    if (thumbDrag && thumbDrag.row === row) endThumbDrag(e.type === 'pointercancel');
+  };
+  go.addEventListener('pointerup', up);
+  go.addEventListener('pointercancel', up);
+}
+function startThumbDrag(e, row, pg, go) {
+  closePopover();
+  try { go.setPointerCapture(e.pointerId); } catch {}
+  navigator.vibrate?.(10);
+  const list = $('#pp-list');
+  const line = document.createElement('div');
+  line.className = 'pp-drop';
+  list.appendChild(line);
+  row.classList.add('dragging');
+  go._dragged = true;
+  thumbDrag = { row, pg, line, y0: e.clientY, to: -1, scroll: 0 };
+  moveThumbDrag(e);
+}
+function moveThumbDrag(e) {
+  const d = thumbDrag, list = $('#pp-list');
+  d.lastY = e.clientY;
+  d.row.style.transform = `translateY(${e.clientY - d.y0}px)`;
+  const rows = [...list.querySelectorAll('.pp-row')];
+  let to = rows.length;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i].getBoundingClientRect();
+    if (rows[i] === d.row) continue;
+    if (e.clientY < r.top + r.height / 2) { to = i; break; }
+  }
+  d.to = to;
+  const ref = rows[to], last = rows[rows.length - 1];
+  d.line.style.top = (ref ? ref.offsetTop - 8 : last.offsetTop + last.offsetHeight + 6) + 'px';
+  // 端に近づいたら一覧を自動でスクロール
+  const lr = list.getBoundingClientRect();
+  const v = e.clientY < lr.top + 40 ? -8 : e.clientY > lr.bottom - 40 ? 8 : 0;
+  if (v && !d.scroll) {
+    const step = () => {
+      if (!thumbDrag || !thumbDrag.scrollV) { if (thumbDrag) thumbDrag.scroll = 0; return; }
+      list.scrollTop += thumbDrag.scrollV;
+      thumbDrag.y0 -= thumbDrag.scrollV;
+      thumbDrag.row.style.transform = `translateY(${thumbDrag.lastY - thumbDrag.y0}px)`;
+      thumbDrag.scroll = requestAnimationFrame(step);
+    };
+    d.scroll = requestAnimationFrame(step);
+  }
+  d.scrollV = v;
+}
+async function endThumbDrag(cancelled) {
+  const d = thumbDrag;
+  thumbDrag = null;
+  cancelAnimationFrame(d.scroll);
+  d.line.remove();
+  d.row.classList.remove('dragging');
+  d.row.style.transform = '';
+  if (cancelled || d.to < 0) return;
+  const pages = pagesOf(S.note);
+  const i = pages.indexOf(d.pg);
+  // 行の並び(自分を含む)で to の前に入れる → 自分を除いた並びでの前後
+  if (d.to === i || d.to === i + 1) return;
+  const rest = pages.filter((p) => p !== d.pg);
+  const at = d.to > i ? d.to - 1 : d.to;
+  await movePage(d.pg, rest[at - 1], rest[at]);
+}
+document.addEventListener('touchmove', (e) => { if (thumbDrag) e.preventDefault(); }, { passive: false });
+
+function pageMenu(anchor, pg) {
+  const pages = pagesOf(S.note);
+  const i = pages.indexOf(pg);
   const bg = bgOf(pg);
   const items = [
     { icon: 'up', label: '前へ移動', attrs: { 'data-a': 'up' }, disabled: i === 0, onClick: () => movePage(pg, pages[i - 2], pages[i - 1]) },
@@ -1649,6 +1974,7 @@ function pageMenu(anchor, pg, i, pages) {
     '-',
     { icon: 'page', label: '前にページを追加…', onClick: () => openAddDialog('before', pg) },
     { icon: 'page', label: '後ろにページを追加…', onClick: () => openAddDialog('after', pg) },
+    { icon: 'file', label: 'このページを複製', attrs: { 'data-a': 'dup' }, onClick: () => duplicatePage(pg) },
   ];
   if (bg && bg.type === 'blank') {
     const sel = document.createElement('label');
@@ -1659,8 +1985,8 @@ function pageMenu(anchor, pg, i, pages) {
       const nb = { type: 'blank', ruling: e.target.value };
       closePopover();
       await commit([mk('page.bg', { pageId: pg.id, bg: nb })]);
-      pushUndo({ undo: [['page.bg', { pageId: pg.id, bg: before }]], redo: [['page.bg', { pageId: pg.id, bg: nb }]], relayout: true });
-      renderPages();
+      pushUndo({ undo: [['page.bg', { pageId: pg.id, bg: before }]], redo: [['page.bg', { pageId: pg.id, bg: nb }]], pages: [pg.id], bg: true });
+      repaintPage(pg.id);
     };
     items.push('-', { el: sel });
   }
@@ -1668,13 +1994,58 @@ function pageMenu(anchor, pg, i, pages) {
   openPopover(anchor, (body, close) => menu(body, items, close), { align: 'start' });
 }
 
+// 1ページだけ描き直す(背景・線・サムネイル)
+function repaintPage(id) {
+  const v = S.views.get(id);
+  if (v && v.ready) { paintBg(v); paintInk(v); }
+  const row = S.thumbs?.get(id), pg = pagesOf(S.note).find((x) => x.id === id);
+  if (row && pg && row.dataset.drawn) drawThumb(row.querySelector('canvas'), pg);
+}
+
+// ページを複製(背景と線をそのまま写す)
+async function duplicatePage(pg) {
+  const pages = pagesOf(S.note);
+  const i = pages.indexOf(pg);
+  const next = pages[i + 1];
+  const order = await freeOrder(pg, next);
+  const id = newId();
+  const ops = [mk('page.add', { page: { id, w: pg.w, h: pg.h, order, bg: bgOf(pg) } })];
+  const ids = [];
+  for (const e of strokesOf(S.note, pg.id)) {
+    const nid = newId();
+    ids.push(nid);
+    ops.push(mk('stroke.add', { s: { ...e.data, id: nid, pageId: id } }));
+    if (e.off[0] || e.off[1]) ops.push(mk('stroke.tf', { tf: { [nid]: e.off } }));
+    if (e.color) ops.push(mk('stroke.style', { styles: { [nid]: { color: e.color } } }));
+  }
+  await commit(ops);
+  pushUndo({ undo: [['page.delete', { pageId: id }]], redo: [['page.restore', { pageId: id }]], relayout: true });
+  keepPosition(() => renderPages());
+  S.views.get(id)?.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  toast(`${i + 1}ページ目を複製しました`);
+}
+
+// a と b の間に入れる順番の値。間が詰まりすぎていたら、全ページの順番を振り直してから決める
+async function freeOrder(a, b) {
+  const ok = () => !(a && b) || (b.order - a.order > 1e-6 && (a.order + b.order) / 2 > a.order && (a.order + b.order) / 2 < b.order);
+  if (!ok()) {
+    const ops = pagesOf(S.note).map((p, i) => mk('page.move', { pageId: p.id, order: i + 1 }));
+    await commit(ops);
+  }
+  return a && b ? (a.order + b.order) / 2 : a ? a.order + 1 : b ? b.order - 1 : 1;
+}
+
 // pg を a と b の間に動かす
 async function movePage(pg, a, b) {
-  const order = a && b ? (a.order + b.order) / 2 : a ? a.order + 1 : b ? b.order - 1 : 0;
   const before = pg.order;
+  const order = await freeOrder(a, b);
   await commit([mk('page.move', { pageId: pg.id, order })]);
   pushUndo({ undo: [['page.move', { pageId: pg.id, order: before }]], redo: [['page.move', { pageId: pg.id, order }]], relayout: true });
   renderPages();
+  // 動かしたページを表示する
+  S.views.get(pg.id)?.el.scrollIntoView({ block: 'start' });
+  const n = pagesOf(S.note).indexOf(pg) + 1;
+  toast(`${n}ページ目に移動しました`);
 }
 
 function drawThumb(canvas, pg) {
@@ -1685,13 +2056,37 @@ function drawThumb(canvas, pg) {
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   const bg = bgOf(pg);
+  const scale = canvas.width / pg.w;
   const draw = () => {
     const c2 = scaledCtx(canvas, pg);
-    if (bg?.type === 'blank') paintTemplate(c2, bg, pg.w, pg.h);
+    // 小さく描くと罫線が消えるので、画面で 0.8px 以上の太さにする
+    if (bg?.type === 'blank') paintTemplate(c2, bg, pg.w, pg.h, 1.6 / scale);
     for (const e of strokesOf(S.note, pg.id)) drawStroke(c2, styleOf(e), e.off, geoOf(e));
   };
-  if (bg?.type === 'pdf') renderPdfPage(canvas, bg.hash, bg.page).then(draw).catch(draw);
-  else draw();
+  if (bg?.type === 'pdf') {
+    // 前の描画が終わっていなければ止める
+    canvas._holder?.task?.cancel?.();
+    const holder = (canvas._holder = {});
+    renderPdfPage(canvas, bg.hash, bg.page, holder).then(() => { if (canvas._holder === holder) draw(); }).catch(() => { if (canvas._holder === holder) draw(); });
+  } else draw();
+}
+
+// 右下のページ表示を押すと、ページ番号を入れて移動できる
+function gotoPagePopover(anchor) {
+  const pages = pagesOf(S.note);
+  openPopover(anchor, (body, close) => {
+    body.classList.add('goto-pop');
+    body.innerHTML = `<form class="goto"><label><span class="menu-cap">ページへ移動(1〜${pages.length})</span><input type="number" min="1" max="${pages.length}" inputmode="numeric"></label><button type="submit" class="primary">移動</button></form>`;
+    const inp = body.querySelector('input');
+    inp.value = (currentPage() ? pages.indexOf(currentPage()) : 0) + 1;
+    body.querySelector('form').onsubmit = (e) => {
+      e.preventDefault();
+      const n = Math.max(1, Math.min(pages.length, Math.round(+inp.value || 1)));
+      close();
+      S.views.get(pages[n - 1].id)?.el.scrollIntoView({ block: 'start' });
+    };
+    setTimeout(() => { inp.focus(); inp.select(); });
+  }, { align: 'end' });
 }
 
 init().catch((e) => {

@@ -57,6 +57,8 @@ export async function putOps(ops, clock) {
     const r = store.add(op);
     r.onsuccess = () => { added++; };
     r.onerror = (e) => { e.preventDefault(); e.stopPropagation(); }; // 既にある
+    // 名前・表紙の変更では並び順(最終更新)を変えない。一覧で操作した直後にカードが入れ替わらないように
+    if (op.t === 'note.rename' || op.t === 'note.cover') continue;
     latest.set(op.n, Math.max(latest.get(op.n) || 0, op.ts || 0));
   }
   for (const [id, ts] of latest) {
