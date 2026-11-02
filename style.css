@@ -153,7 +153,19 @@ a.cover:active { transform: scale(.98); }
 #shapes { color: var(--muted); }
 #shapes.on { background: transparent; color: var(--accent); }
 #shapes.on::after { content: ''; position: absolute; right: 7px; top: 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--panel); }
-#shapes.dim { opacity: .35; }
+#shapes:disabled { opacity: .3; }
+/* 「蛍光ペンだけ消す」がオンのときは消しゴムに印を付ける */
+#tool-eraser.marker-only::after { content: ''; position: absolute; right: 6px; bottom: 5px; width: 9px; height: 9px; border-radius: 50%; background: #facc15; box-shadow: 0 0 0 2px var(--panel); }
+#colors .chip { display: none; }
+#colors.eraser-mode .swatch { display: none; }
+#colors.eraser-mode .chip {
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px; width: 108px; min-height: 34px; padding: 0 6px;
+  border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--muted); font-size: 13px; white-space: nowrap;
+}
+#colors.eraser-mode .chip.on { background: #fef9c3; border-color: #facc15; color: #854d0e; font-weight: 600; }
+.wp-slots { display: flex; gap: 6px; margin-bottom: 10px; }
+.wp-slot { flex: 1; min-height: 36px; border: none; border-radius: 8px; background: var(--field); font-size: 13px; font-variant-numeric: tabular-nums; }
+.wp-slot.on { background: var(--accent); color: #fff; }
 .swatch {
   width: 36px; min-width: 36px; height: 36px; min-height: 36px; padding: 0; border: none; background: transparent;
   display: flex; align-items: center; justify-content: center; border-radius: 50%;
@@ -200,9 +212,10 @@ a.cover:active { transform: scale(.98); }
   position: absolute; right: 16px; bottom: max(16px, env(safe-area-inset-bottom));
   background: rgba(31,41,55,.78); color: #fff; font-size: 13px; padding: 5px 11px; border-radius: 999px;
   min-height: 0; border: none;
-  pointer-events: none; opacity: 0; transition: opacity .3s ease; font-variant-numeric: tabular-nums;
+  opacity: .45; transition: opacity .3s ease; font-variant-numeric: tabular-nums;
 }
-.page-ind.show, .page-ind.open { opacity: 1; pointer-events: auto; }
+/* いつでも押せる(押すとページ番号で移動)。スクロール中だけはっきり見せる */
+.page-ind.show, .page-ind.open { opacity: 1; }
 .goto-pop { padding: 10px 12px; }
 .goto { display: flex; align-items: flex-end; gap: 8px; }
 .goto .menu-cap { padding: 0 0 6px; }
@@ -251,12 +264,14 @@ dialog .row { display: flex; gap: 8px; flex-wrap: wrap; }
   background: rgba(31,41,55,.92); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: 14px;
   max-width: calc(100% - 32px); z-index: 30;
 }
-#toast-act { min-height: 30px; border: none; background: transparent; color: #93c5fd; font-weight: 600; padding: 0 4px; }
+#toast-act { min-height: 44px; min-width: 44px; border: none; background: transparent; color: #93c5fd; font-weight: 600; padding: 0 4px; }
 
 
 /* v0.2 */
-.substatus { display: flex; gap: 16px; padding: 0; color: var(--muted); font-size: 12px; min-height: 18px; }
-.results { display: flex; flex-direction: column; gap: 8px; padding: 16px; max-width: 760px; }
+.substatus { display: flex; gap: 16px; padding: 0; color: var(--muted); font-size: 12px; }
+.substatus:has(span:empty + span:empty) { display: none; }
+.hit mark { background: #fde68a; color: inherit; }
+.results { display: flex; flex-direction: column; gap: 8px; padding: 16px max(20px, env(safe-area-inset-right)) 32px max(20px, env(safe-area-inset-left)); max-width: 760px; }
 .hit { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; text-decoration: none; color: var(--text); }
 .hit-title { font-weight: 600; }
 .hit-page { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 6px; }
@@ -324,8 +339,8 @@ dialog h3 { font-size: 15px; margin: 18px 0 4px; }
 .wp-row output { font-size: 13px; color: var(--muted); width: 48px; text-align: right; font-variant-numeric: tabular-nums; }
 
 /* 用紙・表紙を選ぶ */
-.tpl-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 10px; color: var(--text); }
-.tpl-opt { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 4px; min-height: 0; border: 2px solid transparent; background: transparent; border-radius: 10px; font-size: 12px; }
+.tpl-pick { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; color: var(--text); }
+.tpl-opt { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 4px; min-height: 0; border: 2px solid transparent; background: transparent; border-radius: 10px; font-size: 12px; white-space: nowrap; }
 .tpl-opt svg { width: 100%; height: auto; max-height: 120px; aspect-ratio: var(--ar, 210 / 297); background: #fff; border-radius: 2px; box-shadow: 0 0 0 1px var(--line), 0 1px 3px rgba(0,0,0,.08); }
 .tpl-opt.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .cover-pick { display: flex; flex-wrap: wrap; gap: 10px; padding: 2px 0; }
@@ -368,6 +383,15 @@ dialog::backdrop { background: rgba(15,23,42,.35); }
   .swatch { width: 32px; min-width: 32px; }
   .width:not(.on) { display: none; }
   .tb-sep { margin: 0 1px; }
+  #colors.eraser-mode .chip { width: 96px; font-size: 12px; padding: 0 4px; }
+  #colors.eraser-mode .chip .ic { display: none; }
+}
+@media (max-width: 360px) {
+  .tool { width: 34px; }
+  .swatch { width: 28px; min-width: 28px; }
+  .swatch::before { width: 20px; height: 20px; }
+  .width { width: 32px; min-width: 32px; }
+  #colors.eraser-mode .chip { width: 84px; font-size: 11px; }
 }
 @media (max-height: 500px) and (orientation: landscape) {
   .ed-row { min-height: 40px; }

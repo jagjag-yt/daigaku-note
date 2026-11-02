@@ -29,6 +29,7 @@ const P = {
   down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
   file: '<path d="M7 3.5h7l4.5 4.5v12.5H7z"/><path d="M14 3.5V8h4.5"/>',
   import: '<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5"/><path d="M5 13v5.5A1.5 1.5 0 006.5 20h11a1.5 1.5 0 001.5-1.5V13"/>',
+  check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
   notebook: '<rect x="5.5" y="3.5" width="13" height="17" rx="1.5"/><path d="M9 3.5v17M3.5 7.5h3.5M3.5 12h3.5M3.5 16.5h3.5"/>',
 };
 
@@ -51,7 +52,9 @@ export function closePopover() {
   if (!current) return;
   const c = current;
   current = null;
+  const hadFocus = c.el.contains(document.activeElement);
   c.el.remove();
+  if (hadFocus && c.anchor?.isConnected) c.anchor.focus({ preventScroll: true });
   c.anchor?.classList.remove('open');
   document.removeEventListener('pointerdown', c.outside, true);
   document.removeEventListener('keydown', c.key, true);
@@ -87,7 +90,8 @@ export function openPopover(anchor, build, { className = '', onClose, align = 'c
     if (el.contains(e.target)) return;
     if (anchor && anchor.contains(e.target)) return; // ボタン自身の onclick に任せる
     // ページの上を触ったときは閉じるだけにして、線は書かない
-    if (e.target.closest?.('#scroller')) { e.stopPropagation(); e.preventDefault(); }
+    // (指のときはスクロールできるように通す)
+    if (e.target.closest?.('#scroller') && e.pointerType !== 'touch') { e.stopPropagation(); e.preventDefault(); }
     closePopover();
   };
   // 一覧などをスクロールしたらボタンに付いていく。ボタンが消えた・見えなくなったら閉じる
@@ -98,7 +102,17 @@ export function openPopover(anchor, build, { className = '', onClose, align = 'c
     if (r.bottom < 0 || r.top > window.innerHeight) return closePopover();
     c.reposition();
   };
-  c.key = (e) => { if (e.key === 'Escape') { e.stopPropagation(); closePopover(); } };
+  c.key = (e) => {
+    if (e.key === 'Escape') { e.stopPropagation(); closePopover(); return; }
+    // メニューは上下の矢印キーで項目を移れる
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && el.contains(document.activeElement) && !document.activeElement.matches('input, select')) {
+      const items = [...el.querySelectorAll('button:not(:disabled)')];
+      const i = items.indexOf(document.activeElement);
+      if (i < 0) return;
+      e.preventDefault();
+      items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus();
+    }
+  };
   setTimeout(() => {
     if (current !== c) return;
     document.addEventListener('pointerdown', c.outside, true);

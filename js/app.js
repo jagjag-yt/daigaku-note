@@ -113,6 +113,7 @@ function savePrefs() {
 function route() {
   flushPen();
   closePopover();
+  $('#toast').hidden = true;
   for (const d of document.querySelectorAll('dialog[open]')) d.close();
   const m = location.hash.match(/^#\/note\/(\w+)(?:\/p\/(\w+))?/);
   if (m) openNote(m[1], m[2]);
@@ -575,7 +576,7 @@ function noteMenu(anchor, n) {
       toast(`「${n.title}」を削除しました`, 6000, { label: '元に戻す', run: async () => {
         await db.putOps([S.rec.make(n.id, 'note.restore', {})], S.rec.clock);
         dav.schedule();
-        showLibrary();
+        if (!$('#library').hidden) showLibrary();
       } });
     } },
   ], close), { align: 'start' });
@@ -583,6 +584,7 @@ function noteMenu(anchor, n) {
 
 // ---------- エディタのツールバー ----------
 const ERASER_SIZES = [5, 10, 22]; // 画面上の半径(px)
+const narrow = () => window.innerWidth <= 520;
 const inkTool = () => (S.tool === 'marker' ? 'marker' : 'pen');
 const toolState = () => S[inkTool()];
 
@@ -600,6 +602,18 @@ function buildToolbar() {
     w.onclick = () => onWidthSlot(w, i);
     ws.appendChild(w);
   }
+  // 消しゴムのときは、色の場所に「蛍光ペンだけ消す」のスイッチを出す
+  const em = document.createElement('button');
+  em.id = 'eraser-marker';
+  em.className = 'chip';
+  em.innerHTML = `${icon('marker', 18)}<span>蛍光ペンだけ</span>`;
+  em.title = 'オンにすると、蛍光ペンの線だけを消します';
+  em.onclick = () => {
+    S.eraser.markerOnly = !S.eraser.markerOnly;
+    savePrefs();
+    refreshToolbar();
+  };
+  sw.appendChild(em);
 }
 
 function refreshToolbar() {
@@ -613,7 +627,13 @@ function refreshToolbar() {
   const sh = $('#shapes');
   sh.classList.toggle('on', S.shapes);
   sh.setAttribute('aria-pressed', S.shapes);
-  sh.classList.toggle('dim', S.tool !== 'pen' && S.tool !== 'marker');
+  sh.disabled = S.tool !== 'pen' && S.tool !== 'marker';
+  const er = $('#tool-eraser');
+  er.classList.toggle('marker-only', !!S.eraser.markerOnly);
+  er.title = S.eraser.markerOnly ? '消しゴム(蛍光ペンだけ消す) (E)' : '消しゴム (E)';
+  const em = $('#eraser-marker');
+  em.classList.toggle('on', !!S.eraser.markerOnly);
+  em.setAttribute('aria-pressed', !!S.eraser.markerOnly);
   $('#undo').disabled = !S.undo.length;
   $('#redo').disabled = !S.redo.length;
   $('#pages-btn').classList.toggle('on', S.sidebar);
@@ -621,10 +641,10 @@ function refreshToolbar() {
   const k = inkTool(), st = toolState(), sl = S.slots[k];
   // 色: 消しゴムでは出さない(場所は残して、道具のボタンが横に動かないようにする)。
   // 投げ縄では、選んだ線の色を変えるのに使う(選んでいないときは押せない)
-  $('#colors').classList.toggle('invisible', eraser);
+  $('#colors').classList.toggle('eraser-mode', eraser);
   $('#sep-widths').classList.toggle('invisible', lasso);
   $('#widths').classList.toggle('invisible', lasso);
-  [...$('#colors').children].forEach((b, i) => {
+  [...$('#colors').querySelectorAll('.swatch')].forEach((b, i) => {
     const c = sl.colors[i], on = !lasso && i === st.ci;
     b.style.setProperty('--c', c);
     b.classList.toggle('on', on);
@@ -637,7 +657,7 @@ function refreshToolbar() {
     let px, on, label;
     if (eraser) {
       on = i === S.eraser.si;
-      px = [6, 11, 18][i];
+      px = [8, 14, 24][i]; // 消える範囲(直径 10/20/44px)の大小が分かる大きさ
       label = ['小さい消しゴム', '中くらいの消しゴム', '大きい消しゴム'][i];
       b.style.setProperty('--wc', 'transparent');
       b.classList.add('ring');
@@ -674,6 +694,8 @@ function onColorSlot(b, i) {
 }
 
 function onWidthSlot(b, i) {
+  // スマホ幅では選択中の1つだけ見せているので、押したら候補を出す
+  if (narrow() && b.classList.contains('on')) return S.tool === 'eraser' ? eraserSizePopover(b) : widthPopover(b, inkTool(), i);
   if (S.tool === 'eraser') {
     S.eraser.si = i;
     savePrefs();
@@ -736,9 +758,29 @@ function widthPopover(anchor, k, i) {
     body.classList.add('width-pop');
     const [lo, hi, step] = WIDTH_RANGE[k];
     const color = S[k].color;
-    body.innerHTML = `<div class="wp-preview"><svg viewBox="0 0 200 40" width="200" height="40" aria-hidden="true"><path d="M10 28 C 50 4, 90 4, 110 20 S 170 36, 190 12" fill="none" stroke="${color}" stroke-linecap="round" ${k === 'marker' ? 'opacity=".45"' : ''}/></svg></div>
+    body.innerHTML = `${narrow() ? '<div class="wp-slots"></div>' : ''}<div class="wp-preview"><svg viewBox="0 0 200 40" width="200" height="40" aria-hidden="true"><path d="M10 28 C 50 4, 90 4, 110 20 S 170 36, 190 12" fill="none" stroke="${color}" stroke-linecap="round" ${k === 'marker' ? 'opacity=".45"' : ''}/></svg></div>
       <div class="wp-row"><input type="range" min="${lo}" max="${hi}" step="${step}" aria-label="太さ"><output></output></div>`;
     const r = body.querySelector('input'), out = body.querySelector('output'), path = body.querySelector('path');
+    const slots = body.querySelector('.wp-slots');
+    if (slots) {
+      S.slots[k].widths.forEach((w, j) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'wp-slot' + (j === S[k].wi ? ' on' : '');
+        b.textContent = (k === 'marker' ? w.toFixed(0) : w.toFixed(1)) + 'pt';
+        b.onclick = () => {
+          i = j;
+          S[k].wi = j;
+          S[k].width = S.slots[k].widths[j];
+          r.value = S[k].width;
+          for (const x of slots.children) x.classList.toggle('on', x === b);
+          show();
+          savePrefs();
+          refreshToolbar();
+        };
+        slots.appendChild(b);
+      });
+    }
     r.value = S[k].width;
     const show = () => {
       const w = +r.value;
@@ -751,6 +793,7 @@ function widthPopover(anchor, k, i) {
       S.slots[k].widths[i] = v;
       S[k].wi = i;
       S[k].width = v;
+      if (slots) slots.children[i].textContent = (k === 'marker' ? v.toFixed(0) : v.toFixed(1)) + 'pt';
       show();
       refreshToolbar();
     };
@@ -758,12 +801,19 @@ function widthPopover(anchor, k, i) {
   }, { onClose: savePrefs });
 }
 
+function eraserSizePopover(anchor) {
+  openPopover(anchor, (body, close) => menu(body, ['小さい', '中くらい', '大きい'].map((label, j) => ({
+    label, on: undefined, attrs: { 'data-size': j }, icon: j === S.eraser.si ? 'check' : undefined,
+    onClick: () => { S.eraser.si = j; savePrefs(); refreshToolbar(); },
+  })), close));
+}
+
 function eraserPopover(anchor) {
   openPopover(anchor, (body, close) => menu(body, [
-    { label: '蛍光ペンだけ消す', id: 'eraser-marker-only', on: S.eraser.markerOnly, onClick: () => {
+    { icon: 'marker', label: '蛍光ペンだけ消す', id: 'eraser-marker-only', on: S.eraser.markerOnly, onClick: () => {
       S.eraser.markerOnly = !S.eraser.markerOnly;
       savePrefs();
-      toast(S.eraser.markerOnly ? '蛍光ペンの線だけを消します' : 'すべての線を消します');
+      refreshToolbar();
     } },
   ], close));
 }
@@ -785,7 +835,7 @@ function setTool(t) {
 function moreMenu(anchor) {
   const zoom = document.createElement('div');
   zoom.className = 'menu-zoom';
-  zoom.innerHTML = `<span class="menu-cap">表示の大きさ</span>
+  zoom.innerHTML = `<span class="menu-cap">表示の大きさ(数字を押すと幅に合わせる)</span>
     <div class="zoom-row"><button type="button" id="zoom-out" aria-label="縮小">${icon('zoomOut', 20)}</button><button type="button" id="zoom-label" title="幅に合わせる"></button><button type="button" id="zoom-in" aria-label="拡大">${icon('zoomIn', 20)}</button></div>`;
   const zl = zoom.querySelector('#zoom-label');
   const showZ = () => (zl.textContent = Math.round(S.zoom * 100) + '%');
@@ -797,6 +847,7 @@ function moreMenu(anchor) {
     { el: zoom },
     '-',
     { icon: 'page', label: 'ページを追加…', id: 'add-page', onClick: () => openAddDialog() },
+    { icon: 'thumbs', label: 'ページへ移動…', id: 'goto-page', onClick: () => gotoPagePopover($('#page-ind')) },
     { icon: 'pdf', label: 'PDF のページを追加…', id: 'add-pdf', onClick: () => $('#pdf-add-input').click() },
     { icon: 'export', label: 'PDF に書き出す', id: 'export-pdf', onClick: exportCurrentPdf },
     '-',
@@ -888,6 +939,7 @@ async function openNote(id, pageId) {
     $('#title').textContent = note.title;
     document.title = note.title + ' - 大学ノート';
     setSaved(true);
+    if (window.innerWidth <= 700) S.sidebar = false; // スマホではノートを開くたびに閉じた状態から
     $('#sidebar').hidden = !S.sidebar;
     $('#sb-scrim').hidden = !S.sidebar;
     S.zoom = fitZoom();
@@ -1179,6 +1231,7 @@ function bindInput() {
   if (/[?&]debug/.test(location.search)) {
     for (const t of ['pointerdown', 'pointerup', 'pointercancel']) sc.addEventListener(t, (e) => debugCount(`${t.slice(7)}:${e.pointerType}`), true);
   }
+  bindFingerTaps(sc);
   sc.addEventListener('pointerdown', onDown);
   sc.addEventListener('pointermove', onMove);
   sc.addEventListener('pointerup', onUp);
@@ -1242,6 +1295,52 @@ function debugGap(how, dt, dist, ok) {
   debugGaps.unshift(`${how} ${Math.round(dt)}ms ${Math.round(dist)}px ${ok ? 'つないだ' : '別の線'}`);
   debugGaps.length = Math.min(debugGaps.length, 8);
   debugCount(ok ? 'joined' : 'notjoined');
+}
+
+// 2本指で軽くたたくと元に戻す、3本指でやり直す。
+// 書いた直後(手のひらとして指を無視している間)や「指で書く」のときも効くように、他の処理とは別に見張る
+function bindFingerTaps(sc) {
+  const pts = new Map();
+  let tap = null;
+  sc.addEventListener('pointerdown', (e) => {
+    if (e.pointerType !== 'touch') return;
+    if (active && active.pen) { tap = null; return; } // ペンで書いている最中の指は手のひら
+    if (!pts.size) tap = { t: performance.now(), n: 0, bad: false };
+    pts.set(e.pointerId, { x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY });
+    if (!tap) return;
+    tap.n = Math.max(tap.n, pts.size);
+    if (e.width > 45 || e.height > 45) tap.bad = true; // 接する面が大きいのは手のひら
+  }, true);
+  sc.addEventListener('pointermove', (e) => {
+    const p = pts.get(e.pointerId);
+    if (!p) return;
+    p.x = e.clientX; p.y = e.clientY;
+    if (tap && Math.hypot(p.x - p.x0, p.y - p.y0) > 12) tap.bad = true;
+  }, true);
+  const up = (e) => {
+    const p = pts.get(e.pointerId);
+    if (!p) return;
+    // 最初の指が離れた時点で決める
+    if (tap && tap.n >= 2) {
+      const t = tap;
+      tap = null;
+      const list = [...pts.values()];
+      const spread = Math.max(...list.map((a) => Math.max(...list.map((b) => Math.hypot(a.x - b.x, a.y - b.y)))));
+      if (e.type === 'pointerup' && !t.bad && performance.now() - t.t < 350 && spread < 260) {
+        // 「指で書く」で1本目の指が書き始めていた線は捨てる
+        if (active && active.kind === 'draw' && !active.pen) { cancelAnimationFrame(liveFrame); paintLive(active.v, ''); active = null; }
+        touches.clear();
+        pinch = null;
+        $('#pages').style.transform = '';
+        stopInertia();
+        if (t.n === 2) undo(); else redo();
+      }
+    }
+    pts.delete(e.pointerId);
+    if (!pts.size) tap = null;
+  };
+  sc.addEventListener('pointerup', up, true);
+  sc.addEventListener('pointercancel', up, true);
 }
 
 function pagePoint(v, e) {
@@ -1583,10 +1682,7 @@ function gestureDown(e) {
   const sc = $('#scroller');
   try { sc.setPointerCapture(e.pointerId); } catch {}
   stopInertia();
-  // 2本指・3本指で軽くたたくと、元に戻す・やり直す
-  if (!touches.size) fingerTap = { t: performance.now(), n: 0, moved: false };
-  touches.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t: performance.now(), vx: 0, vy: 0 });
-  if (fingerTap) fingerTap.n = Math.max(fingerTap.n, touches.size);
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now(), vx: 0, vy: 0 });
   if (touches.size === 2) {
     const [a, b] = [...touches.values()];
     const r = sc.getBoundingClientRect();
@@ -1595,10 +1691,8 @@ function gestureDown(e) {
     pages.style.transformOrigin = `${sc.scrollLeft + pinch.fx - pages.offsetLeft}px ${sc.scrollTop + pinch.fy - pages.offsetTop}px`;
   }
 }
-let fingerTap = null;
 function gestureMove(e) {
   const t = touches.get(e.pointerId);
-  if (fingerTap && Math.hypot(e.clientX - t.x0, e.clientY - t.y0) > 12) fingerTap.moved = true;
   const sc = $('#scroller');
   const now = performance.now();
   const dx = e.clientX - t.x, dy = e.clientY - t.y;
@@ -1619,19 +1713,6 @@ function gestureMove(e) {
 function gestureUp(e) {
   const t = touches.get(e.pointerId);
   touches.delete(e.pointerId);
-  // 複数の指が動かずにすぐ離れたら「たたいた」とみなす(最初の指が離れた時点で決める)
-  if (fingerTap && fingerTap.n >= 2) {
-    const ft = fingerTap;
-    fingerTap = null;
-    if (e.type === 'pointerup' && !ft.moved && performance.now() - ft.t < 320) {
-      touches.clear();
-      pinch = null;
-      $('#pages').style.transform = '';
-      if (ft.n === 2) undo(); else redo();
-      return;
-    }
-  }
-  if (!touches.size) fingerTap = null;
   if (pinch) {
     if (touches.size < 2) {
       const p = pinch;
@@ -1738,7 +1819,11 @@ async function deletePage(id) {
   const entry = { undo: [['page.restore', { pageId: id }]], redo: [['page.delete', { pageId: id }]], relayout: true };
   pushUndo(entry);
   keepPosition(() => renderPages());
-  toast(`${no}ページ目を削除しました`, 6000, { label: '元に戻す', run: () => { if (S.undo[S.undo.length - 1] === entry) undo(); } });
+  toast(`${no}ページ目を削除しました`, 6000, { label: '元に戻す', run: async () => {
+    if (S.undo[S.undo.length - 1] !== entry) return;
+    await undo();
+    S.views.get(id)?.el.scrollIntoView({ block: 'start' });
+  } });
 }
 
 // ---------- ページを追加(テンプレートを絵で選ぶ) ----------
@@ -1864,7 +1949,7 @@ function renderSidebar() {
     bindThumbDrag(row, pg);
     const mb = row.querySelector('.pp-menu');
     mb.onclick = () => pageMenu(mb, pg);
-    go.addEventListener('contextmenu', (e) => { e.preventDefault(); pageMenu(mb, pg); });
+    go.addEventListener('contextmenu', (e) => { e.preventDefault(); if (!thumbDrag && !go._dragged) pageMenu(mb, pg); });
   });
   if (cur) thumbIntoView(cur.id, true);
 }
@@ -1920,31 +2005,38 @@ function startThumbDrag(e, row, pg, go) {
 function moveThumbDrag(e) {
   const d = thumbDrag, list = $('#pp-list');
   d.lastY = e.clientY;
-  d.row.style.transform = `translateY(${e.clientY - d.y0}px)`;
+  placeThumbDrag();
+  // 端に近づいたら一覧を自動でスクロール(端に近いほど速く)
+  const lr = list.getBoundingClientRect(), edge = 60;
+  const k = e.clientY < lr.top + edge ? -(lr.top + edge - e.clientY) / edge : e.clientY > lr.bottom - edge ? (e.clientY - (lr.bottom - edge)) / edge : 0;
+  d.scrollV = Math.sign(k) * Math.min(28, 4 + Math.abs(k) * 24);
+  if (d.scrollV && !d.scroll) {
+    const step = () => {
+      const t = thumbDrag;
+      if (!t || !t.scrollV) { if (t) t.scroll = 0; return; }
+      const before = list.scrollTop;
+      list.scrollTop += t.scrollV;
+      t.y0 -= list.scrollTop - before;
+      placeThumbDrag();
+      t.scroll = requestAnimationFrame(step);
+    };
+    d.scroll = requestAnimationFrame(step);
+  }
+}
+// 持ち上げた行と、落とす場所の線を、指の位置に合わせる
+function placeThumbDrag() {
+  const d = thumbDrag, list = $('#pp-list'), y = d.lastY;
+  d.row.style.transform = `translateY(${y - d.y0}px)`;
   const rows = [...list.querySelectorAll('.pp-row')];
   let to = rows.length;
   for (let i = 0; i < rows.length; i++) {
-    const r = rows[i].getBoundingClientRect();
     if (rows[i] === d.row) continue;
-    if (e.clientY < r.top + r.height / 2) { to = i; break; }
+    const r = rows[i].getBoundingClientRect();
+    if (y < r.top + r.height / 2) { to = i; break; }
   }
   d.to = to;
   const ref = rows[to], last = rows[rows.length - 1];
   d.line.style.top = (ref ? ref.offsetTop - 8 : last.offsetTop + last.offsetHeight + 6) + 'px';
-  // 端に近づいたら一覧を自動でスクロール
-  const lr = list.getBoundingClientRect();
-  const v = e.clientY < lr.top + 40 ? -8 : e.clientY > lr.bottom - 40 ? 8 : 0;
-  if (v && !d.scroll) {
-    const step = () => {
-      if (!thumbDrag || !thumbDrag.scrollV) { if (thumbDrag) thumbDrag.scroll = 0; return; }
-      list.scrollTop += thumbDrag.scrollV;
-      thumbDrag.y0 -= thumbDrag.scrollV;
-      thumbDrag.row.style.transform = `translateY(${thumbDrag.lastY - thumbDrag.y0}px)`;
-      thumbDrag.scroll = requestAnimationFrame(step);
-    };
-    d.scroll = requestAnimationFrame(step);
-  }
-  d.scrollV = v;
 }
 async function endThumbDrag(cancelled) {
   const d = thumbDrag;
@@ -1960,7 +2052,7 @@ async function endThumbDrag(cancelled) {
   if (d.to === i || d.to === i + 1) return;
   const rest = pages.filter((p) => p !== d.pg);
   const at = d.to > i ? d.to - 1 : d.to;
-  await movePage(d.pg, rest[at - 1], rest[at]);
+  await movePage(d.pg, rest[at - 1], rest[at], true);
 }
 document.addEventListener('touchmove', (e) => { if (thumbDrag) e.preventDefault(); }, { passive: false });
 
@@ -2035,14 +2127,15 @@ async function freeOrder(a, b) {
   return a && b ? (a.order + b.order) / 2 : a ? a.order + 1 : b ? b.order - 1 : 1;
 }
 
-// pg を a と b の間に動かす
-async function movePage(pg, a, b) {
-  const before = pg.order;
+// pg を a と b の間に動かす。quiet: 一覧で引っぱって動かしたとき(読んでいる場所はそのまま)
+async function movePage(pg, a, b, quiet) {
   const order = await freeOrder(a, b);
+  const before = pg.order; // 順番を振り直したあとの値で覚える
   await commit([mk('page.move', { pageId: pg.id, order })]);
   pushUndo({ undo: [['page.move', { pageId: pg.id, order: before }]], redo: [['page.move', { pageId: pg.id, order }]], relayout: true });
+  if (quiet) return keepPosition(() => renderPages());
   renderPages();
-  // 動かしたページを表示する
+  // メニューで動かしたときは、動かしたページを表示する
   S.views.get(pg.id)?.el.scrollIntoView({ block: 'start' });
   const n = pagesOf(S.note).indexOf(pg) + 1;
   toast(`${n}ページ目に移動しました`);
