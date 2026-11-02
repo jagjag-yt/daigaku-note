@@ -30,7 +30,7 @@
       <button id="sync-btn">同期</button>
       <input id="pdf-input" type="file" accept="application/pdf,.pdf" hidden>
     </header>
-    <p id="empty" class="empty" hidden>まだノートがないよ。「新しいノート」か「PDFを開く」から始めてね。</p>
+    <p id="empty" class="empty" hidden>ノートはまだありません。「新しいノート」または「PDFを開く」から始めてください。</p>
     <div id="notes" class="grid"></div>
   </section>
 
@@ -69,8 +69,8 @@
 
   <dialog id="sync-dialog">
     <h2>端末どうしの同期</h2>
-    <p>今はファイルで同期するよ。片方の端末で「書き出す」→ できたファイルを OneDrive・Google ドライブ・AirDrop などでもう一方に送って「取り込む」。</p>
-    <p>どちらの端末で書いた線も消えずに合わさるから、両方で書いてから交換しても大丈夫。何回取り込んでも同じ結果になるよ。</p>
+    <p>現在はファイルで同期します。片方の端末で「同期ファイルを書き出す」を押し、できたファイルを OneDrive・Google ドライブ・AirDrop などでもう一方の端末に送って「同期ファイルを取り込む」を押してください。</p>
+    <p>両方の端末で書いた内容は消えずに統合されます。同じファイルを何度取り込んでも結果は変わりません。</p>
     <p class="small">この端末のID: <code id="device-id"></code></p>
     <div class="row">
       <button id="sync-export" class="primary">同期ファイルを書き出す</button>

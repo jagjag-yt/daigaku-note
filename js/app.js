@@ -262,7 +262,7 @@ function bindEditor() {
   $('#back').onclick = () => (location.hash = '#/');
   $('#tool-pen').onclick = () => setTool('pen');
   $('#tool-eraser').onclick = () => setTool('eraser');
-  $('#finger').onclick = () => { S.fingerDraw = !S.fingerDraw; savePrefs(); refreshToolbar(); toast(S.fingerDraw ? '指でも書けます' : '指はスクロール専用、書くのはペンだけ'); };
+  $('#finger').onclick = () => { S.fingerDraw = !S.fingerDraw; savePrefs(); refreshToolbar(); toast(S.fingerDraw ? '指でも書けるようにしました' : 'ペンだけで書けるようにしました(指はスクロール)'); };
   $('#undo').onclick = undo;
   $('#redo').onclick = redo;
   $('#zoom-in').onclick = () => setZoom(S.zoom * 1.25);
