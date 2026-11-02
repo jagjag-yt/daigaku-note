@@ -702,7 +702,8 @@ let pinch = null, inertia = null, lastPenTime = 0, liveFrame = 0;
 // ペンの入力がいったん途切れる(pointercancel / pointerup)ことがある。すぐに同じ場所から
 // 続きが来たら同じ線としてつなぐため、確定を少し待つ。
 let penPending = null;
-const PEN_JOIN_MS = 120, PEN_JOIN_PX = 48;
+// pointerup(本当に離したかもしれない)は厳しめ、pointercancel(システムが止めた)はゆるめに待つ
+const PEN_JOIN = { up: { ms: 120, px: 48 }, cancel: { ms: 400, px: 64 } };
 const palmRecent = () => !!active || !!penPending || Date.now() - lastPenTime < 600;
 
 function bindInput() {
@@ -740,7 +741,14 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n');
+  el.textContent = 'v7\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+}
+// ペンが途切れて再開したときの間隔(時間・距離・つないだか)
+const debugGaps = [];
+function debugGap(how, dt, dist, ok) {
+  debugGaps.unshift(`${how} ${Math.round(dt)}ms ${Math.round(dist)}px ${ok ? 'つないだ' : '別の線'}`);
+  debugGaps.length = Math.min(debugGaps.length, 8);
+  debugCount(ok ? 'joined' : 'notjoined');
 }
 
 function pagePoint(v, e) {
@@ -759,9 +767,22 @@ function onDown(e) {
     // 手のひらを先に置いていた場合: 指の操作(スクロール・ズーム)を止める
     if (touches.size) { touches.clear(); pinch = null; $('#pages').style.transform = ''; }
     // 途切れた線の続きならつなぐ
+    // 前のペンの入力が終わらないまま、新しいペンの入力が始まった: 同じペンなので引き継ぐ
+    if (active && active.kind === 'draw' && active.pen && active.id !== e.pointerId) {
+      e.preventDefault();
+      debugGap('重なり', 0, 0, true);
+      active.id = e.pointerId;
+      addPoint(e);
+      return;
+    }
     if (!active && penPending && S.tool !== 'lasso' && S.tool !== 'eraser' && !(e.buttons & 32) && e.button !== 5) {
       const pp = penPending;
-      if (Math.hypot(e.clientX - pp.x, e.clientY - pp.y) < PEN_JOIN_PX && performance.now() - pp.t < PEN_JOIN_MS) {
+      const dt = performance.now() - pp.t, dist = Math.hypot(e.clientX - pp.x, e.clientY - pp.y);
+      // 速く書いているときは、途切れている間にペンが進んだ分も許す
+      const lim = PEN_JOIN[pp.how];
+      const ok = dt < lim.ms && dist < lim.px + (pp.a.speed || 0) * dt * 1.5;
+      debugGap(pp.how, dt, dist, ok);
+      if (ok) {
         clearTimeout(pp.timer);
         penPending = null;
         e.preventDefault();
@@ -769,7 +790,6 @@ function onDown(e) {
         try { $('#scroller').setPointerCapture(e.pointerId); } catch {}
         active = pp.a;
         active.id = e.pointerId;
-        debugCount('joined');
         addPoint(e);
         return;
       }
@@ -802,7 +822,7 @@ function onDown(e) {
   } else {
     const st = toolState();
     const d = { id: newId(), pageId: v.pg.id, tool: S.tool, color: st.color, width: st.width, pr: e.pointerType === 'pen' && S.tool === 'pen', pts: [] };
-    active = { id: e.pointerId, v, kind: 'draw', d, lastMove: performance.now() };
+    active = { id: e.pointerId, v, kind: 'draw', pen: e.pointerType === 'pen', d, lastMove: performance.now() };
     addPoint(e);
   }
 }
@@ -814,7 +834,16 @@ function onMove(e) {
   }
   if (!active || e.pointerId !== active.id) return;
   if (e.pointerType === 'pen') lastPenTime = Date.now();
-  if (active.kind === 'draw') active.lastXY = [e.clientX, e.clientY];
+  if (active.kind === 'draw') {
+    // 画面上の速さ(px/ms)を覚えておく(途切れた線をつなぐ判定に使う)
+    const now = performance.now(), l = active.lastXY;
+    if (l && now > active.lastT) {
+      const sp = Math.hypot(e.clientX - l[0], e.clientY - l[1]) / (now - active.lastT);
+      active.speed = 0.7 * (active.speed || 0) + 0.3 * Math.min(sp, 5);
+    }
+    active.lastXY = [e.clientX, e.clientY];
+    active.lastT = now;
+  }
   const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
   const a = active;
   for (const ev of evs.length ? evs : [e]) {
@@ -927,7 +956,8 @@ async function onUp(e) {
   clearTimeout(a.holdTimer);
   if (e.pointerType === 'pen' && !a.shaped && a.d.pts.length) {
     const [x, y] = a.lastXY || [e.clientX, e.clientY];
-    penPending = { a, x, y, t: performance.now(), timer: setTimeout(flushPen, PEN_JOIN_MS) };
+    const how = e.type === 'pointercancel' ? 'cancel' : 'up';
+    penPending = { a, x, y, how, t: performance.now(), timer: setTimeout(flushPen, PEN_JOIN[how].ms) };
     paintLive(a.v, strokeSvg('live', a.d, geometry(a.d)));
     lastPenTime = Date.now();
     return;
