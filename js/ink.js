@@ -9,6 +9,9 @@ import { widthAt } from './model.js';
 const dist = (ax, ay, bx, by) => Math.hypot(bx - ax, by - ay);
 
 // 入力の点 [x,y,p,...] → 滑らかな中心線 [[x,y,p], ...]
+//
+// ペンの点は間隔がばらばら(速く動かすと間が空き、遅いとほぼ重なる)。そのまま曲線でつなぐと
+// 行き過ぎて小さな輪(結び目)ができるので、まず一定の間隔に並べ直してから、なめらかにする。
 export function centerline(d) {
   const P = d.pts;
   const n = P.length / 3;
@@ -16,32 +19,42 @@ export function centerline(d) {
   for (let i = 0; i < n; i++) raw.push([P[i * 3], P[i * 3 + 1], P[i * 3 + 2]]);
   if (d.shape || n < 3) return raw; // 図形は角を残す
 
-  // 1) 手ぶれを抑える(前の点に少し引き寄せる)。最後の点はそのまま使って線が縮まないようにする
-  const t = 0.5;
-  const sm = [raw[0]];
-  let [sx, sy, sp] = raw[0];
+  // 1) 一定の間隔で並べ直す
+  const step = Math.max(0.5, Math.min(1.5, d.width * 0.5));
+  const rs = [raw[0]];
+  let carry = 0; // 最後に置いた点からの距離
   for (let i = 1; i < n; i++) {
-    sx += (raw[i][0] - sx) * t;
-    sy += (raw[i][1] - sy) * t;
-    sp += (raw[i][2] - sp) * t;
-    sm.push([sx, sy, sp]);
-  }
-  const last = raw[n - 1];
-  if (dist(sx, sy, last[0], last[1]) > 0.05) sm.push([last[0], last[1], sp]);
-
-  // 2) Catmull-Rom 曲線で点の間を補う
-  const out = [sm[0]];
-  for (let i = 0; i < sm.length - 1; i++) {
-    const p0 = sm[Math.max(0, i - 1)], p1 = sm[i], p2 = sm[i + 1], p3 = sm[Math.min(sm.length - 1, i + 2)];
-    const len = dist(p1[0], p1[1], p2[0], p2[1]);
-    const steps = Math.max(1, Math.min(10, Math.ceil(len / 1.2)));
-    for (let k = 1; k <= steps; k++) {
-      const u = k / steps, u2 = u * u, u3 = u2 * u;
-      const f = (a, b, c, e) => 0.5 * (2 * b + (-a + c) * u + (2 * a - 5 * b + 4 * c - e) * u2 + (-a + 3 * b - 3 * c + e) * u3);
-      out.push([f(p0[0], p1[0], p2[0], p3[0]), f(p0[1], p1[1], p2[1], p3[1]), p1[2] + (p2[2] - p1[2]) * u]);
+    const a = raw[i - 1], b = raw[i];
+    const seg = dist(a[0], a[1], b[0], b[1]);
+    if (seg === 0) continue;
+    let t = step - carry;
+    while (t <= seg) {
+      const u = t / seg;
+      rs.push([a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u, a[2] + (b[2] - a[2]) * u]);
+      t += step;
     }
+    carry = seg - (t - step);
   }
-  return out;
+  const last = raw[n - 1], tail = rs[rs.length - 1];
+  if (rs.length > 1 && dist(tail[0], tail[1], last[0], last[1]) < step * 0.4) rs[rs.length - 1] = last;
+  else rs.push(last);
+  if (rs.length < 3) return rs;
+
+  // 2) 手ぶれをならす(両端は動かさない)。筆圧は特に強くならして、太さのガタつきを消す
+  const smooth = (k, passes) => {
+    for (let p = 0; p < passes; p++) {
+      let prev = rs[0][k];
+      for (let i = 1; i < rs.length - 1; i++) {
+        const cur = rs[i][k];
+        rs[i][k] = (prev + 2 * cur + rs[i + 1][k]) / 4;
+        prev = cur;
+      }
+    }
+  };
+  smooth(0, 3);
+  smooth(1, 3);
+  smooth(2, 8);
+  return rs;
 }
 
 export const variableWidth = (d) => d.pr && !d.shape && d.tool !== 'marker';
@@ -52,14 +65,20 @@ export function outline(d, line = centerline(d)) {
   const w = line.map((q) => widthAt(d, q[2]) / 2);
   if (m === 1) return circle(line[0][0], line[0][1], w[0]);
   const L = [], R = [];
+  // 急に曲がるところでは、内側の輪郭が逆戻りして小さな輪(結び目)になる。
+  // 進む向きに対して後ろへ戻る点は捨てて、輪ができないようにする。
+  const keep = (side, q, tx, ty, i) => {
+    const last = side[side.length - 1];
+    if (!last || i === m - 1 || (q[0] - last[0]) * tx + (q[1] - last[1]) * ty > 0) side.push(q);
+  };
   for (let i = 0; i < m; i++) {
     const a = line[Math.max(0, i - 1)], b = line[Math.min(m - 1, i + 1)];
     let tx = b[0] - a[0], ty = b[1] - a[1];
     const tl = Math.hypot(tx, ty) || 1;
     tx /= tl; ty /= tl;
     const [x, y] = line[i];
-    L.push([x - ty * w[i], y + tx * w[i]]);
-    R.push([x + ty * w[i], y - tx * w[i]]);
+    keep(L, [x - ty * w[i], y + tx * w[i]], tx, ty, i);
+    keep(R, [x + ty * w[i], y - tx * w[i]], tx, ty, i);
   }
   const cap = (c, r, from, to) => {
     const pts = [];
@@ -73,7 +92,7 @@ export function outline(d, line = centerline(d)) {
   const end = line[m - 1], start = line[0];
   return [
     ...L,
-    ...cap(end, w[m - 1], L[m - 1], R[m - 1]),
+    ...cap(end, w[m - 1], L[L.length - 1], R[R.length - 1]),
     ...R.reverse(),
     ...cap(start, w[0], R[R.length - 1], L[0]),
   ];
@@ -110,29 +129,43 @@ export function linePath(line, map = (x, y) => [x, y]) {
   }).join('');
 }
 
-// キャンバスに1本描く
-export function drawStroke(ctx, d, off = [0, 0]) {
+// 1本の線の形(SVG のパス)。画面・サムネイル・PDF で共通に使う
+export function geometry(d) {
+  const line = centerline(d);
+  if (variableWidth(d)) return { kind: 'fill', d: smoothClosedPath(outline(d, line)) };
+  if (line.length === 1) {
+    const [x, y] = line[0];
+    return { kind: 'stroke', d: `M${x} ${y}h0`, w: d.width };
+  }
+  return { kind: 'stroke', d: linePath(line), w: d.width };
+}
+
+// SVG の要素(文字列)
+export function strokeSvg(id, d, geo, off = [0, 0]) {
+  const tf = off[0] || off[1] ? ` transform="translate(${off[0]} ${off[1]})"` : '';
+  const mk = d.tool === 'marker' ? ' class="marker"' : '';
+  if (geo.kind === 'fill') return `<path data-id="${id}"${mk}${tf} d="${geo.d}" fill="${d.color}"/>`;
+  return `<path data-id="${id}"${mk}${tf} d="${geo.d}" fill="none" stroke="${d.color}" stroke-width="${geo.w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+}
+
+// キャンバスに1本描く(サムネイル用)
+export function drawStroke(ctx, d, off = [0, 0], geo = geometry(d)) {
   ctx.save();
   if (off[0] || off[1]) ctx.translate(off[0], off[1]);
   if (d.tool === 'marker') {
     ctx.globalAlpha = 0.38;
     ctx.globalCompositeOperation = 'multiply';
   }
-  const line = centerline(d);
-  if (variableWidth(d)) {
+  const path = new Path2D(geo.d);
+  if (geo.kind === 'fill') {
     ctx.fillStyle = d.color;
-    ctx.fill(new Path2D(smoothClosedPath(outline(d, line))));
-  } else if (line.length === 1) {
-    ctx.fillStyle = d.color;
-    ctx.beginPath();
-    ctx.arc(line[0][0], line[0][1], d.width / 2, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.fill(path);
   } else {
     ctx.strokeStyle = d.color;
-    ctx.lineWidth = d.width;
+    ctx.lineWidth = geo.w;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.stroke(new Path2D(linePath(line)));
+    ctx.stroke(path);
   }
   ctx.restore();
 }

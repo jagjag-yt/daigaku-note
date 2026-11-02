@@ -116,7 +116,8 @@ button.danger { color: var(--danger); }
   flex: none;
 }
 .page canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
-.page .ink { cursor: crosshair; }
+.page svg.ink { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; cursor: crosshair; }
+.page svg.ink .marker { opacity: .38; mix-blend-mode: multiply; }
 .page-foot {
   position: absolute; left: 0; right: 0; bottom: -24px; height: 22px;
   display: flex; justify-content: space-between; align-items: center;

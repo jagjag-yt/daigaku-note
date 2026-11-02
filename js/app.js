@@ -2,7 +2,7 @@ import * as db from './db.js';
 import {
   Recorder, emptyNote, applyOp, pagesOf, strokesOf, buildLibrary, newId, strokeHit, styleOf, bgOf, PAGE_A4,
 } from './model.js';
-import { drawStroke, recognizeShape, strokeInLasso } from './ink.js';
+import { drawStroke, recognizeShape, strokeInLasso, geometry, strokeSvg } from './ink.js';
 import { TEMPLATES, SIZES, templatePrims, sizeById } from './templates.js';
 import { importPdf, renderPdfPage, exportPdf } from './pdf.js';
 import { buildSyncFile, importSyncFile } from './sync.js';
@@ -498,6 +498,10 @@ function fitZoom() {
 const clampZoom = (z) => Math.max(0.3, Math.min(4, z));
 
 // ---------- ページの表示 ----------
+// 背景の PDF だけキャンバス(画像)で描き、罫線と手書きは SVG(ベクター)で描く。
+// SVG はブラウザが拡大率に合わせて描き直すので、どれだけ拡大してもギザギザにならない。
+const SVGNS = 'http://www.w3.org/2000/svg';
+
 function renderPages() {
   const wrap = $('#pages');
   if (S.io) S.io.disconnect();
@@ -511,11 +515,15 @@ function renderPages() {
     const el = document.createElement('div');
     el.className = 'page';
     el.dataset.id = pg.id;
-    el.innerHTML = `<canvas class="bg"></canvas><canvas class="ink"></canvas><canvas class="live"></canvas>
+    el.innerHTML = `<canvas class="bg"></canvas>
+      <svg class="ink" xmlns="${SVGNS}" viewBox="0 0 ${pg.w} ${pg.h}" preserveAspectRatio="none"><g class="tpl"></g><g class="strokes"></g><g class="live"></g></svg>
       <div class="page-foot"><span>${i + 1} / ${pages.length}</span><button class="del-page" title="このページを削除">ページを削除</button></div>`;
     el.querySelector('.del-page').onclick = () => deletePage(pg.id);
     wrap.appendChild(el);
-    const v = { pg, el, bg: el.querySelector('.bg'), ink: el.querySelector('.ink'), live: el.querySelector('.live'), visible: false, ready: false, holder: {} };
+    const v = {
+      pg, el, bg: el.querySelector('.bg'), tpl: el.querySelector('.tpl'), strokes: el.querySelector('.strokes'),
+      live: el.querySelector('.live'), els: new Map(), visible: false, ready: false, holder: {}, bgZoom: 0,
+    };
     S.views.set(pg.id, v);
     sizeView(v);
     S.io.observe(el);
@@ -527,11 +535,12 @@ function sizeView(v) {
   v.el.style.height = v.pg.h * S.zoom + 'px';
 }
 
+let bgTimer = 0;
 function layoutPages() {
-  for (const v of S.views.values()) {
-    sizeView(v);
-    if (v.visible) paintView(v);
-  }
+  for (const v of S.views.values()) sizeView(v);
+  // PDF の背景は拡大率が決まってから描き直す(SVG はそのままで滑らか)
+  clearTimeout(bgTimer);
+  bgTimer = setTimeout(() => { for (const v of S.views.values()) if (v.visible && v.bgZoom !== S.zoom) paintBg(v); }, 250);
   drawSelection();
   refreshToolbar();
 }
@@ -559,8 +568,11 @@ function onIntersect(entries) {
 
 function releaseView(v) {
   v.holder.task?.cancel?.();
-  for (const c of [v.bg, v.ink, v.live]) c.width = c.height = 0; // メモリを返す
+  v.bg.width = v.bg.height = 0; // メモリを返す
+  v.tpl.innerHTML = v.strokes.innerHTML = v.live.innerHTML = '';
+  v.els.clear();
   v.ready = false;
+  v.bgZoom = 0;
 }
 
 function canvasSize(v) {
@@ -571,32 +583,53 @@ function canvasSize(v) {
 }
 
 function paintView(v) {
-  const [cw, ch] = canvasSize(v);
-  for (const c of [v.bg, v.ink]) { c.width = cw; c.height = ch; }
   v.ready = true;
   paintBg(v);
   paintInk(v);
 }
 
 function paintBg(v) {
-  const c = v.bg, ctx = c.getContext('2d'), bg = bgOf(v.pg);
+  const bg = bgOf(v.pg);
   v.holder.task?.cancel?.();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, c.width, c.height);
+  v.bgZoom = S.zoom;
   if (bg && bg.type === 'pdf') {
+    v.tpl.innerHTML = '';
+    const c = v.bg;
+    [c.width, c.height] = canvasSize(v);
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, c.width, c.height);
     renderPdfPage(c, bg.hash, bg.page, v.holder).catch((e) => {
       ctx.fillStyle = '#999';
       ctx.font = `${14 * c.width / v.pg.w}px sans-serif`;
       ctx.fillText(e.message, 20, 40);
     });
-    return;
+  } else {
+    v.bg.width = v.bg.height = 0;
+    v.tpl.innerHTML = templateSvg(bg, v.pg.w, v.pg.h);
   }
-  const s = c.width / v.pg.w;
-  ctx.setTransform(s, 0, 0, s, 0, 0);
-  paintTemplate(ctx, bg, v.pg.w, v.pg.h);
 }
 
+function templateSvg(bg, w, h) {
+  const prim = templatePrims(bg, w, h);
+  const groups = new Map();
+  for (const [x0, y0, x1, y1, t, c] of prim.lines) {
+    const k = `${t}|${c}`;
+    groups.set(k, (groups.get(k) || '') + `M${x0.toFixed(2)} ${y0.toFixed(2)}L${x1.toFixed(2)} ${y1.toFixed(2)}`);
+  }
+  let out = '';
+  for (const [k, d] of groups) {
+    const [t, c] = k.split('|');
+    out += `<path d="${d}" stroke="${c}" stroke-width="${t}" fill="none"/>`;
+  }
+  if (prim.dots.length) {
+    const [, , r, c] = prim.dots[0];
+    out += `<path d="${prim.dots.map(([x, y]) => `M${x.toFixed(2)} ${y.toFixed(2)}h0`).join('')}" stroke="${c}" stroke-width="${r * 2}" stroke-linecap="round" fill="none"/>`;
+  }
+  return out;
+}
+
+// サムネイル用(キャンバス)
 function paintTemplate(ctx, bg, w, h) {
   const prim = templatePrims(bg, w, h);
   for (const [x0, y0, x1, y1, t, c] of prim.lines) {
@@ -622,30 +655,42 @@ function scaledCtx(canvas, pg) {
   return ctx;
 }
 
-// moving: { ids:Set, dx, dy } 投げ縄で動かしている最中の線
-function paintInk(v, hidden, moving) {
-  if (!v.ready) return;
-  const ctx = v.ink.getContext('2d');
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, v.ink.width, v.ink.height);
-  const c2 = scaledCtx(v.ink, v.pg);
-  for (const e of strokesOf(S.note, v.pg.id, hidden)) {
-    let off = e.off;
-    if (moving && moving.ids.has(e.id)) off = [off[0] + moving.dx, off[1] + moving.dy];
-    drawStroke(c2, styleOf(e), off);
-  }
+// 線の形は一度作ったら覚えておく(線の中身は変わらないので)
+function geoOf(e) {
+  if (!e.geo) e.geo = geometry(e.data);
+  return e.geo;
 }
 
-// 書いている最中の線を重ねて描く(毎フレーム描き直す)
-function prepareLive(v) {
-  const [cw, ch] = canvasSize(v);
-  if (v.live.width !== cw || v.live.height !== ch) { v.live.width = cw; v.live.height = ch; }
+// hidden: 消しゴムで消している最中の線 / moving: { ids:Set, dx, dy } 投げ縄で動かしている最中の線
+function paintInk(v, hidden, moving) {
+  if (!v.ready) return;
+  if ((hidden || moving) && v.els.size) {
+    // 描き直さず、該当する線だけ隠す・ずらす
+    if (hidden) for (const id of hidden) { const el = v.els.get(id); if (el) el.style.display = 'none'; }
+    if (moving) {
+      for (const id of moving.ids) {
+        const el = v.els.get(id), st = S.note.strokes.get(id);
+        if (el && st) el.setAttribute('transform', `translate(${st.off[0] + moving.dx} ${st.off[1] + moving.dy})`);
+      }
+    }
+    return;
+  }
+  v.strokes.innerHTML = strokesOf(S.note, v.pg.id).map((e) => strokeSvg(e.id, styleOf(e), geoOf(e), e.off)).join('');
+  v.els.clear();
+  for (const el of v.strokes.children) v.els.set(el.dataset.id, el);
 }
-function paintLive(v, fn) {
-  const ctx = v.live.getContext('2d');
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, v.live.width, v.live.height);
-  if (fn) fn(scaledCtx(v.live, v.pg));
+
+// 確定した線を1本だけ足す
+function appendStroke(v, id) {
+  const e = S.note.strokes.get(id);
+  if (!v.ready || !e) return;
+  v.strokes.insertAdjacentHTML('beforeend', strokeSvg(e.id, styleOf(e), geoOf(e), e.off));
+  v.els.set(id, v.strokes.lastElementChild);
+}
+
+// 書いている最中の線(毎フレーム描き直す)
+function paintLive(v, svg) {
+  v.live.innerHTML = svg || '';
 }
 
 // ---------- 入力(ペン・マウス・指) ----------
@@ -706,13 +751,11 @@ function onDown(e) {
       active = { id: e.pointerId, v, kind: 'move', sx: x, sy: y, dx: 0, dy: 0 };
     } else {
       clearSelection();
-      prepareLive(v);
       active = { id: e.pointerId, v, kind: 'lasso', poly: [[x, y]] };
     }
   } else {
     const st = toolState();
     const d = { id: newId(), pageId: v.pg.id, tool: S.tool, color: st.color, width: st.width, pr: e.pointerType === 'pen' && S.tool === 'pen', pts: [] };
-    prepareLive(v);
     active = { id: e.pointerId, v, kind: 'draw', d, lastMove: performance.now() };
     addPoint(e);
   }
@@ -737,7 +780,7 @@ function onMove(e) {
       a.dy = y - a.sy;
     }
   }
-  if (a.kind === 'lasso') requestLive(() => paintLive(a.v, (ctx) => drawLasso(ctx, a.poly)));
+  if (a.kind === 'lasso') requestLive(() => paintLive(a.v, lassoSvg(a.poly)));
   if (a.kind === 'move') requestLive(() => { paintInk(a.v, null, { ids: S.sel.ids, dx: a.dx, dy: a.dy }); drawSelection(a.dx, a.dy); });
 }
 
@@ -746,18 +789,9 @@ function requestLive(fn) {
   liveFrame = requestAnimationFrame(fn);
 }
 
-function drawLasso(ctx, poly) {
-  ctx.save();
-  ctx.setLineDash([4, 4]);
-  ctx.lineWidth = 1 / S.zoom;
-  ctx.strokeStyle = '#2f5d9e';
-  ctx.fillStyle = 'rgba(47,93,158,.06)';
-  ctx.beginPath();
-  poly.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  ctx.restore();
+function lassoSvg(poly) {
+  const d = poly.map(([x, y], i) => (i ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1)).join('') + 'Z';
+  return `<path d="${d}" fill="rgba(47,93,158,.06)" stroke="#2f5d9e" stroke-width="1" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>`;
 }
 
 function addPoint(e) {
@@ -769,7 +803,11 @@ function addPoint(e) {
     const lx = d.pts[d.pts.length - 3], ly = d.pts[d.pts.length - 2];
     if (Math.hypot(x - lx, y - ly) < 0.5 / S.zoom) return; // 近すぎる点は捨てる
   }
-  const p = d.pr ? (e.pressure || 0.5) : 0.5;
+  // Safari は途中の点で筆圧 0 を返すことがあるので、そのときは直前の筆圧を使う
+  let p = 0.5;
+  if (d.pr) {
+    p = e.pressure > 0 ? e.pressure : (n0 ? d.pts[d.pts.length - 1] : 0.5);
+  }
   d.pts.push(Math.round(x * 10) / 10, Math.round(y * 10) / 10, Math.round(p * 100) / 100);
   // 図形補正: ペンを止めたら図形に整える
   if (S.shapes && S.tool === 'pen') {
@@ -781,10 +819,10 @@ function addPoint(e) {
       d.pts = shape.pts;
       d.shape = shape.type;
       a.shaped = true;
-      paintLive(a.v, (ctx) => drawStroke(ctx, d));
+      paintLive(a.v, strokeSvg('live', d, geometry(d)));
     }, 550);
   }
-  requestLive(() => paintLive(a.v, (ctx) => drawStroke(ctx, d)));
+  requestLive(() => paintLive(a.v, strokeSvg('live', d, geometry(d))));
 }
 
 function eraseAt(e) {
@@ -813,7 +851,7 @@ async function onUp(e) {
     return;
   }
   if (a.kind === 'lasso') {
-    paintLive(a.v, null);
+    paintLive(a.v, '');
     if (a.poly.length < 3) return;
     const ids = new Set(strokesOf(S.note, a.v.pg.id).filter((st) => strokeInLasso(st, a.poly)).map((st) => st.id));
     if (ids.size) {
@@ -838,12 +876,13 @@ async function onUp(e) {
   }
   clearTimeout(a.holdTimer);
   const d = a.d;
-  if (!d.pts.length) return paintLive(a.v, null);
-  // 確定した線を下のキャンバスに描いてから、上の重ね描きを消す
-  drawStroke(scaledCtx(a.v.ink, a.v.pg), d);
-  paintLive(a.v, null);
+  if (!d.pts.length) return paintLive(a.v, '');
   pushUndo({ undo: [['stroke.del', { ids: [d.id] }]], redo: [['stroke.undel', { ids: [d.id] }]], pages: [a.v.pg.id] });
-  await commit([mk('stroke.add', { s: d })]);
+  // commit は最初に op をノートに反映するので、その直後に確定した線を足し、書いている最中の線を消す
+  const saving = commit([mk('stroke.add', { s: d })]);
+  appendStroke(a.v, d.id);
+  paintLive(a.v, '');
+  await saving;
 }
 
 // ---------- 投げ縄の選択 ----------
@@ -1159,7 +1198,7 @@ function drawThumb(canvas, pg) {
   const draw = () => {
     const c2 = scaledCtx(canvas, pg);
     if (bg?.type === 'blank') paintTemplate(c2, bg, pg.w, pg.h);
-    for (const e of strokesOf(S.note, pg.id)) drawStroke(c2, styleOf(e), e.off);
+    for (const e of strokesOf(S.note, pg.id)) drawStroke(c2, styleOf(e), e.off, geoOf(e));
   };
   if (bg?.type === 'pdf') renderPdfPage(canvas, bg.hash, bg.page).then(draw).catch(draw);
   else draw();
