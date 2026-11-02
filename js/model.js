@@ -4,7 +4,7 @@
 // 端末ごとに書いた op を後から足し合わせるだけで同期(マージ)できる。
 // DOM には依存しない(Node でテストできる)。
 
-export const NOTE_TYPES = ['note.create', 'note.rename', 'note.delete', 'note.restore'];
+export const NOTE_TYPES = ['note.create', 'note.rename', 'note.delete', 'note.restore', 'note.cover'];
 
 export const PAGE_A4 = { w: 595.28, h: 841.89 };
 
@@ -87,12 +87,16 @@ export function applyOp(note, op) {
   switch (op.t) {
     case 'note.create':
       if (note.created == null || op.ts < note.created) note.created = op.ts;
+      if (p.cover && newer(s, note.coverS)) { note.cover = p.cover; note.coverS = s; }
     // fallthrough: 作成時の名前も LWW の一票
     case 'note.rename':
       if (newer(s, note.titleS)) {
         note.title = p.title;
         note.titleS = s;
       }
+      break;
+    case 'note.cover': // 表紙の色
+      if (newer(s, note.coverS)) { note.cover = p.cover; note.coverS = s; }
       break;
     case 'note.delete':
     case 'note.restore':

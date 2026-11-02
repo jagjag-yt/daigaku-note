@@ -52,8 +52,9 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
 
   // 新しいノート(方眼・A4横)
   await page.click('#new-note');
+  await page.click('#new-notebook');
   await page.fill('#nn-title', '神経生理学');
-  await page.selectOption('#nn-tpl', 'grid');
+  await page.click('#nn-tpl [data-tpl=grid]');
   await page.selectOption('#nn-size', 'a4l');
   await page.click('#new-form button[type=submit]');
   await page.waitForSelector('#editor:not([hidden]) .page');
@@ -118,14 +119,18 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
 
   // ページ: 追加 → 並べ替え → テンプレート変更
   await page.click('#pages-btn');
-  await page.selectOption('#pp-tpl', 'music');
+  await page.click('#sb-add');
+  await page.click('#pp-tpl [data-tpl=music]');
   await page.selectOption('#pp-size', 'a4');
+  await page.check('input[name=pp-where][value=last]', { force: true });
   await page.click('#pp-add');
   await page.waitForTimeout(400);
   const rows = await page.locator('.pp-row').count();
-  await page.locator('.pp-row').nth(1).locator('[data-a=up]').click();
+  await page.locator('.pp-row').nth(1).locator('.pp-menu').click();
+  await page.click('.pop [data-a=up]');
   await page.waitForTimeout(300);
-  await page.locator('.pp-row').nth(1).locator('.pp-tpl').selectOption('dots');
+  await page.locator('.pp-row').nth(1).locator('.pp-menu').click();
+  await page.locator('.pop .pp-tpl').selectOption('dots');
   await page.waitForTimeout(300);
   await shot(page, 'v2-3-pages.png');
   await page.click('#pages-close');
@@ -133,7 +138,7 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
   log('ページ: 五線譜を追加 → 先頭へ移動 → 2ページ目をドットに変更');
 
   // PDF 書き出し(ベクター)
-  let [dl] = await Promise.all([page.waitForEvent('download'), page.click('#export-pdf')]);
+  let [dl] = await Promise.all([page.waitForEvent('download'), page.click('#more-btn').then(() => page.click('#export-pdf'))]);
   const out1 = path.join(OUT, 'v2-export.pdf');
   await dl.saveAs(out1);
   log('PDF書き出し:', (await PDFLib.PDFDocument.load(fs.readFileSync(out1))).getPageCount(), 'ページ');
@@ -147,7 +152,7 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
 
   // PDF を開く → PDF の文字で検索
   await page.click('#back');
-  await page.waitForSelector('.card');
+  await page.waitForSelector('.card:not(.new-card)');
   await page.setInputFiles('#pdf-input', pdfPath);
   await page.waitForSelector('#editor:not([hidden]) .page');
   await page.waitForTimeout(800);
@@ -195,8 +200,8 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
   await pb.goto(URL);
   await pb.waitForSelector('#empty:not([hidden])');
   console.log('  B:', await setDav(pb));
-  await pb.waitForSelector('.card');
-  const cardsB = await pb.locator('.card').count();
+  await pb.waitForSelector('.card:not(.new-card)');
+  const cardsB = await pb.locator('.card:not(.new-card)').count();
   log('WebDAV: 端末Bに', cardsB, '冊届いた');
   await pb.click('.card:has-text("神経生理学") .cover');
   await pb.waitForSelector('.page');
