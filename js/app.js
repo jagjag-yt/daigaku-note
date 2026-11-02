@@ -8,7 +8,7 @@ import { importPdf, renderPdfPage, exportPdf } from './pdf.js';
 import { buildSyncFile, importSyncFile } from './sync.js';
 import * as search from './search.js';
 import * as dav from './webdav.js';
-import { icon, fillIcons, openPopover, closePopover, menu, popoverAnchor } from './ui.js';
+import { icon, fillIcons, openPopover, closePopover, menu, retargetPopover } from './ui.js';
 
 const $ = (s) => document.querySelector(s);
 // 色と太さは道具ごとに3つずつ「よく使うもの」として並べる。選んでいるものをもう一度押すと入れ替えられる
@@ -113,7 +113,7 @@ function savePrefs() {
 function route() {
   flushPen();
   closePopover();
-  $('#toast').hidden = true;
+  if (!$('#toast-act').hidden) $('#toast').hidden = true; // 「元に戻す」付きのトーストだけ、画面が変わったら消す
   for (const d of document.querySelectorAll('dialog[open]')) d.close();
   const m = location.hash.match(/^#\/note\/(\w+)(?:\/p\/(\w+))?/);
   if (m) openNote(m[1], m[2]);
@@ -777,6 +777,7 @@ function widthPopover(anchor, k, i) {
           show();
           savePrefs();
           refreshToolbar();
+          retargetPopover(anchor, (anchor = $('#widths').children[j]));
         };
         slots.appendChild(b);
       });
@@ -1973,6 +1974,7 @@ function bindThumbDrag(row, pg) {
   go.addEventListener('pointerdown', (e) => {
     if (e.button > 0 || thumbDrag) return;
     st = { id: e.pointerId, x: e.clientX, y: e.clientY, type: e.pointerType, timer: 0 };
+    if (e.pointerType === 'mouse') try { go.setPointerCapture(e.pointerId); } catch {}
     if (e.pointerType !== 'mouse') st.timer = setTimeout(() => startThumbDrag(e, row, pg, go), 380);
   });
   go.addEventListener('pointermove', (e) => {
@@ -2052,7 +2054,9 @@ async function endThumbDrag(cancelled) {
   if (d.to === i || d.to === i + 1) return;
   const rest = pages.filter((p) => p !== d.pg);
   const at = d.to > i ? d.to - 1 : d.to;
+  const keepTop = $('#pp-list').scrollTop;
   await movePage(d.pg, rest[at - 1], rest[at], true);
+  $('#pp-list').scrollTop = keepTop; // 続けて並べ替えやすいように、一覧の位置はそのまま
 }
 document.addEventListener('touchmove', (e) => { if (thumbDrag) e.preventDefault(); }, { passive: false });
 

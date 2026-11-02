@@ -137,6 +137,7 @@ a.cover:active { transform: scale(.98); }
 .ed-row.toolbar { justify-content: center; gap: 6px; padding-bottom: 4px; overflow-x: auto; scrollbar-width: none; }
 .ed-row.toolbar::-webkit-scrollbar { display: none; }
 .tool-group { display: flex; gap: 2px; align-items: center; flex: none; }
+#colors { justify-content: center; min-width: 112px; }
 .tool-group[hidden], .tb-sep[hidden] { display: none; }
 .tb-sep { width: 1px; height: 26px; background: var(--line); margin: 0 6px; flex: none; }
 .tool {
@@ -196,7 +197,7 @@ a.cover:active { transform: scale(.98); }
 .pp-list { position: relative; flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 8px 16px 16px; display: flex; flex-direction: column; gap: 14px; }
 .pp-row { display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .pp-go { padding: 0; border: none; background: transparent; min-height: 0; border-radius: 4px; line-height: 0; -webkit-touch-callout: none; touch-action: pan-y; }
-.pp-row.dragging { position: relative; z-index: 2; opacity: .85; transition: none; }
+.pp-row.dragging { position: relative; z-index: 2; transition: none; background: var(--panel); border-radius: 6px; }
 .pp-row.dragging .pp-thumb { box-shadow: 0 8px 24px rgba(0,0,0,.25); transform: scale(1.04); }
 .pp-drop { position: absolute; left: 12px; right: 12px; height: 3px; border-radius: 2px; background: var(--accent); pointer-events: none; }
 .sb-scrim { display: none; }
@@ -339,9 +340,9 @@ dialog h3 { font-size: 15px; margin: 18px 0 4px; }
 .wp-row output { font-size: 13px; color: var(--muted); width: 48px; text-align: right; font-variant-numeric: tabular-nums; }
 
 /* 用紙・表紙を選ぶ */
-.tpl-pick { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; color: var(--text); }
+.tpl-pick { max-width: 480px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; color: var(--text); }
 .tpl-opt { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 4px; min-height: 0; border: 2px solid transparent; background: transparent; border-radius: 10px; font-size: 12px; white-space: nowrap; }
-.tpl-opt svg { width: 100%; height: auto; max-height: 120px; aspect-ratio: var(--ar, 210 / 297); background: #fff; border-radius: 2px; box-shadow: 0 0 0 1px var(--line), 0 1px 3px rgba(0,0,0,.08); }
+.tpl-opt svg { width: 100%; height: auto; aspect-ratio: var(--ar, 210 / 297); background: #fff; border-radius: 2px; box-shadow: 0 0 0 1px var(--line), 0 1px 3px rgba(0,0,0,.08); }
 .tpl-opt.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .cover-pick { display: flex; flex-wrap: wrap; gap: 10px; padding: 2px 0; }
 .cover-pick.small { gap: 8px; padding: 0 10px 4px; }
@@ -385,8 +386,11 @@ dialog::backdrop { background: rgba(15,23,42,.35); }
   .tb-sep { margin: 0 1px; }
   #colors.eraser-mode .chip { width: 96px; font-size: 12px; padding: 0 4px; }
   #colors.eraser-mode .chip .ic { display: none; }
+  #colors { min-width: 96px; }
 }
 @media (max-width: 360px) {
+  .tpl-opt { font-size: 10px; }
+  #colors { min-width: 0; }
   .tool { width: 34px; }
   .swatch { width: 28px; min-width: 28px; }
   .swatch::before { width: 20px; height: 20px; }
