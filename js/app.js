@@ -1232,7 +1232,6 @@ function bindInput() {
   if (/[?&]debug/.test(location.search)) {
     for (const t of ['pointerdown', 'pointerup', 'pointercancel']) sc.addEventListener(t, (e) => debugCount(`${t.slice(7)}:${e.pointerType}`), true);
   }
-  bindFingerTaps(sc);
   sc.addEventListener('pointerdown', onDown);
   sc.addEventListener('pointermove', onMove);
   sc.addEventListener('pointerup', onUp);
@@ -1296,52 +1295,6 @@ function debugGap(how, dt, dist, ok) {
   debugGaps.unshift(`${how} ${Math.round(dt)}ms ${Math.round(dist)}px ${ok ? 'つないだ' : '別の線'}`);
   debugGaps.length = Math.min(debugGaps.length, 8);
   debugCount(ok ? 'joined' : 'notjoined');
-}
-
-// 2本指で軽くたたくと元に戻す、3本指でやり直す。
-// 書いた直後(手のひらとして指を無視している間)や「指で書く」のときも効くように、他の処理とは別に見張る
-function bindFingerTaps(sc) {
-  const pts = new Map();
-  let tap = null;
-  sc.addEventListener('pointerdown', (e) => {
-    if (e.pointerType !== 'touch') return;
-    if (active && active.pen) { tap = null; return; } // ペンで書いている最中の指は手のひら
-    if (!pts.size) tap = { t: performance.now(), n: 0, bad: false };
-    pts.set(e.pointerId, { x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY });
-    if (!tap) return;
-    tap.n = Math.max(tap.n, pts.size);
-    if (e.width > 45 || e.height > 45) tap.bad = true; // 接する面が大きいのは手のひら
-  }, true);
-  sc.addEventListener('pointermove', (e) => {
-    const p = pts.get(e.pointerId);
-    if (!p) return;
-    p.x = e.clientX; p.y = e.clientY;
-    if (tap && Math.hypot(p.x - p.x0, p.y - p.y0) > 12) tap.bad = true;
-  }, true);
-  const up = (e) => {
-    const p = pts.get(e.pointerId);
-    if (!p) return;
-    // 最初の指が離れた時点で決める
-    if (tap && tap.n >= 2) {
-      const t = tap;
-      tap = null;
-      const list = [...pts.values()];
-      const spread = Math.max(...list.map((a) => Math.max(...list.map((b) => Math.hypot(a.x - b.x, a.y - b.y)))));
-      if (e.type === 'pointerup' && !t.bad && performance.now() - t.t < 350 && spread < 260) {
-        // 「指で書く」で1本目の指が書き始めていた線は捨てる
-        if (active && active.kind === 'draw' && !active.pen) { cancelAnimationFrame(liveFrame); paintLive(active.v, ''); active = null; }
-        touches.clear();
-        pinch = null;
-        $('#pages').style.transform = '';
-        stopInertia();
-        if (t.n === 2) undo(); else redo();
-      }
-    }
-    pts.delete(e.pointerId);
-    if (!pts.size) tap = null;
-  };
-  sc.addEventListener('pointerup', up, true);
-  sc.addEventListener('pointercancel', up, true);
 }
 
 function pagePoint(v, e) {
