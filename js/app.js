@@ -709,8 +709,9 @@ let pinch = null, inertia = null, lastPenTime = 0, liveFrame = 0;
 // ペンの入力がいったん途切れる(pointercancel / pointerup)ことがある。すぐに同じ場所から
 // 続きが来たら同じ線としてつなぐため、確定を少し待つ。
 let penPending = null;
-// pointerup(本当に離したかもしれない)は厳しめ、pointercancel(システムが止めた)はゆるめに待つ
-const PEN_JOIN = { up: { ms: 120, px: 48 }, cancel: { ms: 400, px: 64 } };
+// つなぐのは pointercancel(システムが止めた)のときだけ。pointerup は本当にペンを離したとみなす
+// (実機では、小さな文字を書くときの離してから次を書くまでが 70〜110ms ほどで、待つと別の線がつながってしまった)
+const PEN_JOIN = { cancel: { ms: 400, px: 64 } };
 const palmRecent = () => !!active || !!penPending || Date.now() - lastPenTime < 600;
 
 function bindInput() {
@@ -748,7 +749,7 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v11\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v12\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 書いている線の入力の中身(1回の move にまとめられた点の数、座標が整数か、筆圧)
 const debugOn = /[?&]debug/.test(location.search);
@@ -1004,9 +1005,9 @@ async function onUp(e) {
     return;
   }
   clearTimeout(a.holdTimer);
-  if (e.pointerType === 'pen' && !a.shaped && a.d.pts.length) {
+  if (e.pointerType === 'pen' && e.type === 'pointercancel' && !a.shaped && a.d.pts.length) {
     const [x, y] = a.lastXY || [e.clientX, e.clientY];
-    const how = e.type === 'pointercancel' ? 'cancel' : 'up';
+    const how = 'cancel';
     penPending = { a, x, y, how, t: performance.now(), timer: setTimeout(flushPen, PEN_JOIN[how].ms) };
     paintLive(a.v, strokeSvg('live', a.d, geometry(a.d)));
     lastPenTime = Date.now();

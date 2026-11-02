@@ -27,12 +27,12 @@ const { chromium } = require('playwright');
     ev('pointerup', id, 'pen', x + 363, y, 0);
     ev('pointerup', 50, 'touch', x + 200, y + 50, 0);
     await sleep(400);
-    // 線2,3: 本当にペンを離す(300ms あける)
+    // 線2,3: 本当にペンを離す(40ms ですぐ次を書いても別の線)
     for (let k = 0; k < 2; k++) {
       ev('pointerdown', 10 + k, 'pen', x, y + 60 + k * 10, 0.5);
       for (let i = 1; i < 20; i++) ev('pointermove', 10 + k, 'pen', x + i * 3, y + 60 + k * 10, 0.5);
       ev('pointerup', 10 + k, 'pen', x + 60, y + 60 + k * 10, 0);
-      await sleep(300);
+      await sleep(40);
     }
   }, { x: box.x + 60, y: box.y + 120 });
   await page.waitForTimeout(300);
