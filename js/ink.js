@@ -51,8 +51,10 @@ export function centerline(d) {
       }
     }
   };
-  smooth(0, 3);
-  smooth(1, 3);
+  // 位置: 約 1.5pt の幅でならす(ペン先の細かい揺れを消し、文字の形は残す)
+  const passes = Math.max(3, Math.round(4.5 / (step * step)));
+  smooth(0, passes);
+  smooth(1, passes);
   smooth(2, 8);
   return rs;
 }
@@ -71,8 +73,15 @@ export function outline(d, line = centerline(d)) {
     const last = side[side.length - 1];
     if (!last || i === m - 1 || (q[0] - last[0]) * tx + (q[1] - last[1]) * ty > 0) side.push(q);
   };
+  // 向き(法線)は前後 約2pt 離れた点から求める。隣の点だけで求めると、小さな揺れで
+  // 向きがぶれて輪郭に段ができる
+  let span = 1;
+  if (m > 2) {
+    const len = line.reduce((s, q, i) => (i ? s + dist(line[i - 1][0], line[i - 1][1], q[0], q[1]) : 0), 0);
+    span = Math.max(1, Math.min(4, Math.round(2 / (len / (m - 1) || 1))));
+  }
   for (let i = 0; i < m; i++) {
-    const a = line[Math.max(0, i - 1)], b = line[Math.min(m - 1, i + 1)];
+    const a = line[Math.max(0, i - span)], b = line[Math.min(m - 1, i + span)];
     let tx = b[0] - a[0], ty = b[1] - a[1];
     const tl = Math.hypot(tx, ty) || 1;
     tx /= tl; ty /= tl;

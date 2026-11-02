@@ -733,7 +733,7 @@ function bindInput() {
 const debugCounts = {};
 function debugCount(k) {
   if (!/[?&]debug/.test(location.search)) return;
-  debugCounts[k] = (debugCounts[k] || 0) + 1;
+  if (k) debugCounts[k] = (debugCounts[k] || 0) + 1;
   let el = document.getElementById('debug-box');
   if (!el) {
     el = document.createElement('pre');
@@ -741,8 +741,23 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v7\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v8\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
+// 書いている線の入力の中身(1回の move にまとめられた点の数、座標が整数か、筆圧)
+const debugOn = /[?&]debug/.test(location.search);
+const dbgIn = { frames: 0, co: 0, coInt: 0, mainInt: 0, p0: 0, pr: new Set() };
+function debugInput(e, evs) {
+  const isInt = (ev) => Number.isInteger(ev.clientX) && Number.isInteger(ev.clientY);
+  dbgIn.frames++;
+  dbgIn.co += evs.length;
+  dbgIn.coInt += evs.filter(isInt).length;
+  if (isInt(e)) dbgIn.mainInt++;
+  for (const ev of evs) { if (!(ev.pressure > 0)) dbgIn.p0++; dbgIn.pr.add(Math.round(ev.pressure * 1000)); }
+  const last = evs[evs.length - 1];
+  debugCounts['move'] = `${dbgIn.frames} 点/回 ${(dbgIn.co / dbgIn.frames).toFixed(1)} 整数 ${dbgIn.coInt}/${dbgIn.co} 本体整数 ${dbgIn.mainInt} 筆圧0 ${dbgIn.p0} 筆圧の種類 ${dbgIn.pr.size} 最後とずれ ${last ? Math.hypot(last.clientX - e.clientX, last.clientY - e.clientY).toFixed(2) : '-'}`;
+  if (dbgIn.frames % 10 === 0) debugCount(null);
+}
+
 // ペンが途切れて再開したときの間隔(時間・距離・つないだか)
 const debugGaps = [];
 function debugGap(how, dt, dist, ok) {
@@ -846,6 +861,7 @@ function onMove(e) {
   }
   const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
   const a = active;
+  if (debugOn && a.kind === 'draw') debugInput(e, evs);
   for (const ev of evs.length ? evs : [e]) {
     if (a.kind === 'erase') eraseAt(ev);
     else if (a.kind === 'draw') addPoint(ev);
@@ -887,7 +903,7 @@ function addPoint(e) {
   if (d.pr) {
     p = e.pressure > 0 ? e.pressure : (n0 ? d.pts[d.pts.length - 1] : 0.5);
   }
-  d.pts.push(Math.round(x * 10) / 10, Math.round(y * 10) / 10, Math.round(p * 100) / 100);
+  d.pts.push(Math.round(x * 100) / 100, Math.round(y * 100) / 100, Math.round(p * 100) / 100);
   // 図形補正: ペンを止めたら図形に整える
   if (S.shapes && S.tool === 'pen') {
     clearTimeout(a.holdTimer);
