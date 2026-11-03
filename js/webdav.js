@@ -67,7 +67,9 @@ function planSend(own, fresh, st) {
       const gn = !!(o.p && o.p.s && o.p.s.src === 'goodnotes');
       if (!gn && !(o.t === 'page.add' && fileRefs(o).length)) continue;
       const create = own.find((x) => x.n === o.n && x.t === 'note.create' && x.c <= o.c);
-      start = create && (gn || create.c + 1 === o.c) ? create : o;
+      // 作成から o までのあいだのそのノートの op がページの追加だけなら、取り込みで作ったノート(1ページ目が白紙の GoodNotes など)
+      const onlyPages = create && own.every((x) => x.n !== o.n || x.c <= create.c || x.c >= o.c || x.t === 'page.add');
+      start = create && (gn || onlyPages) ? create : o;
       break;
     }
     if (start) return { from: start.c, to, out: own.filter((o) => o.c >= start.c && o.c <= to), resend: true };
@@ -254,7 +256,14 @@ export async function syncNow(manual = false) {
           const head = await dav('HEAD', name, { ok: [200, 404] });
           if (head.res.status === 404) {
             const f = await db.getFile(ref.hash);
-            if (f) await dav('PUT', name, { body: f.data, headers: { 'Content-Type': ref.type } });
+            try {
+              if (f) await dav('PUT', name, { body: f.data, headers: { 'Content-Type': ref.type } });
+            } catch (e) {
+              if (e.status !== 413) throw e;
+              // サーバーの大きさの上限を超えるファイル: このファイルは送らずに、変更は送る(ほかの端末ではこのページの背景・画像だけが出ない)
+              st.tooBig = st.tooBig || [];
+              if (!st.tooBig.includes(ref.hash)) st.tooBig.push(ref.hash);
+            }
           }
           st.sentFiles.push(ref.hash);
         }
@@ -263,12 +272,18 @@ export async function syncNow(manual = false) {
       await dav('PUT', `ops/${me}/${String(plan.from).padStart(9, '0')}-${String(plan.to).padStart(9, '0')}.json`, { body, headers: { 'Content-Type': 'application/json' } });
     };
     // ふつうの送信: 大きくなりすぎないように(サーバーの上限・遅い回線)、約500KBずつのファイルに分け、送れるたびに進める
+    const enc = new TextEncoder();
     const sendPlain = async (ops) => {
       let i = 0;
       while (i < ops.length) {
         const part = [];
         let bytes = 0;
-        while (i < ops.length && (!part.length || bytes < 500_000)) { bytes += JSON.stringify(ops[i]).length; part.push(ops[i++]); }
+        while (i < ops.length) {
+          const b = enc.encode(JSON.stringify(ops[i])).length;
+          if (part.length && bytes + b > 500_000) break;
+          bytes += b;
+          part.push(ops[i++]);
+        }
         const to = part[part.length - 1].c;
         await put({ from: st.sentC + 1, to, out: part });
         st.sentC = to;
@@ -305,9 +320,11 @@ export async function syncNow(manual = false) {
         await db.setMeta('davState', st);
       }
     } catch (e) {
-      if (e instanceof TypeError) throw e;
+      // 接続できないとき(TypeError)も続ける。本当にオフラインなら次の一覧で止まる。
+      // (大きすぎて断られた応答に CORS のヘッダーがないと、ブラウザでは接続できないときと同じ TypeError になるため)
       console.warn('送信に失敗しました', e);
       sendErr = e;
+      if (e.status === 404 || e.status === 409) dirsReady = ''; // フォルダが消されていたら、次の同期で作り直す
     }
     if (gapSince) schedule(15_000); // 抜けが埋まったか、また見に来る
 
@@ -400,6 +417,8 @@ export async function syncNow(manual = false) {
         if (r === true) { changed.add(m.n); got++; continue; }
         // サーバーにずっと無いファイルは、50回試したらあきらめる(毎回取りに行き続けないように)。時間切れは数えない
         if (r !== 'later') m.tries = (m.tries || 0) + 1;
+        else m.later = (m.later || 0) + 1; // 時間切れが続くファイルも、200回であきらめる
+        if ((m.later || 0) >= 200) continue;
         if ((m.tries || 0) < 50) still.push(m);
       }
       st.missing = still;
@@ -414,7 +433,8 @@ export async function syncNow(manual = false) {
       if (manual) { st.lost = 0; await db.setMeta('davState', st); } // 手動の同期で知らせたら消す
     }
     if (gapSince) note += '。保存の終わっていない変更があるので、送るのを少し待っています';
-    if (sendErr) note += `。この端末の変更を送れませんでした(${sendErr.timeout ? '時間切れ' : sendErr.message})。次の同期でもう一度送ります`;
+    if (sendErr) note += `。この端末の変更を送れませんでした(${sendErr.timeout ? '時間切れ' : sendErr instanceof TypeError ? 'サーバーに断られたか、接続が切れました' : sendErr.message})。次の同期でもう一度送ります`;
+    if (st.tooBig && st.tooBig.length) note += `。PDF・画像のうち ${st.tooBig.length} 個はサーバーの大きさの上限を超えたので送れませんでした`;
     onStatus(`クラウド同期: ${time} に同期しました` + (manual ? `(送信 ${sent}件・受信 ${got}件)` : '') + note);
     if (got) onRemoteChange(changed);
   } catch (e) {

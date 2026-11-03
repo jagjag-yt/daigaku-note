@@ -55,6 +55,10 @@ test('送り直しは、以前の版で GoodNotes を取り込んだ端末だけ
   const added = [op(1, 'a'), { c: 2, n: 'a', t: 'page.add', p: { page: { id: 'p', bg: { type: 'blank' } } } }, op(3, 'a', 'pen'), { c: 4, n: 'a', t: 'page.add', p: { page: { id: 'q', bg: { type: 'pdf', hash: 'h', page: 1 } } } }, op(5, 'a', 'pen')];
   p = planSend(added, added.slice(4), { sentC: 4 });
   assert.deepEqual([p.from, p.to, p.resend], [4, 5, true]);
+  // 1ページ目が白紙の取り込み(作成・白紙のページ・ほかのノートへの書き込み・PDF のページ): 作成から
+  const blankFirst = [op(10, 'g'), { c: 11, n: 'g', t: 'page.add', p: { page: { id: 'b', bg: { type: 'blank' } } } }, op(12, 'a', 'pen'), { c: 13, n: 'g', t: 'page.add', p: { page: { id: 'q', bg: { type: 'pdf', hash: 'h', page: 2 } } } }, op(14, 'a', 'pen'), op(15, 'a', 'pen')];
+  p = planSend(blankFirst, blankFirst.slice(5), { sentC: 14 });
+  assert.deepEqual([p.from, p.to], [10, 15]);
   // 送るものがなければ何もしない
   assert.equal(planSend(own, [], { sentC: 7 }), null);
 });
