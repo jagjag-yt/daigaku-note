@@ -48,6 +48,7 @@ const S = {
   fit: true, // 幅に合わせた拡大率のままか(手で拡大したら false)
   fingerDraw: false,
   shapes: true,
+  pressure: true, // ペンの筆圧で線の太さを変える
   undo: [],
   redo: [],
   views: new Map(), // pageId -> view
@@ -67,6 +68,7 @@ async function init() {
   const prefs = (await db.getMeta('prefs')) || {};
   if (prefs.fingerDraw) S.fingerDraw = true;
   if (prefs.shapes === false) S.shapes = false;
+  if (prefs.pressure === false) S.pressure = false;
   if (prefs.pen) S.pen = prefs.pen;
   if (prefs.marker) S.marker = prefs.marker;
   if (prefs.sidebar) S.sidebar = true;
@@ -107,7 +109,7 @@ async function init() {
 }
 
 function savePrefs() {
-  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapes: S.shapes, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool });
+  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapes: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool });
 }
 
 function route() {
@@ -858,6 +860,11 @@ function moreMenu(anchor) {
       savePrefs();
       toast(S.fingerDraw ? '指でも書けるようにしました' : 'ペンだけで書けるようにしました(指はスクロール)');
     } },
+    { icon: 'pen', label: '筆圧で太さを変える', id: 'pressure', on: S.pressure, onClick: () => {
+      S.pressure = !S.pressure;
+      savePrefs();
+      toast(S.pressure ? '筆圧で線の太さが変わるようにしました(ペンのみ)' : '筆圧を使わず、一定の太さで書くようにしました');
+    } },
   ], close), { align: 'end' });
 }
 
@@ -1226,9 +1233,14 @@ function bindInput() {
   const sc = $('#scroller');
   // iPad Safari: Apple Pencil でスクロールしないようにする
   sc.addEventListener('touchstart', (e) => {
+    noteForce(e);
     if ([...e.touches].some((t) => t.touchType === 'stylus') || palmRecent()) e.preventDefault();
   }, { passive: false });
-  sc.addEventListener('touchmove', (e) => { if (active || touches.size) e.preventDefault(); }, { passive: false });
+  sc.addEventListener('touchmove', (e) => { noteForce(e); if (active || touches.size) e.preventDefault(); }, { passive: false });
+  // ペンを離したら force は使わない(すぐ次の線を書き始めたときに、前の線の値が混ざらないように)
+  const forceEnd = (e) => { if ([...e.changedTouches].some((t) => t.touchType === 'stylus')) penForce.t = 0; };
+  sc.addEventListener('touchend', forceEnd);
+  sc.addEventListener('touchcancel', forceEnd);
   if (/[?&]debug/.test(location.search)) {
     for (const t of ['pointerdown', 'pointerup', 'pointercancel']) sc.addEventListener(t, (e) => debugCount(`${t.slice(7)}:${e.pointerType}`), true);
   }
@@ -1257,11 +1269,11 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v13\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v16\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 書いている線の入力の中身(1回の move にまとめられた点の数、座標が整数か、筆圧)
 const debugOn = /[?&]debug/.test(location.search);
-const dbgIn = { frames: 0, co: 0, coInt: 0, mainInt: 0, p0: 0, pr: new Set(), skipped: 0, at: [0, 0, 0], old: 0, zig: 0, dup: 0 };
+const dbgIn = { tf: new Set(), src: '-', mp: new Set(), frames: 0, co: 0, coInt: 0, mainInt: 0, p0: 0, pr: new Set(), skipped: 0, at: [0, 0, 0], old: 0, zig: 0, dup: 0 };
 function debugInput(e, evs) {
   const isInt = (ev) => Number.isInteger(ev.clientX) && Number.isInteger(ev.clientY);
   dbgIn.frames++;
@@ -1270,8 +1282,9 @@ function debugInput(e, evs) {
   if (isInt(e)) dbgIn.mainInt++;
   evs.forEach((ev, i) => { if (isInt(ev)) dbgIn.at[i === 0 ? 0 : i === evs.length - 1 ? 2 : 1]++; });
   for (const ev of evs) { if (!(ev.pressure > 0)) dbgIn.p0++; dbgIn.pr.add(Math.round(ev.pressure * 1000)); }
+  dbgIn.mp.add(Math.round(e.pressure * 1000));
   const last = evs[evs.length - 1];
-  debugCounts['move'] = `${dbgIn.frames} 点/回 ${(dbgIn.co / dbgIn.frames).toFixed(1)} 整数 ${dbgIn.coInt}/${dbgIn.co} 本体整数 ${dbgIn.mainInt} 筆圧0 ${dbgIn.p0} 筆圧の種類 ${dbgIn.pr.size} 最後とずれ ${last ? Math.hypot(last.clientX - e.clientX, last.clientY - e.clientY).toFixed(2) : '-'}\n整数の位置(先頭/途中/最後) ${dbgIn.at.join('/')} 使わなかった点 ${dbgIn.skipped}\n古い点 ${dbgIn.old} 同じ位置 ${dbgIn.dup} 折り返し ${dbgIn.zig}`;
+  debugCounts['move'] = `${dbgIn.frames} 点/回 ${(dbgIn.co / dbgIn.frames).toFixed(1)} 整数 ${dbgIn.coInt}/${dbgIn.co} 本体整数 ${dbgIn.mainInt} 筆圧0 ${dbgIn.p0} 筆圧の種類 ${dbgIn.pr.size} 最後とずれ ${last ? Math.hypot(last.clientX - e.clientX, last.clientY - e.clientY).toFixed(2) : '-'}\n整数の位置(先頭/途中/最後) ${dbgIn.at.join('/')} 使わなかった点 ${dbgIn.skipped}\n古い点 ${dbgIn.old} 同じ位置 ${dbgIn.dup} 折り返し ${dbgIn.zig}\n筆圧の種類 本体 ${dbgIn.mp.size} touch.force ${dbgIn.tf.size} 使っているもの ${dbgIn.src}`;
   if (dbgIn.frames % 10 === 0) debugCount(null);
 }
 
@@ -1295,6 +1308,33 @@ function debugGap(how, dt, dist, ok) {
   debugGaps.unshift(`${how} ${Math.round(dt)}ms ${Math.round(dist)}px ${ok ? 'つないだ' : '別の線'}`);
   debugGaps.length = Math.min(debugGaps.length, 8);
   debugCount(ok ? 'joined' : 'notjoined');
+}
+
+// ---------- 筆圧 ----------
+// iPad Safari では Apple Pencil でも pointer イベントの pressure が一定(0.5)のままのことがある(実機で確認)。
+// そこでタッチイベントの force(Apple Pencil では 0〜1)も覚えておき、本物の筆圧が来ているほうを使う。
+// 「本物」とみなすのは 0 と 0.5 以外の値が一度でも来たとき(0.5 は筆圧のない機器の決まった値)。
+const penForce = { v: 0, t: 0 }; // 最後に来た Apple Pencil の force と、その時刻
+const pressureOk = { co: false, main: false }; // まとめて届く点 / イベント本体 の pressure が本物か
+function noteForce(e) {
+  for (const t of e.changedTouches) {
+    if (t.touchType !== 'stylus' || !(t.force > 0)) continue;
+    penForce.v = Math.min(1, t.force);
+    penForce.t = performance.now();
+    if (debugOn) dbgIn.tf.add(Math.round(penForce.v * 100));
+  }
+}
+// 1つの点の筆圧(0〜1)。本物の筆圧がわからなければ null
+function penPressure(ev, main) {
+  const real = (p) => p > 0 && p !== 0.5;
+  if (real(ev.pressure)) pressureOk.co = true;
+  if (main && real(main.pressure)) pressureOk.main = true;
+  let p = null, src = '';
+  if (pressureOk.co) { p = ev.pressure > 0 ? ev.pressure : null; src = 'pointer'; }
+  else if (pressureOk.main) { p = main && main.pressure > 0 ? main.pressure : null; src = 'pointer本体'; }
+  else if (penForce.t && performance.now() - penForce.t < 150) { p = penForce.v; src = 'touch.force'; }
+  if (debugOn && src) dbgIn.src = src;
+  return p == null ? null : Math.min(1, p);
 }
 
 function pagePoint(v, e) {
@@ -1408,7 +1448,7 @@ function onMove(e) {
       else if (a.pen && (a.frac || evs.some((x) => !Number.isInteger(x.clientX)))) { if (debugOn) dbgIn.skipped++; continue; }
       if (debugOn) debugZig(a, ev);
       if (ev.timeStamp) a.lastTs = ev.timeStamp;
-      addPoint(ev);
+      addPoint(ev, e);
     }
     else if (a.kind === 'lasso') {
       const p = pagePoint(a.v, ev);
@@ -1434,7 +1474,8 @@ function lassoSvg(poly) {
   return `<path d="${d}" fill="rgba(47,93,158,.06)" stroke="#2f5d9e" stroke-width="1" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>`;
 }
 
-function addPoint(e) {
+// main: まとめて届いた点のときの、イベント本体(筆圧の取得に使う)
+function addPoint(e, main = e) {
   const a = active, d = a.d;
   if (a.shaped) return;
   const [x, y] = pagePoint(a.v, e);
@@ -1443,10 +1484,21 @@ function addPoint(e) {
     const lx = d.pts[d.pts.length - 3], ly = d.pts[d.pts.length - 2];
     if (Math.hypot(x - lx, y - ly) < 0.5 / S.zoom) return; // 近すぎる点は捨てる
   }
+  // 筆圧。本物の筆圧が来たら、その線は太さが変わる線(pr: 2)にする。それまでに置いた点(書き始めは
+  // force がまだ届いていないことがある)には、最初に来た筆圧を入れておく。
+  // 本物の筆圧が来ない機器や、筆圧をオフにしているときは、今までどおり一定の太さ(p = 0.5)のまま。
   // Safari は途中の点で筆圧 0 を返すことがあるので、そのときは直前の筆圧を使う
   let p = 0.5;
   if (d.pr) {
-    p = e.pressure > 0 ? e.pressure : (n0 ? d.pts[d.pts.length - 1] : 0.5);
+    const q = S.pressure && a.pen ? penPressure(e, main) : null;
+    if (q != null) {
+      if (d.pr !== 2) {
+        d.pr = 2;
+        const rq = Math.round(q * 100) / 100;
+        for (let i = 2; i < d.pts.length; i += 3) d.pts[i] = rq;
+      }
+      p = q;
+    } else if (d.pr === 2 && n0) p = d.pts[d.pts.length - 1];
   }
   d.pts.push(Math.round(x * 100) / 100, Math.round(y * 100) / 100, Math.round(p * 100) / 100);
   // 図形補正: ペンを止めたら図形に整える
