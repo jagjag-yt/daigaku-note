@@ -3,9 +3,10 @@ import http from 'node:http';
 const port = Number(process.argv[2]) || 8125;
 const store = new Map(); // path -> Buffer | 'DIR'
 store.set('/dav/', 'DIR');
-// フォルダの ETag(Nextcloud と同じく、中のどこかが変わると親のフォルダも全部変わる)。NOETAG=1 なら返さない
+// フォルダの ETag(Nextcloud と同じく、中のどこかが変わると親のフォルダも全部変わる)。NOETAG=1 なら返さない。
+// FIXEDTAG=1 なら、フォルダの ETag は作ったときのまま変わらない(ETag の付け方があやしいサーバーのまね)
 const ver = new Map();
-const bump = (p) => { for (let d = p.replace(/[^/]+\/?$/, ''); d.startsWith('/dav/'); d = d.replace(/[^/]+\/$/, '')) ver.set(d, (ver.get(d) || 0) + 1); };
+const bump = (p) => { if (process.env.FIXEDTAG) return; for (let d = p.replace(/[^/]+\/?$/, ''); d.startsWith('/dav/'); d = d.replace(/[^/]+\/$/, '')) ver.set(d, (ver.get(d) || 0) + 1); };
 const etag = (k) => (process.env.NOETAG ? '' : `<d:getetag>"${store.get(k) === 'DIR' ? 'd' + (ver.get(k) || 0) : 'f' + store.get(k).length}"</d:getetag>`);
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,PUT,HEAD,MKCOL,PROPFIND,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization,Depth,Content-Type', 'Access-Control-Expose-Headers': 'ETag' };
 http.createServer(async (req, res) => {

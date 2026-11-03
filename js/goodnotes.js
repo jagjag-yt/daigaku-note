@@ -582,8 +582,11 @@ export async function importGoodnotes(file, recorder) {
   }
 
   // 3) 大学ノートの変更記録として書き込む
+  // 番号(端末内の連番)は、全部そろってから一度に取る。取り込みの途中(ファイルの読み書きを待つ間)に番号を取っておくと、
+  // その間に書いた線が先に同期で送られ、取り込んだ分の番号が「送り済み」の後ろに取り残されるため
+  const later = (n, t, p) => ({ n, t, p });
   const noteId = newId();
-  const ops = [recorder.make(noteId, 'note.create', { title })];
+  const ops = [later(noteId, 'note.create', { title })];
   const pageIds = [];
   let strokes = 0, images = 0, texts = 0, skippedImages = 0;
   // 画像を保存する(同じ添付は一度だけ)
@@ -608,7 +611,7 @@ export async function importGoodnotes(file, recorder) {
     const pageId = newId();
     pageIds.push(pageId);
     const bg = hash ? { type: 'pdf', hash, page: paper.page } : { type: 'blank', ruling: 'none' };
-    ops.push(recorder.make(noteId, 'page.add', { page: { id: pageId, w: paper.w, h: paper.h, order: i + 1, bg } }));
+    ops.push(later(noteId, 'page.add', { page: { id: pageId, w: paper.w, h: paper.h, order: i + 1, bg } }));
 
     const notesName = 'notes/' + uuidPlusOne(gid);
     const data = (await zip.get(notesName)) || (await zip.get('notes/' + gid));
@@ -642,14 +645,14 @@ export async function importGoodnotes(file, recorder) {
       if (it.kind === 'image') {
         const img = await saveImage(it.att);
         if (!img) { skippedImages++; continue; }
-        ops.push(recorder.make(noteId, 'item.add', {
+        ops.push(later(noteId, 'item.add', {
           s: { id: newId(), pageId, tool: 'image', hash: img.hash, mime: img.type, color: '#000000', width: 0, pr: false, pts: cornerPts(it.x, it.y, it.w, it.h), src: 'goodnotes' },
         }));
         images++;
       } else {
         // 文字も枠も塗りもないテキストボックスは、見えないので取り込まない
         if (!it.text.trim() && !it.border && !it.fill) continue;
-        ops.push(recorder.make(noteId, 'item.add', {
+        ops.push(later(noteId, 'item.add', {
           s: {
             id: newId(), pageId, tool: 'text', text: it.text, size: Math.round(it.size * 100) / 100, font: it.font, color: it.color,
             fill: it.fill, border: it.border, radius: it.radius || 0, pad: it.pad, padT: it.padT, wrap: it.wrap, foot: it.foot || '',
@@ -690,11 +693,12 @@ export async function importGoodnotes(file, recorder) {
         for (let k = 0; k < pts.length; k += 2) s.pts.push(r2(pts[k] + ox), r2(pts[k + 1] + oy), 0.5);
       }
       if (!s.pts.length) continue;
-      ops.push(recorder.make(noteId, 'stroke.add', { s }));
+      ops.push(later(noteId, 'stroke.add', { s }));
       strokes++;
     }
   }
-  await db.putOps(ops, recorder.clock);
+  const made = ops.map((o) => recorder.make(o.n, o.t, o.p));
+  await db.putOps(made, recorder.clock);
   return { noteId, title, pages: pageList.length, strokes, images, texts, skippedImages, pageIds };
 }
 

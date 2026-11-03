@@ -16,3 +16,17 @@ test('以前の版の「読んだファイルの一覧」を端末ごとのカ�
   assert.equal(st.seen, undefined);
   assert.equal(st.sentC, 3);
 });
+
+test('自分の op は、送り済みの続きから抜けなく並んでいるところまで送る', () => {
+  const { unsent } = _test;
+  const ops = (...cs) => cs.map((c) => ({ c }));
+  // 取り込みの途中で 3〜4 番がまだ保存されていない: 2 番までしか送らない
+  let r = unsent(ops(1, 2, 5, 6), 0);
+  assert.deepEqual(r.fresh.map((o) => o.c), [1, 2]);
+  assert.deepEqual(r.pending.map((o) => o.c), [1, 2, 5, 6]);
+  r = unsent(ops(1, 2, 3, 4, 5), 2);
+  assert.deepEqual(r.fresh.map((o) => o.c), [3, 4, 5]);
+  r = unsent(ops(1, 2, 5), 2);
+  assert.deepEqual(r.fresh, []);
+  assert.deepEqual(r.pending.map((o) => o.c), [5]);
+});
