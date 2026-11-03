@@ -1195,6 +1195,7 @@ function inkSvg(e) {
   return isItem(d) ? itemSvg(e.id, d, e.off) : strokeSvg(e.id, d, geoOf(e), e.off);
 }
 // 画像を読み終えたら、その画像のあるページとサムネイルを描き直す
+let laterHashes = null;
 function onImageLoaded(hashes) {
   if (!S.note) return;
   const pages = new Set();
@@ -1203,7 +1204,12 @@ function onImageLoaded(hashes) {
     const v = S.views.get(id);
     // 書いている・消している・動かしている最中のページは、終わってから描き直す
     if (v && v.ready && ((active && active.v === v) || (penPending && penPending.a.v === v))) {
-      setTimeout(() => onImageLoaded(hashes), 400);
+      // 書き終わってから1回だけ描き直す(先送りした画像はまとめておく)
+      if (!laterHashes) {
+        laterHashes = new Set();
+        setTimeout(() => { const hs = laterHashes; laterHashes = null; onImageLoaded(hs); }, 400);
+      }
+      for (const h of hashes) laterHashes.add(h);
       continue;
     }
     if (v && v.ready) paintInk(v);

@@ -94,8 +94,9 @@ async function list(path) {
 async function fetchFile(ref) {
   if (await db.hasFile(ref.hash)) return true;
   const name = `${ref.hash}.${fileExt(ref.type)}`;
-  const res = await dav('GET', 'files/' + name, { ok: [200, 404] });
-  if (res.status !== 200) return false;
+  // 404 以外の失敗(403・500 など)でも、このファイルだけ飛ばして次の同期で取り直す
+  const res = await dav('GET', 'files/' + name, { ok: [200, 404] }).catch((e) => { if (e instanceof TypeError) throw e; return null; });
+  if (!res || res.status !== 200) return false;
   await db.putFile({ hash: ref.hash, name, type: ref.type, data: new Blob([await res.blob()], { type: ref.type }) });
   return true;
 }
