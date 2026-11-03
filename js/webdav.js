@@ -59,13 +59,17 @@ function planSend(own, fresh, st) {
   if (!st.resent && st.sentC > 0) {
     // 取り込んだノート: 線などに src: 'goodnotes' の印があるか、PDF の背景のページがある(線のない GoodNotes のノート)。
     // (表紙の色の有無では見分けない。以前の版では手で作ったノートも表紙の色を持っていなかった)
-    const imported = new Set();
-    for (const o of own) {
-      if (o.c > st.sentC) break;
-      if (o.p && o.p.s && o.p.s.src === 'goodnotes') imported.add(o.n);
-      else if (o.t === 'page.add' && fileRefs(o).length) imported.add(o.n);
+    // 送り直しの始まり: GoodNotes の印のある線ならそのノートの作成から。PDF のページなら、作成のすぐ次の番号のとき
+    // (取り込みで作ったノート)は作成から、既存のノートに PDF のページを足しただけならそのページから(古いノートの全部を送り直さないように)
+    let start = null;
+    for (let i = 0; i < own.length && own[i].c <= st.sentC; i++) {
+      const o = own[i];
+      const gn = !!(o.p && o.p.s && o.p.s.src === 'goodnotes');
+      if (!gn && !(o.t === 'page.add' && fileRefs(o).length)) continue;
+      const create = own.find((x) => x.n === o.n && x.t === 'note.create' && x.c <= o.c);
+      start = create && (gn || create.c + 1 === o.c) ? create : o;
+      break;
     }
-    const start = own.find((o) => o.c <= st.sentC && imported.has(o.n));
     if (start) return { from: start.c, to, out: own.filter((o) => o.c >= start.c && o.c <= to), resend: true };
   }
   return { from: st.sentC + 1, to, out: fresh, resend: false };
@@ -136,7 +140,7 @@ class Timeout extends Error {
 async function dav(method, path, { body, headers = {}, ok = [200, 201, 204, 207], read = null } = {}) {
   const auth = 'Basic ' + btoa(unescape(encodeURIComponent(`${cfg.user}:${cfg.pass || ''}`)));
   const ctl = new AbortController();
-  const size = body ? body.size || body.length || 0 : 0;
+  const size = !body ? 0 : typeof body === 'string' ? new Blob([body]).size : body.size || body.byteLength || 0; // バイト数
   let t = 0;
   const arm = (ms) => { clearTimeout(t); t = setTimeout(() => ctl.abort(), ms); };
   arm(60_000 + size / 20);
@@ -203,7 +207,9 @@ async function fetchFile(ref) {
   const name = `${ref.hash}.${fileExt(ref.type)}`;
   // 404 以外の失敗(403・500 など)でも、このファイルだけ飛ばして次の同期で取り直す
   // 時間切れ(遅い回線で大きなファイル)なら、このファイルだけ後回し
-  const r = await dav('GET', 'files/' + name, { ok: [200, 404], read: 'blob' }).catch((e) => { if (e instanceof TypeError) throw e; return null; });
+  let later = false;
+  const r = await dav('GET', 'files/' + name, { ok: [200, 404], read: 'blob' }).catch((e) => { if (e instanceof TypeError) throw e; later = !!e.timeout; return null; });
+  if (later) return 'later'; // 時間切れ: 「サーバーに無い」ではないので、あきらめるまでの回数に数えない
   if (!r || r.res.status !== 200) return false;
   await db.putFile({ hash: ref.hash, name, type: ref.type, data: new Blob([r.data], { type: ref.type }) });
   return true;
@@ -256,31 +262,52 @@ export async function syncNow(manual = false) {
       const body = JSON.stringify({ format: FORMAT, version: 1, device: me, ops: plan.out });
       await dav('PUT', `ops/${me}/${String(plan.from).padStart(9, '0')}-${String(plan.to).padStart(9, '0')}.json`, { body, headers: { 'Content-Type': 'application/json' } });
     };
-    let plan = planSend(own, fresh, st);
-    if (plan && plan.resend) {
-      // 送り直しは大きくなりうる。失敗したら(大きすぎて断られた・時間切れなど。ブラウザでは理由が分からないことも多い)
-      // 今回はふつうに送る。3回失敗したら送り直しはあきらめる
-      try { await put(plan); } catch (e) {
-        console.warn('送り直しに失敗しました', e);
-        plan = planSend(own, fresh, { ...st, resent: true });
-        await put(plan); // 接続できないなら、ここで同期全体が失敗する(次の同期でもう一度。回数には数えない)
-        // ふつうの送信は通った = 送り直しだけが失敗した。この回だけ数える
-        st.resendTries = (st.resendTries || 0) + 1;
-        if (st.resendTries >= 3) st.resent = true;
-        st.sentC = plan.to;
-        sent = fresh.length;
+    // ふつうの送信: 大きくなりすぎないように(サーバーの上限・遅い回線)、約500KBずつのファイルに分け、送れるたびに進める
+    const sendPlain = async (ops) => {
+      let i = 0;
+      while (i < ops.length) {
+        const part = [];
+        let bytes = 0;
+        while (i < ops.length && (!part.length || bytes < 500_000)) { bytes += JSON.stringify(ops[i]).length; part.push(ops[i++]); }
+        const to = part[part.length - 1].c;
+        await put({ from: st.sentC + 1, to, out: part });
+        st.sentC = to;
+        sent += part.length;
         await db.setMeta('davState', st);
-        plan = null;
       }
-    } else if (plan) await put(plan);
-    if (plan) {
-      st.sentC = plan.to;
-      st.resent = true;
-      sent = fresh.length;
-      await db.setMeta('davState', st);
-    } else if (!st.resent && st.sentC === 0) {
-      st.resent = true; // 一度も送っていない端末には取り残しはない
-      await db.setMeta('davState', st);
+    };
+    // 送れなくても受け取りは続ける(送れないファイルがあっても、ほかの端末の変更は届くように)。接続できないときだけ全体を止める
+    let sendErr = null;
+    try {
+      const plan = planSend(own, fresh, st);
+      if (plan && plan.resend) {
+        // 送り直しは大きくなりうる。失敗したら(大きすぎて断られた・時間切れなど。ブラウザでは理由が分からないことも多い)
+        // 今回はふつうに送る。ふつうの送信は通ったのに送り直しだけ失敗したことが3回あったら、送り直しはあきらめる
+        let ok = false;
+        try { await put(plan); ok = true; } catch (e) { console.warn('送り直しに失敗しました', e); }
+        if (ok) {
+          st.sentC = plan.to;
+          st.resent = true;
+          sent = fresh.length;
+          await db.setMeta('davState', st);
+        } else {
+          await sendPlain(fresh); // 接続できないなら、ここで止まる(回数には数えない)
+          st.resendTries = (st.resendTries || 0) + 1;
+          if (st.resendTries >= 3) st.resent = true;
+          await db.setMeta('davState', st);
+        }
+      } else if (plan) {
+        await sendPlain(fresh);
+        st.resent = true;
+        await db.setMeta('davState', st);
+      } else if (!st.resent && st.sentC === 0) {
+        st.resent = true; // 一度も送っていない端末には取り残しはない
+        await db.setMeta('davState', st);
+      }
+    } catch (e) {
+      if (e instanceof TypeError) throw e;
+      console.warn('送信に失敗しました', e);
+      sendErr = e;
     }
     if (gapSince) schedule(15_000); // 抜けが埋まったか、また見に来る
 
@@ -288,6 +315,7 @@ export async function syncNow(manual = false) {
     const full = manual || !lastFull || Date.now() - lastFull >= FULL_EVERY;
     const changed = new Set();
     let got = 0, newer = false, broken = false, suspicious = false, trustworthy = false;
+    const missedNow = new Set(); // この同期で取れなかったファイル(手順3ですぐに取り直さない)
     for (const { name: dir, tag } of await list('ops/')) {
       if (!dir.endsWith('/') || dir === me + '/') continue;
       const dev = dir.slice(0, -1);
@@ -328,7 +356,7 @@ export async function syncNow(manual = false) {
         const ops = (json.ops || []).filter((o) => o && typeof o.id === 'string' && typeof o.l === 'number' && o.n && o.t);
         for (const op of ops) {
           for (const ref of fileRefs(op)) {
-            if (!(await fetchFile(ref))) addMissing(ref, op.n);
+            if ((await fetchFile(ref)) !== true) { addMissing(ref, op.n); missedNow.add(ref.hash); }
           }
           recorder.observe(op);
         }
@@ -367,10 +395,12 @@ export async function syncNow(manual = false) {
     if (st.missing && st.missing.length) {
       const still = [];
       for (const m of st.missing) {
-        if (await fetchFile(m)) { changed.add(m.n); got++; continue; }
-        // サーバーにずっと無いファイルは、50回試したらあきらめる(毎回取りに行き続けないように)
-        m.tries = (m.tries || 0) + 1;
-        if (m.tries < 50) still.push(m);
+        if (missedNow.has(m.hash)) { still.push(m); continue; }
+        const r = await fetchFile(m);
+        if (r === true) { changed.add(m.n); got++; continue; }
+        // サーバーにずっと無いファイルは、50回試したらあきらめる(毎回取りに行き続けないように)。時間切れは数えない
+        if (r !== 'later') m.tries = (m.tries || 0) + 1;
+        if ((m.tries || 0) < 50) still.push(m);
       }
       st.missing = still;
       await db.setMeta('davState', st);
@@ -384,6 +414,7 @@ export async function syncNow(manual = false) {
       if (manual) { st.lost = 0; await db.setMeta('davState', st); } // 手動の同期で知らせたら消す
     }
     if (gapSince) note += '。保存の終わっていない変更があるので、送るのを少し待っています';
+    if (sendErr) note += `。この端末の変更を送れませんでした(${sendErr.timeout ? '時間切れ' : sendErr.message})。次の同期でもう一度送ります`;
     onStatus(`クラウド同期: ${time} に同期しました` + (manual ? `(送信 ${sent}件・受信 ${got}件)` : '') + note);
     if (got) onRemoteChange(changed);
   } catch (e) {
