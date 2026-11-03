@@ -1420,8 +1420,9 @@ function onDown(e) {
     // ならす強さ: 画面上で約 2.5px 分。拡大して書くほど小さくして、小さな字の形を崩さない
     d.sm = Math.round(Math.max(0.3, Math.min(1.5, 2.5 / S.zoom)) * 100) / 100;
     active = { id: e.pointerId, v, kind: 'draw', pen: e.pointerType === 'pen', d, lastMove: performance.now() };
-    // 前の線の force を書き始めに使わない(touchend が届かなかったときの念のため)
-    if (active.pen) penForce.t = 0;
+    // 前の線の force を書き始めに使わない(touchend が届かなかったときの念のため)。
+    // 直前(50ms 以内)の値は、この線の touchstart が先に届いたものなので残す
+    if (active.pen && performance.now() - penForce.t > 50) penForce.t = 0;
     addPoint(e);
   }
 }
