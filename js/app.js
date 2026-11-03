@@ -1273,7 +1273,7 @@ function debugCount(k) {
 }
 // 書いている線の入力の中身(1回の move にまとめられた点の数、座標が整数か、筆圧)
 const debugOn = /[?&]debug/.test(location.search);
-const dbgIn = { tf: new Set(), src: '-', mp: new Set(), frames: 0, co: 0, coInt: 0, mainInt: 0, p0: 0, pr: new Set(), skipped: 0, at: [0, 0, 0], old: 0, zig: 0, dup: 0 };
+const dbgIn = { tf: [], src: '-', mp: new Set(), frames: 0, co: 0, coInt: 0, mainInt: 0, p0: 0, pr: new Set(), skipped: 0, at: [0, 0, 0], old: 0, zig: 0, dup: 0 };
 function debugInput(e, evs) {
   const isInt = (ev) => Number.isInteger(ev.clientX) && Number.isInteger(ev.clientY);
   dbgIn.frames++;
@@ -1284,8 +1284,16 @@ function debugInput(e, evs) {
   for (const ev of evs) { if (!(ev.pressure > 0)) dbgIn.p0++; dbgIn.pr.add(Math.round(ev.pressure * 1000)); }
   dbgIn.mp.add(Math.round(e.pressure * 1000));
   const last = evs[evs.length - 1];
-  debugCounts['move'] = `${dbgIn.frames} 点/回 ${(dbgIn.co / dbgIn.frames).toFixed(1)} 整数 ${dbgIn.coInt}/${dbgIn.co} 本体整数 ${dbgIn.mainInt} 筆圧0 ${dbgIn.p0} 筆圧の種類 ${dbgIn.pr.size} 最後とずれ ${last ? Math.hypot(last.clientX - e.clientX, last.clientY - e.clientY).toFixed(2) : '-'}\n整数の位置(先頭/途中/最後) ${dbgIn.at.join('/')} 使わなかった点 ${dbgIn.skipped}\n古い点 ${dbgIn.old} 同じ位置 ${dbgIn.dup} 折り返し ${dbgIn.zig}\n筆圧の種類 本体 ${dbgIn.mp.size} touch.force ${dbgIn.tf.size} 使っているもの ${dbgIn.src}`;
+  debugCounts['move'] = `${dbgIn.frames} 点/回 ${(dbgIn.co / dbgIn.frames).toFixed(1)} 整数 ${dbgIn.coInt}/${dbgIn.co} 本体整数 ${dbgIn.mainInt} 筆圧0 ${dbgIn.p0} 筆圧の種類 ${dbgIn.pr.size} 最後とずれ ${last ? Math.hypot(last.clientX - e.clientX, last.clientY - e.clientY).toFixed(2) : '-'}\n整数の位置(先頭/途中/最後) ${dbgIn.at.join('/')} 使わなかった点 ${dbgIn.skipped}\n古い点 ${dbgIn.old} 同じ位置 ${dbgIn.dup} 折り返し ${dbgIn.zig}\n筆圧の種類 本体 ${dbgIn.mp.size} touch.force ${dbgIn.tf.length} 使っているもの ${dbgIn.src}\nforce 最小/中央/最大 ${forceStats()}`;
   if (dbgIn.frames % 10 === 0) debugCount(null);
+}
+
+// 実機の force の分布(太さの式を決めるため)
+function debugForce(v) { dbgIn.tf.push(Math.round(v * 100) / 100); if (dbgIn.tf.length > 5000) dbgIn.tf.shift(); }
+function forceStats() {
+  if (!dbgIn.tf.length) return '-';
+  const s = [...dbgIn.tf].sort((x, y) => x - y);
+  return `${s[0]}/${s[s.length >> 1]}/${s[s.length - 1]}`;
 }
 
 // 点が行ったり来たりしていないか(短い間隔で向きが 120° 以上変わる)を数える
@@ -1313,26 +1321,27 @@ function debugGap(how, dt, dist, ok) {
 // ---------- 筆圧 ----------
 // iPad Safari では Apple Pencil でも pointer イベントの pressure が一定(0.5)のままのことがある(実機で確認)。
 // そこでタッチイベントの force(Apple Pencil では 0〜1)も覚えておき、本物の筆圧が来ているほうを使う。
-// 「本物」とみなすのは 0 と 0.5 以外の値が一度でも来たとき(0.5 は筆圧のない機器の決まった値)。
+// 「本物」とみなすのは、0 以外で 2 種類以上の値が来たとき。筆圧のないペン(USB-C の Apple Pencil など)は
+// 一定の値(0.5 や 1)しか返さないので、一定の太さのまま(以前と同じ見た目)にする。
 const penForce = { v: 0, t: 0 }; // 最後に来た Apple Pencil の force と、その時刻
-const pressureOk = { co: false, main: false }; // まとめて届く点 / イベント本体 の pressure が本物か
+const pressureSeen = { co: new Set(), main: new Set(), tf: new Set() }; // 来た値の種類(2 種類で打ち切り)
+const seen = (k, p) => { const st = pressureSeen[k]; if (p > 0 && st.size < 2) st.add(Math.round(p * 100)); return st.size >= 2; };
 function noteForce(e) {
   for (const t of e.changedTouches) {
     if (t.touchType !== 'stylus' || !(t.force > 0)) continue;
     penForce.v = Math.min(1, t.force);
     penForce.t = performance.now();
-    if (debugOn) dbgIn.tf.add(Math.round(penForce.v * 100));
+    seen('tf', penForce.v);
+    if (debugOn) debugForce(penForce.v);
   }
 }
 // 1つの点の筆圧(0〜1)。本物の筆圧がわからなければ null
 function penPressure(ev, main) {
-  const real = (p) => p > 0 && p !== 0.5;
-  if (real(ev.pressure)) pressureOk.co = true;
-  if (main && real(main.pressure)) pressureOk.main = true;
+  const coOk = seen('co', ev.pressure), mainOk = main ? seen('main', main.pressure) : pressureSeen.main.size >= 2;
   let p = null, src = '';
-  if (pressureOk.co) { p = ev.pressure > 0 ? ev.pressure : null; src = 'pointer'; }
-  else if (pressureOk.main) { p = main && main.pressure > 0 ? main.pressure : null; src = 'pointer本体'; }
-  else if (penForce.t && performance.now() - penForce.t < 150) { p = penForce.v; src = 'touch.force'; }
+  if (coOk) { p = ev.pressure > 0 ? ev.pressure : null; src = 'pointer'; }
+  else if (mainOk) { p = main && main.pressure > 0 ? main.pressure : null; src = 'pointer本体'; }
+  else if (pressureSeen.tf.size >= 2 && penForce.t && performance.now() - penForce.t < 150) { p = penForce.v; src = 'touch.force'; }
   if (debugOn && src) dbgIn.src = src;
   return p == null ? null : Math.min(1, p);
 }
@@ -1411,6 +1420,8 @@ function onDown(e) {
     // ならす強さ: 画面上で約 2.5px 分。拡大して書くほど小さくして、小さな字の形を崩さない
     d.sm = Math.round(Math.max(0.3, Math.min(1.5, 2.5 / S.zoom)) * 100) / 100;
     active = { id: e.pointerId, v, kind: 'draw', pen: e.pointerType === 'pen', d, lastMove: performance.now() };
+    // 前の線の force を書き始めに使わない(touchend が届かなかったときの念のため)
+    if (active.pen) penForce.t = 0;
     addPoint(e);
   }
 }
@@ -1492,12 +1503,16 @@ function addPoint(e, main = e) {
   if (d.pr) {
     const q = S.pressure && a.pen ? penPressure(e, main) : null;
     if (q != null) {
-      if (d.pr !== 2) {
-        d.pr = 2;
+      // 書き始め(最初の 60ms)は、Apple Pencil の筆圧が 0 付近から立ち上がる途中なので、線の頭だけ細い
+      // くさび形になる。この間はそれまでの最大の筆圧にそろえ、前の点にも入れ直す
+      const now = performance.now();
+      if (d.pr !== 2) { d.pr = 2; a.pT0 = now; a.pMax = 0; }
+      if (now - a.pT0 < 60 && q > a.pMax) {
+        a.pMax = q;
         const rq = Math.round(q * 100) / 100;
         for (let i = 2; i < d.pts.length; i += 3) d.pts[i] = rq;
       }
-      p = q;
+      p = now - a.pT0 < 60 ? a.pMax : q;
     } else if (d.pr === 2 && n0) p = d.pts[d.pts.length - 1];
   }
   d.pts.push(Math.round(x * 100) / 100, Math.round(y * 100) / 100, Math.round(p * 100) / 100);

@@ -2,6 +2,7 @@
 //   URL=http://localhost:8124/ node test/pressure.cjs <画像の出力先>
 // 1) pointer の pressure が本物の機器(Windows のペンなど)
 // 2) iPad Safari のように pointer の pressure が 0.5 のままで、タッチの force にだけ筆圧が来る機器
+// 2b) 筆圧のないスタイラス(force が一定) → 一定の太さ
 // 3) 筆圧のない機器(pressure 0.5 だけ) → 今までどおり一定の太さ(pr: true)
 // 4) 筆圧をオフにしたとき → 一定の太さ
 const { chromium } = require('playwright');
@@ -10,7 +11,7 @@ const { chromium } = require('playwright');
   const errs = [];
   const results = {};
   let shotDone = false;
-  for (const mode of ['pointer', 'touchforce', 'none', 'off']) {
+  for (const mode of ['pointer', 'touchforce', 'constforce', 'none', 'off']) {
     const page = await (await b.newContext({ viewport: { width: 1000, height: 800 }, deviceScaleFactor: 2, hasTouch: true })).newPage();
     page.on('pageerror', (e) => errs.push(mode + ': ' + e.message));
     await page.goto(process.env.URL + '?debug');
@@ -37,11 +38,11 @@ const { chromium } = require('playwright');
         const pp = mode === 'pointer' ? real : 0.5;
         if (i === 0) pe('pointerdown', cx, cy, pp);
         else pe('pointermove', cx, cy, pp);
-        if (mode === 'touchforce') te(i === 0 ? 'touchstart' : 'touchmove', cx, cy, real);
+        if (mode === 'touchforce' || mode === 'constforce') te(i === 0 ? 'touchstart' : 'touchmove', cx, cy, mode === 'constforce' ? 1 : real);
         await sleep(4);
       }
       pe('pointerup', x + N * 4, y, 0);
-      if (mode === 'touchforce') te('touchend', x + N * 4, y, 0);
+      if (mode === 'touchforce' || mode === 'constforce') te('touchend', x + N * 4, y, 0);
     }, { x: box.x + 60, y: box.y + 120, mode });
     await page.waitForTimeout(300);
     results[mode] = await page.evaluate(() => new Promise((res) => { const r = indexedDB.open('daigaku-note'); r.onsuccess = () => { const q = r.result.transaction('ops').objectStore('ops').getAll(); q.onsuccess = () => { const s = q.result.filter((o) => o.t === 'stroke.add').map((o) => o.p.s)[0]; const ps = s.pts.filter((_, i) => i % 3 === 2); res({ pr: s.pr, n: ps.length, min: Math.min(...ps), max: Math.max(...ps) }); }; }; }));
@@ -52,6 +53,7 @@ const { chromium } = require('playwright');
   console.log(JSON.stringify(results, null, 1), 'errors', errs);
   const ok = results.pointer.pr === 2 && results.pointer.max - results.pointer.min > 0.5
     && results.touchforce.pr === 2 && results.touchforce.max - results.touchforce.min > 0.5
+    && results.constforce.pr === true && results.constforce.max === 0.5
     && results.none.pr === true && results.none.min === 0.5 && results.none.max === 0.5
     && results.off.pr === true && results.off.max === 0.5 && !errs.length;
   console.log(ok ? 'OK' : 'NG');
