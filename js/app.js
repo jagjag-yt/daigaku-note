@@ -1531,7 +1531,24 @@ function lassoSvg(poly) {
 // main: まとめて届いた点のときの、イベント本体(筆圧の取得に使う)
 function addPoint(e, main = e) {
   const a = active, d = a.d;
-  if (a.shaped) return;
+  if (a.shaped) {
+    // 図形に整えたあと、ペンを止めた位置から大きく動かしたら、書いている途中で止まっただけとみなして
+    // 整える前の線に戻し、続きを書けるようにする。小さな揺れは無視する(図形のまま)
+    // 止めている間に届いた点も、戻したときに使えるよう取っておく
+    if (!a.unshaped) return;
+    if (Math.hypot(e.clientX - a.holdAt[0], e.clientY - a.holdAt[1]) < UNSHAPE_PX) {
+      if (a.held.length < 2000) a.held.push([e, main]);
+      return;
+    }
+    d.pts = a.unshaped;
+    delete d.shape;
+    a.shaped = false;
+    a.unshaped = null;
+    a.holdAt = null;
+    const held = a.held;
+    a.held = [];
+    for (const [he, hm] of held) addPoint(he, hm);
+  }
   holdCheck(a, e);
   const [x, y] = pagePoint(a.v, e);
   const n0 = d.pts.length / 3;
@@ -1566,7 +1583,7 @@ function addPoint(e, main = e) {
 // 図形補正: 書き終わりにペンを止めたら(HOLD_MS の間 HOLD_PX 以内にとどまったら)図形に整える。
 // 止めているつもりでもペン先は少し揺れて点が届き続けるので、点が来るたびに待ち直すのではなく、
 // 止まり始めた位置から HOLD_PX 以上動いたときだけ待ち直す
-const HOLD_MS = 500, HOLD_PX = 5; // 画面上の px
+const HOLD_MS = 500, HOLD_PX = 5, UNSHAPE_PX = 14; // 画面上の px
 function holdCheck(a, e) {
   if (!S.shapes) return;
   if (a.holdAt && Math.hypot(e.clientX - a.holdAt[0], e.clientY - a.holdAt[1]) < HOLD_PX) return;
@@ -1576,6 +1593,8 @@ function holdCheck(a, e) {
     if (active !== a || a.shaped) return;
     const d = a.d, shape = recognizeShape(d.pts);
     if (!shape) return;
+    a.unshaped = d.pts;
+    a.held = [];
     d.pts = shape.pts;
     d.shape = shape.type;
     a.shaped = true;
@@ -1640,6 +1659,7 @@ async function onUp(e) {
   if (e.pointerType === 'pen' && e.type === 'pointercancel' && !a.shaped && a.d.pts.length) {
     const [x, y] = a.lastXY || [e.clientX, e.clientY];
     const how = 'cancel';
+    a.holdAt = null; // つないだあとに止めたときも、図形補正の待ちを始め直す
     penPending = { a, x, y, how, t: performance.now(), timer: setTimeout(flushPen, PEN_JOIN[how].ms) };
     paintLive(a.v, strokeSvg('live', a.d, geometry(a.d)));
     lastPenTime = Date.now();

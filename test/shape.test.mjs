@@ -94,3 +94,18 @@ test('図形でないものは整えない', () => {
   // 点・短い線
   assert.equal(shape([0, 0, 0.5, 1, 1, 0.5, 2, 1, 0.5]), null);
 });
+
+test('細長い枠(単語を囲む四角)も長方形になる', () => {
+  for (const [w, h] of [[80, 20], [150, 25], [200, 30], [300, 40]]) {
+    for (const start of [0, 0.2, 0.45]) assert.equal(shape(polygon([[0, 0], [w, 0], [w, h], [0, h]], { start, noise: 1.2, step: 1.5, over: 0.04 })), 'rect', `${w}x${h} start ${start}`);
+  }
+});
+
+test('角の丸い四角形も長方形になる', () => {
+  for (const f of [0.1, 0.2]) {
+    const r = 90 * f, cs = [];
+    const arc = (cx, cy, a0) => { for (let i = 0; i <= 8; i++) { const a = a0 + (i / 8) * (Math.PI / 2); cs.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]); } };
+    arc(r, r, Math.PI); arc(120 - r, r, 1.5 * Math.PI); arc(120 - r, 90 - r, 0); arc(r, 90 - r, 0.5 * Math.PI);
+    assert.equal(shape(polygon(cs, { start: 0.3, step: 1.5 })), 'rect', 'r ' + f);
+  }
+});

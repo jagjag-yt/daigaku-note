@@ -44,6 +44,8 @@ const idb = (page, fn) => page.evaluate((src) => new Promise((res) => {
   const r = indexedDB.open('daigaku-note');
   r.onsuccess = () => { const q = r.result.transaction('ops').objectStore('ops').getAll(); q.onsuccess = () => res(new Function('ops', src)(q.result)); };
 }), fn);
+// 線を書いた順に(op の id は文字列なので並び順が書いた順にならない。ランポート時計で並べる)
+const STROKES = "const s = ops.filter(o => o.t === 'stroke.add').sort((a, b) => a.l - b.l).map(o => o.p.s);";
 const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.stringify(t)}).length`);
 
 (async () => {
@@ -105,6 +107,39 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
   if (!shapes.includes('circle') && !shapes.includes('ellipse')) throw new Error('円の補正に失敗 ' + shapes);
   if (!shapes.includes('rect')) throw new Error('四角の補正に失敗 ' + shapes);
   log('図形補正: 既定オフ、オンにすると', shapes.join(', '));
+  // 書いている途中で止まっただけ(L字): 一度直線に整っても、続けて書けば元の線に戻って続きが足される
+  await draw(page, [[X(0.7), Y(0.7)], [X(0.85), Y(0.7)]], { hold: 800, steps: 12, jitter: 1.5 });
+  // L字(draw は止めたあとすぐ離すので、ここは自前で書く)
+  await page.mouse.move(X(0.7), Y(0.8));
+  await page.mouse.down();
+  await page.mouse.move(X(0.85), Y(0.8), { steps: 12 });
+  for (let t = 0; t < 800; t += 25) { await page.mouse.move(X(0.85) + Math.sin(t / 40) * 1.5, Y(0.8)); await page.waitForTimeout(25); }
+  await page.mouse.move(X(0.85), Y(0.95), { steps: 12 });
+  await page.mouse.up();
+  await page.waitForTimeout(200);
+  const last = await idb(page, STROKES + "return s.slice(-2).map(d => ({ shape: d.shape || '-', maxY: Math.max(...d.pts.filter((_, i) => i % 3 === 1)) }))");
+  if (last[0].shape !== 'line') throw new Error('止めた直線が整わない ' + JSON.stringify(last));
+  // 直線は高さ 0.7、L字は 0.95 まで下りている(どちらもページ上端からの比)
+  if (last[1].shape !== '-' || last[1].maxY / last[0].maxY < 1.25) throw new Error('途中で止めたあとの続きが消えた ' + JSON.stringify(last));
+  log('図形補正: 途中で止めただけなら元に戻り、続きも残る');
+  // ペンの入力が途中で止められて(pointercancel)つないだあとに止めても整う
+  await page.evaluate(async ({ x, y }) => {
+    const t = document.querySelector('.page .ink');
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const ev = (type, id, cx, cy) => t.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: id, pointerType: 'pen', clientX: cx, clientY: cy, pressure: 0.5, buttons: type === 'pointerup' || type === 'pointercancel' ? 0 : 1 }));
+    ev('pointerdown', 71, x, y);
+    for (let i = 1; i <= 40; i++) { ev('pointermove', 71, x + i * 4, y + 0.3); await sleep(8); }
+    await sleep(200);
+    ev('pointercancel', 71, x + 160, y);
+    await sleep(30);
+    ev('pointerdown', 72, x + 160.5, y);
+    for (let i = 0; i < 36; i++) { ev('pointermove', 72, x + 160 + Math.sin(i) * 1.2, y + Math.cos(i) * 1.2); await sleep(25); }
+    ev('pointerup', 72, x + 160, y);
+    await sleep(500);
+  }, { x: X(0.05), y: Y(0.9) });
+  const lastPen = await idb(page, STROKES + "return s[s.length - 1].shape || '-'");
+  if (lastPen !== 'line') throw new Error('つないだあとに止めても整わない ' + lastPen);
+  log('図形補正: 途切れてつないだ線でも整う');
 
   // 蛍光ペン
   await page.click('#tool-marker');
