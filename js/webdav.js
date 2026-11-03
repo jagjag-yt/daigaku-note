@@ -218,6 +218,7 @@ async function fetchFile(ref) {
 }
 function addMissing(ref, n) {
   st.missing = st.missing || [];
+  if (st.gaveUp && st.gaveUp.some((m) => m.hash === ref.hash)) return; // あきらめたものは手動の同期で取り直す
   if (!st.missing.some((m) => m.hash === ref.hash)) st.missing.push({ hash: ref.hash, type: ref.type, n });
 }
 
@@ -289,7 +290,6 @@ export async function syncNow(manual = false) {
     if (manual && st.tooBig && st.tooBig.length) {
       const still = [];
       for (const t of st.tooBig) {
-        if (typeof t !== 'object') continue; // 古い形(ハッシュだけ)は型が分からないので捨てる
         const name = `files/${t.hash}.${fileExt(t.type)}`;
         try {
           const head = await dav('HEAD', name, { ok: [200, 404] });
