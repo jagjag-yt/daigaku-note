@@ -26,11 +26,18 @@ async function makePdf() {
   return f;
 }
 
-async function draw(page, pts, { hold = 0, steps = 4 } = {}) {
+// jitter: 止めている間もペン先が揺れて点が届き続ける様子(実機の iPad + Pencil)をまねる
+async function draw(page, pts, { hold = 0, steps = 4, jitter = 0 } = {}) {
   await page.mouse.move(pts[0][0], pts[0][1]);
   await page.mouse.down();
   for (const [x, y] of pts.slice(1)) await page.mouse.move(x, y, { steps });
-  if (hold) await page.waitForTimeout(hold);
+  if (hold && jitter) {
+    const [lx, ly] = pts[pts.length - 1];
+    for (let t = 0; t < hold; t += 25) {
+      await page.mouse.move(lx + Math.sin(t / 40) * jitter, ly + Math.cos(t / 55) * jitter);
+      await page.waitForTimeout(25);
+    }
+  } else if (hold) await page.waitForTimeout(hold);
   await page.mouse.up();
 }
 const idb = (page, fn) => page.evaluate((src) => new Promise((res) => {
@@ -79,25 +86,34 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
   await page.waitForTimeout(200);
   log('ペン:', await countT(page, 'stroke.add'), '本(マウス1・筆圧つき1)');
 
-  // 図形補正: 円を描いてペンを止める
+  // 図形補正: 既定はオフ。オフのまま円を描いて止めても整えない
   const circ = [];
   for (let i = 0; i <= 36; i++) circ.push([X(0.25) + Math.cos(i / 36 * 6.28) * 60 * (1 + 0.08 * Math.sin(i)), Y(0.45) + Math.sin(i / 36 * 6.28) * 55]);
-  await draw(page, circ, { hold: 900, steps: 1 });
-  // 四角形
-  await draw(page, [[X(0.45), Y(0.35)], [X(0.6), Y(0.352)], [X(0.601), Y(0.55)], [X(0.452), Y(0.548)], [X(0.45), Y(0.352)]], { hold: 900, steps: 6 });
+  const shapesNow = () => idb(page, "return ops.filter(o => (o.t === 'stroke.add' || o.t === 'item.add') && o.p.s.shape).map(o => o.p.s.shape)");
+  if (await page.getAttribute('#shapes', 'aria-pressed') !== 'false') throw new Error('図形補正が既定でオンになっている');
+  await draw(page, circ.map(([x, y]) => [x + box.width * 0.55, y]), { hold: 900, steps: 1 });
   await page.waitForTimeout(200);
-  const shapes = await idb(page, "return ops.filter(o => (o.t === 'stroke.add' || o.t === 'item.add') && o.p.s.shape).map(o => o.p.s.shape)");
+  if ((await shapesNow()).length) throw new Error('図形補正がオフなのに整えた');
+  await page.click('#shapes');
+  if (await page.getAttribute('#shapes', 'aria-pressed') !== 'true') throw new Error('図形補正をオンにできない');
+  // 円を描いてペンを止める(止めている間もペン先が揺れている)
+  await draw(page, circ, { hold: 900, steps: 1, jitter: 1.5 });
+  // 四角形(辺の途中から書き始める)
+  await draw(page, [[X(0.52), Y(0.352)], [X(0.6), Y(0.352)], [X(0.601), Y(0.55)], [X(0.452), Y(0.548)], [X(0.45), Y(0.352)], [X(0.52), Y(0.353)]], { hold: 900, steps: 6, jitter: 1.5 });
+  await page.waitForTimeout(200);
+  const shapes = await shapesNow();
   if (!shapes.includes('circle') && !shapes.includes('ellipse')) throw new Error('円の補正に失敗 ' + shapes);
   if (!shapes.includes('rect')) throw new Error('四角の補正に失敗 ' + shapes);
-  log('図形補正:', shapes.join(', '));
+  log('図形補正: 既定オフ、オンにすると', shapes.join(', '));
 
   // 蛍光ペン
   await page.click('#tool-marker');
-  await draw(page, [[X(0.04), Y(0.15)], [X(0.4), Y(0.15)]]);
+  await draw(page, [[X(0.04), Y(0.15)], [X(0.2), Y(0.158)], [X(0.4), Y(0.15)]], { hold: 700 });
   await page.waitForTimeout(150);
-  const marker = await idb(page, "return ops.filter(o => (o.t === 'stroke.add' || o.t === 'item.add') && o.p.s.tool === 'marker').length");
-  if (marker !== 1) throw new Error('蛍光ペン');
-  log('蛍光ペン');
+  const marker = await idb(page, "return ops.filter(o => (o.t === 'stroke.add' || o.t === 'item.add') && o.p.s.tool === 'marker').map(o => o.p.s.shape || '-')");
+  if (marker.length !== 1) throw new Error('蛍光ペン');
+  if (marker[0] !== 'line') throw new Error('蛍光ペンの直線の補正に失敗 ' + marker);
+  log('蛍光ペン(止めると直線に整う)');
   await shot(page, 'v2-1-ink.png');
 
   // 投げ縄で円を囲んで移動
