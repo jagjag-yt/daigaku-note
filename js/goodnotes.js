@@ -158,7 +158,7 @@ function strokePoints(raw) {
 
 // ---------- 線のデータ(tpl 形式) ----------
 // 展開した線のデータは「tpl\0 + 全体の長さ(u32) + 型の文字列 + \0 + 値」。型の文字列は
-//   v = 2バイトの整数、u = 4バイト(float)、f = float、A(…) = 個数(u32)+並び、S(…) = 組
+//   v = 2バイトの整数、u = 4バイト(GoodNotes は float を入れている)、f = 8バイト(double)、A(…) = 個数(u32)+並び、S(…) = 組
 // で、たとえば万年筆は "vA(v)A(u)A(u)…"、蛍光ペンは "vuA(v)A(S(uu))A(S(uuuu))vA(f)"。
 function tplSig(s, i = 0) {
   const out = [];
@@ -177,7 +177,8 @@ function tplSig(s, i = 0) {
 // 値を読む。u と f は float、S(…) はそのまま中身を平らに並べる
 function tplRead(t, dv, st, flat) {
   if (t === 'v') { const v = dv.getUint16(st.i, true); st.i += 2; flat.push(v); return; }
-  if (t === 'u' || t === 'f') { const v = dv.getFloat32(st.i, true); st.i += 4; flat.push(v); return; }
+  if (t === 'u') { const v = dv.getFloat32(st.i, true); st.i += 4; flat.push(v); return; }
+  if (t === 'f') { const v = dv.getFloat64(st.i, true); st.i += 8; flat.push(v); return; } // tpl の f は double
   if (t.k === 'S') { for (const x of t.inner) tplRead(x, dv, st, flat); return; }
   const n = dv.getUint32(st.i, true);
   st.i += 4;
@@ -267,7 +268,8 @@ function shapeLine(sh) {
 // 「A(v) = 区間の種類」から始まる3つの並びの位置を探して、そこから読む。
 //   ふつうのペン "vA(v)A(u)A(u)…": 始点 (x,y,半径[,…])、区間 (制御点 x,y,半径, 終点 x,y,半径[, …])。
 //     ペン種別4は先頭に値が1つ多い。新しめの線は始点が4つ・区間が9つの値
-//   鉛筆 "vuA(v)A(S(uuuuu))A(S(11個))…": u=太さ、始点 (x,y,方位角,傾き,筆圧)、区間 (ID, 制御点5個, 終点5個)
+//   鉛筆 "vuA(v)A(S(uuuuu))A(S(11個))…": u=太さ(推測。蛍光ペンの太さと同じ値 1.56 が入っているため)、
+//     始点 (x,y,方位角,傾き,筆圧)、区間 (ID, 制御点5個, 終点5個)
 //   蛍光ペンなど "vuA(v)A(S(uu))A(S(uuuu))…": u=太さ、始点 (x,y)、区間 (制御点 x,y, 終点 x,y)
 const PEN = ['A(v)', 'A(u)', 'A(u)'];
 const PENCIL = ['A(v)', 'A(S(uuuuu))', 'A(S(uuuuuuuuuuu))'];
@@ -282,33 +284,61 @@ function findForm(top, form) {
 }
 // 並びのすぐ前の u(太さ)。なければ 0
 const widthBefore = (t, k) => (k > 0 && t.top[k - 1] === 'u' && Number.isFinite(t.vals[k - 1]) ? t.vals[k - 1] : 0);
+// 形が分かった線: 並びが全部空なら { empty: true }(点のない記録)、読めなければ { bad: true }。
+// どちらも「座標らしい値を探す」昔の読み方には回さない(空の記録からページ左上に点を作っていた)
+const allEmpty = (v, k) => v.slice(k).every((x) => !Array.isArray(x) || !x.length);
 function strokeLine(raw) {
   const t = parseTpl(raw);
   if (!t) return null;
   const v = t.vals;
   let line = null, width = 0, k;
   if ((k = findForm(t.top, PEN)) >= 0) {
+    if (allEmpty(v, k)) return { empty: true };
     const cmds = v[k], start = v[k + 1], segs = v[k + 2];
-    if (!cmds.length && !start.length) return { empty: true };
     const nseg = cmds.length - 1;
     if (nseg > 0 && segs.length % nseg === 0 && segs.length / nseg >= 6) {
       line = bezierLine(start, segs, segs.length / nseg, 0, 3, (a, i) => a[i + 2] * 2);
     } else if (nseg === 0 && start.length >= 3) line = [[start[0], start[1], start[2] * 2]];
   } else if ((k = findForm(t.top, PENCIL)) >= 0) {
-    // 筆圧(0〜1)を太さに焼き込む。筆圧1でちょうど基本の太さ、弱いと細く(最小で 0.3 倍)
+    if (allEmpty(v, k)) return { empty: true };
+    // 筆圧を太さに焼き込む(大学ノート側で決めた近似): 線の中でいちばん強いところ(1 より弱ければ 1)を基本の太さにし、
+    // 弱いところは細く(最小で 0.3 倍)。筆圧が 1 を超える値で入っていても一定の太さに張り付かないように、線ごとに割る
     const base = widthBefore(t, k);
-    if (!v[k + 1].length) return { empty: true };
-    if (!(base > 0)) return null;
-    const wOf = (a, i) => base * (0.3 + 0.7 * Math.max(0, Math.min(1, fin(a[i + 4], 1))));
+    if (!(base > 0) || v[k + 1].length < 5) return { bad: true };
+    let top = 1;
+    for (let i = 4; i < v[k + 1].length; i += 5) top = Math.max(top, fin(v[k + 1][i]));
+    for (let i = 0; i < v[k + 2].length; i += 11) top = Math.max(top, fin(v[k + 2][i + 5]), fin(v[k + 2][i + 10]));
+    const wOf = (a, i) => base * (0.3 + 0.7 * Math.max(0, Math.min(1, fin(a[i + 4], top) / top)));
     line = bezierLine(v[k + 1].slice(0, 5), v[k + 2], 11, 1, 6, wOf);
   } else if ((k = findForm(t.top, PLAIN)) >= 0) {
+    if (allEmpty(v, k)) return { empty: true };
     width = widthBefore(t, k);
-    if (!v[k + 1].length) return { empty: true };
     const w = () => width;
-    line = bezierLine(v[k + 1].slice(0, 2), v[k + 2], 4, 0, 2, w);
+    line = v[k + 1].length >= 2 ? bezierLine(v[k + 1].slice(0, 2), v[k + 2], 4, 0, 2, w) : null;
   } else return null;
-  if (!line || !line.length || !line.every((q) => Number.isFinite(q[0]) && Number.isFinite(q[1]) && Number.isFinite(q[2]))) return null;
+  if (!line || !line.length || !line.every((q) => Number.isFinite(q[0]) && Number.isFinite(q[1]) && Number.isFinite(q[2]))) return { bad: true };
   return { line, width };
+}
+
+// 読んだ中心線を大学ノートの線にする。s は色・道具を決めた線(pts は空)。ox, oy = 投げ縄で動かした量
+// 太さが変わる線は、太さの比を筆圧として持たせる(model.js の widthAt: 太さ = width × (0.3 + 筆圧))
+function fillStroke(s, got, ox = 0, oy = 0) {
+  const r2 = (x) => Math.round(x * 100) / 100;
+  const marker = s.tool === 'marker';
+  let maxW = got.width || 0, minW = Infinity;
+  for (const q of got.line) if (q[2] > 0) { maxW = Math.max(maxW, q[2]); minW = Math.min(minW, q[2]); }
+  if (minW === Infinity) minW = maxW;
+  maxW = Math.min(80, maxW);
+  s.width = r2(Math.min(80, Math.max(0.3, got.width || maxW || s.width)));
+  s.pr = !marker && !got.shape && !got.width && maxW > 0 && minW < maxW * 0.9;
+  if (s.pr) s.width = r2(Math.max(0.3, maxW));
+  if (got.shape) s.shape = true;
+  else s.sm = 0.3; // 元の点はなめらかなので、ほとんどならさない
+  for (const [x, y, w] of got.line) {
+    const p = s.pr ? Math.max(0, Math.min(0.7, w / maxW - 0.3)) : 0.5;
+    s.pts.push(r2(x + ox), r2(y + oy), r2(p));
+  }
+  return s;
 }
 
 // 白紙の PDF か: 描く命令が「白で塗る」だけ(GoodNotes の白紙は、白い四角を塗るか、何も描かない)。
@@ -646,25 +676,12 @@ export async function importGoodnotes(file, recorder) {
       let got = null;
       const sh = sub(m, 9);
       try { got = (sh && sh.size && shapeLine(sh)) || (raw && strokeLine(raw)); } catch { got = null; }
-      if (got && got.empty) continue; // 点のない線(GoodNotes が残した空の記録)
+      if (got && (got.empty || got.bad)) continue; // 点のない記録・形は分かったのに読めない線
       const r2 = (x) => Math.round(x * 100) / 100;
       // 投げ縄で動かした線は、点はそのままで「ずらす量」(フィールド6)が記録されている
       const [ox, oy] = xy(sub(m, 6)) || [0, 0];
       if (got) {
-        let maxW = got.width || 0, minW = Infinity;
-        for (const q of got.line) if (q[2] > 0) { maxW = Math.max(maxW, q[2]); minW = Math.min(minW, q[2]); }
-        if (minW === Infinity) minW = maxW;
-        maxW = Math.min(80, maxW);
-        s.width = r2(Math.min(80, Math.max(0.3, got.width || maxW || s.width)));
-        // 太さが変わる線は、太さの比を筆圧として持たせる(太さ = width × (0.3 + 筆圧))
-        s.pr = !marker && !got.shape && !got.width && maxW > 0 && minW < maxW * 0.9;
-        if (s.pr) s.width = r2(Math.max(0.3, maxW));
-        if (got.shape) s.shape = true;
-        else s.sm = 0.3; // 元の点はなめらかなので、ほとんどならさない
-        for (const [x, y, w] of got.line) {
-          const p = s.pr ? Math.max(0, Math.min(0.7, w / maxW - 0.3)) : 0.5;
-          s.pts.push(r2(x + ox), r2(y + oy), r2(p));
-        }
+        fillStroke(s, got, ox, oy);
       } else {
         // 形式が分からない線: 座標らしい float の並びを探す(以前からの方法)
         let pts = null;
@@ -682,4 +699,4 @@ export async function importGoodnotes(file, recorder) {
 }
 
 // テスト用
-export const _test = { parseTpl, strokeLine };
+export const _test = { parseTpl, strokeLine, fillStroke, bv41 };
