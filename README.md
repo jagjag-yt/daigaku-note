@@ -19,7 +19,7 @@ Web 技術(PWA)1本で Windows と iPad の両方で動く。ビルド不要、�
 - PDF 書き出し(元の PDF はそのまま残し、その上に手書きをベクターで重ねる)
 - 検索:ノートの名前、PDF の文字
 - クラウド同期(WebDAV / Nextcloud)と、ファイルでの同期
-- GoodNotes のノート(.goodnotes)の取り込み(手書きと用紙。画像・テキストは未対応)
+- GoodNotes のノート(.goodnotes)の取り込み(手書き・用紙・画像・テキストボックス・付箋)
 - 指はスクロールとピンチズーム、書くのはペンだけ(「指で書く」で切り替え)
 - ホーム画面に追加すればアプリとして起動、オフラインでも起動
 
@@ -54,6 +54,8 @@ Node.js が入っていれば、`start-windows.bat` をダブルクリック(ま
   「WebAppPassword」アプリを入れて、許可するオリジンに `https://jagjag-yt.github.io` を追加する。
   ほかの WebDAV サーバーでも、CORS(`Access-Control-Allow-Origin` など)を返す設定が必要
 - サーバーには `daigaku-note/ops/<端末ID>/*.json`(各端末の変更)と `daigaku-note/files/*.pdf` を置く
+- 各端末は「ほかの端末の変更を何番まで読んだか」だけを覚えて、その続きだけを読む。変わっていない端末のフォルダは中を見ない
+  (フォルダの ETag で判断。くわしくは `docs/設計.md`)
 
 ### ファイルで同期
 
@@ -68,8 +70,9 @@ Node.js が入っていれば、`start-windows.bat` をダブルクリック(ま
 一覧の「GoodNotesから取り込む」で `.goodnotes` を選ぶ(複数可)。
 GoodNotes の形式は公開されていないため、実物を調べて分かった範囲で読んでいる。
 
-- 取り込めるもの:ノートの名前、ページの順番と大きさ、手書きの線(色)、消した線の除外、背景の PDF
-- 取り込めないもの:画像、テキストボックス、ペンの種類ごとの太さ(一定の太さになる)、筆圧
+- 取り込めるもの:ノートの名前、ページの順番と大きさ、手書きの線(色・太さ・筆圧による太さの変化)、蛍光ペン、鉛筆(筆圧つきのペンとして)、
+  図形、消した線の除外、背景の PDF、画像、テキストボックス、付箋
+- 取り込めないもの:鉛筆などの質感、画像の回転・切り抜き、リンク、音声
 
 ## 検索
 
@@ -94,6 +97,7 @@ GoodNotes の形式は公開されていないため、実物を調べて分か�
   - `js/sync.js` 同期ファイル
   - `js/app.js` 画面と入力
   - `sw.js` オフライン用 Service Worker
+- 設計の考え方と GoodNotes の調査からの反映: `docs/設計.md`
 
 ### 同期ファイルの形式(v1)
 
@@ -111,7 +115,7 @@ op の種類: `note.create / note.rename / note.delete / note.restore / page.add
 ## テスト
 
 ```
-npm test                       # マージのテスト(Node)
+npm test                       # マージ・図形補正・同期のカーソル・GoodNotes の線の読み方のテスト(Node)
 node serve.mjs 8124 &          # アプリ
 node test/davserver.mjs 8125 & # テスト用 WebDAV サーバー
 npm i pdf-lib && URL=http://localhost:8124/ GN=見本.goodnotes node test/e2e.cjs /tmp   # ブラウザでの通し確認(Playwright)
@@ -119,9 +123,9 @@ npm i pdf-lib && URL=http://localhost:8124/ GN=見本.goodnotes node test/e2e.cj
 
 ## まだないもの(次の候補)
 
-- 画像・テキストの貼り付け、.goodnotes の画像・テキストの取り込み
+- 画像・テキストの貼り付け(取り込んだものの表示・移動はできる)
 - 手書き文字の認識(文字入力・数式への変換)
-- フォルダ分け、ページのサムネイル一覧からのドラッグでの並べ替え
+- フォルダ分け(設計は `docs/設計.md`)、ページのサムネイル一覧からのドラッグでの並べ替え
 - Google ドライブ・OneDrive への直接の同期
 
 ## ライセンス

@@ -6,7 +6,7 @@
 //   attachments/<ID>… 用紙や読み込んだ PDF・画像そのもの
 // notes/ のレコードは、いちばん外側のフィールド番号で種類が分かる(7 = 線、1 = 画像、20 = 付箋、21 = テキストボックス)。
 // 公式の仕様は公開されていないので、実際のファイルを調べて分かった範囲で読む。
-// 分からない部分(ペンの種類ごとの太さ、画像の回転・切り抜きなど)は取り込まない。
+// 分からない部分(鉛筆などの質感、画像の回転・切り抜きなど)は取り込まない。
 
 import * as db from './db.js';
 import { newId } from './model.js';
@@ -184,6 +184,8 @@ function tplRead(t, dv, st, flat) {
   if (n > 5e6) throw new Error('tpl');
   for (let k = 0; k < n; k++) for (const x of t.inner) tplRead(x, dv, st, flat);
 }
+// 型の文字列に戻す(並びの形を比べるため)
+const sigOf = (t) => (typeof t === 'string' ? t : `${t.k}(${t.inner.map(sigOf).join('')})`);
 function parseTpl(raw) {
   if (raw.length < 9 || String.fromCharCode(raw[0], raw[1], raw[2]) !== 'tpl') return null;
   let e = 8;
@@ -197,7 +199,7 @@ function parseTpl(raw) {
     tplRead(t, dv, st, flat);
     return t.k === 'A' ? flat : flat.length === 1 ? flat[0] : flat;
   });
-  return { sig, vals };
+  return { sig, top: types.map(sigOf), vals };
 }
 
 // 2次ベジェ曲線 a → c → b を細かい点にする。点は [x, y, 太さ]
@@ -260,29 +262,52 @@ function shapeLine(sh) {
   return line && { line: line.map((q) => [q[0], q[1], w]), width: w, shape: true };
 }
 
-// 線のデータから中心線と太さを読む。{ line: [[x, y, 太さ], …], width, shape }
-//   万年筆など  "vA(v)A(u)A(u)…": 1=区間の種類, 2=始点 (x,y,半径[,…]), 3=区間 (制御点 x,y,半径, 終点 x,y,半径[, …])
-//   鉛筆など    "vuA(v)A(S(uuuuu))A(S(11個))…": 1=太さ, 3=始点 (x,y,半径,筆圧,…), 4=区間 (?, 制御点5個, 終点5個)
-//   蛍光ペンなど "vuA(v)A(S(uu))A(S(uuuu))…": 1=太さ, 3=始点 (x,y), 4=区間 (制御点 x,y, 終点 x,y)
+// 線のデータから中心線と太さを読む。{ line: [[x, y, 太さ], …], width, shape } / 点のない線は { empty: true }
+// 並びの形(型の文字列)で種類を見分ける。先頭に値(版数・太さ・ペンの設定など)がいくつか付くので、
+// 「A(v) = 区間の種類」から始まる3つの並びの位置を探して、そこから読む。
+//   ふつうのペン "vA(v)A(u)A(u)…": 始点 (x,y,半径[,…])、区間 (制御点 x,y,半径, 終点 x,y,半径[, …])。
+//     ペン種別4は先頭に値が1つ多い。新しめの線は始点が4つ・区間が9つの値
+//   鉛筆 "vuA(v)A(S(uuuuu))A(S(11個))…": u=太さ、始点 (x,y,方位角,傾き,筆圧)、区間 (ID, 制御点5個, 終点5個)
+//   蛍光ペンなど "vuA(v)A(S(uu))A(S(uuuu))…": u=太さ、始点 (x,y)、区間 (制御点 x,y, 終点 x,y)
+const PEN = ['A(v)', 'A(u)', 'A(u)'];
+const PENCIL = ['A(v)', 'A(S(uuuuu))', 'A(S(uuuuuuuuuuu))'];
+const PLAIN = ['A(v)', 'A(S(uu))', 'A(S(uuuu))'];
+// 先頭の値(v・u・f)が最大2つ続いたあとに、form の並びがあればその位置
+function findForm(top, form) {
+  for (let k = 0; k <= 2 && k + form.length <= top.length; k++) {
+    if (k && !['v', 'u', 'f'].includes(top[k - 1])) return -1;
+    if (form.every((f, j) => top[k + j] === f)) return k;
+  }
+  return -1;
+}
+// 並びのすぐ前の u(太さ)。なければ 0
+const widthBefore = (t, k) => (k > 0 && t.top[k - 1] === 'u' && Number.isFinite(t.vals[k - 1]) ? t.vals[k - 1] : 0);
 function strokeLine(raw) {
   const t = parseTpl(raw);
   if (!t) return null;
   const v = t.vals;
-  let line = null, width = 0;
-  if (t.sig.startsWith('vA(v)A(u)A(u)')) {
-    const nseg = v[1].length - 1;
-    if (nseg > 0 && v[3].length % nseg === 0 && v[3].length / nseg >= 6) {
-      line = bezierLine(v[2], v[3], v[3].length / nseg, 0, 3, (a, i) => a[i + 2] * 2);
-    } else if (nseg === 0 && v[2].length >= 3) line = [[v[2][0], v[2][1], v[2][2] * 2]];
-  } else if (t.sig.startsWith('vuA(v)A(S(uuuuu))A(S(uuuuuuuuuuu))')) {
-    width = v[1];
-    line = bezierLine(v[3].slice(0, 5), v[4], 11, 1, 6, (a, i) => a[i + 2] * 2);
-  } else if (t.sig.startsWith('vuA(v)A(S(uu))A(S(uuuu))')) {
-    width = v[1];
+  let line = null, width = 0, k;
+  if ((k = findForm(t.top, PEN)) >= 0) {
+    const cmds = v[k], start = v[k + 1], segs = v[k + 2];
+    if (!cmds.length && !start.length) return { empty: true };
+    const nseg = cmds.length - 1;
+    if (nseg > 0 && segs.length % nseg === 0 && segs.length / nseg >= 6) {
+      line = bezierLine(start, segs, segs.length / nseg, 0, 3, (a, i) => a[i + 2] * 2);
+    } else if (nseg === 0 && start.length >= 3) line = [[start[0], start[1], start[2] * 2]];
+  } else if ((k = findForm(t.top, PENCIL)) >= 0) {
+    // 筆圧(0〜1)を太さに焼き込む。筆圧1でちょうど基本の太さ、弱いと細く(最小で 0.3 倍)
+    const base = widthBefore(t, k);
+    if (!v[k + 1].length) return { empty: true };
+    if (!(base > 0)) return null;
+    const wOf = (a, i) => base * (0.3 + 0.7 * Math.max(0, Math.min(1, fin(a[i + 4], 1))));
+    line = bezierLine(v[k + 1].slice(0, 5), v[k + 2], 11, 1, 6, wOf);
+  } else if ((k = findForm(t.top, PLAIN)) >= 0) {
+    width = widthBefore(t, k);
+    if (!v[k + 1].length) return { empty: true };
     const w = () => width;
-    line = v[3].length >= 2 ? bezierLine(v[3].slice(0, 2), v[4], 4, 0, 2, w) : null;
+    line = bezierLine(v[k + 1].slice(0, 2), v[k + 2], 4, 0, 2, w);
   } else return null;
-  if (!line || !line.length || !line.every((q) => Number.isFinite(q[0]) && Number.isFinite(q[1]))) return null;
+  if (!line || !line.length || !line.every((q) => Number.isFinite(q[0]) && Number.isFinite(q[1]) && Number.isFinite(q[2]))) return null;
   return { line, width };
 }
 
@@ -621,6 +646,7 @@ export async function importGoodnotes(file, recorder) {
       let got = null;
       const sh = sub(m, 9);
       try { got = (sh && sh.size && shapeLine(sh)) || (raw && strokeLine(raw)); } catch { got = null; }
+      if (got && got.empty) continue; // 点のない線(GoodNotes が残した空の記録)
       const r2 = (x) => Math.round(x * 100) / 100;
       // 投げ縄で動かした線は、点はそのままで「ずらす量」(フィールド6)が記録されている
       const [ox, oy] = xy(sub(m, 6)) || [0, 0];
@@ -654,3 +680,6 @@ export async function importGoodnotes(file, recorder) {
   await db.putOps(ops, recorder.clock);
   return { noteId, title, pages: pageList.length, strokes, images, texts, skippedImages, pageIds };
 }
+
+// テスト用
+export const _test = { parseTpl, strokeLine };

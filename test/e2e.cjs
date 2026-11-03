@@ -293,6 +293,30 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
   const fromB = await idb(page, `return ops.filter(o => o.d !== ops.find(x => x.t === 'note.create').d).length`);
   if (fromB < 1) throw new Error('端末Bの変更が届いていない');
   log('WebDAV: 端末Bで書いた線が端末Aに自動で届いた');
+  // 自動の同期: カーソルより後だけ読み、変わっていない端末のフォルダは中を見ない
+  {
+    const before = await idb(page, 'return ops.length');
+    await draw(pb, [[bb.x + 60, bb.y + 500], [bb.x + 300, bb.y + 480]]);
+    await pb.waitForTimeout(6500);
+    const props = [];
+    const onReq = (r) => { if (r.method() === 'PROPFIND') props.push(new (require('url').URL)(r.url()).pathname); };
+    page.on('request', onReq);
+    const autoSync = async () => {
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await page.waitForTimeout(2500);
+    };
+    await autoSync();
+    const after = await idb(page, 'return ops.length');
+    if (after <= before) throw new Error('自動の同期で端末Bの新しい線が届いていない');
+    log('WebDAV: 自動の同期で端末Bの新しい線が届いた(', after - before, '件)');
+    props.length = 0;
+    await autoSync();
+    const opsAgain = await idb(page, 'return ops.length');
+    if (opsAgain !== after) throw new Error('変更がないのに op が増えた');
+    if (!process.env.NOETAG && props.some((p) => /\/ops\/.+\//.test(p))) throw new Error('変わっていない端末のフォルダの中まで見ている: ' + props.join(' '));
+    log('WebDAV: 変更がないときは', props.length, '回の問い合わせで済んだ');
+    page.off('request', onReq);
+  }
   if (gnTitle) {
     // 取り込んだ画像のファイルも同期で届き、表示される
     await pb.click('#back');

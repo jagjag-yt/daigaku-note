@@ -3,6 +3,10 @@ import http from 'node:http';
 const port = Number(process.argv[2]) || 8125;
 const store = new Map(); // path -> Buffer | 'DIR'
 store.set('/dav/', 'DIR');
+// フォルダの ETag(Nextcloud と同じく、中のどこかが変わると親のフォルダも全部変わる)。NOETAG=1 なら返さない
+const ver = new Map();
+const bump = (p) => { for (let d = p.replace(/[^/]+\/?$/, ''); d.startsWith('/dav/'); d = d.replace(/[^/]+\/$/, '')) ver.set(d, (ver.get(d) || 0) + 1); };
+const etag = (k) => (process.env.NOETAG ? '' : `<d:getetag>"${store.get(k) === 'DIR' ? 'd' + (ver.get(k) || 0) : 'f' + store.get(k).length}"</d:getetag>`);
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,PUT,HEAD,MKCOL,PROPFIND,OPTIONS', 'Access-Control-Allow-Headers': 'Authorization,Depth,Content-Type', 'Access-Control-Expose-Headers': 'ETag' };
 http.createServer(async (req, res) => {
   const p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
@@ -16,9 +20,9 @@ http.createServer(async (req, res) => {
       if (store.has(dir)) return send(405);
       const parent = dir.replace(/[^/]+\/$/, '');
       if (!store.has(parent)) return send(409);
-      store.set(dir, 'DIR'); return send(201);
+      store.set(dir, 'DIR'); bump(dir); return send(201);
     }
-    case 'PUT': store.set(p, body); return send(201);
+    case 'PUT': store.set(p, body); bump(p); return send(201);
     case 'GET': case 'HEAD': {
       const v = store.get(p);
       if (!v || v === 'DIR') return send(404);
@@ -27,7 +31,7 @@ http.createServer(async (req, res) => {
     case 'PROPFIND': {
       if (!store.has(dir)) return send(404);
       const kids = [...store.keys()].filter((k) => k !== dir && k.startsWith(dir) && !k.slice(dir.length).replace(/\/$/, '').includes('/'));
-      const item = (k) => `<d:response><d:href>${encodeURI(k)}</d:href><d:propstat><d:prop><d:resourcetype>${store.get(k) === 'DIR' ? '<d:collection/>' : ''}</d:resourcetype></d:prop></d:propstat></d:response>`;
+      const item = (k) => `<d:response><d:href>${encodeURI(k)}</d:href><d:propstat><d:prop><d:resourcetype>${store.get(k) === 'DIR' ? '<d:collection/>' : ''}</d:resourcetype>${etag(k)}</d:prop></d:propstat></d:response>`;
       return send(207, `<?xml version="1.0"?><d:multistatus xmlns:d="DAV:">${[dir, ...kids].map(item).join('')}</d:multistatus>`, { 'Content-Type': 'application/xml' });
     }
     default: return send(405);

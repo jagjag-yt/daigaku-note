@@ -5,15 +5,21 @@
 //   <フォルダ>/daigaku-note/files/<sha256>.pdf(.png .jpg など)          … 読み込んだ PDF・画像
 // 各端末は自分の変更だけを書き込み、ほかの端末のファイルを読み込む。
 // 変更は順番に関係なく合わさるので、同時に書いても衝突しない。
+//
+// 読み込みは「端末ごとのカーソル」で進める(GoodNotes の同期と同じ考え方: 追記だけのログ + どこまで読んだか)。
+//   カーソル = その端末の変更を何番まで読んだか。ファイル名の終了番号がカーソルより大きいファイルだけ読む。
+//   (同じ変更が2回届いても op の ID で捨てるので、読み直しになっても害はない)
+// さらに、端末のフォルダの ETag(中身が変わると変わる目印)を覚えておき、変わっていないフォルダは中を見ない。
+// ETag を返さないサーバーや、ETag の付け方があやしいサーバーのために、手動の同期と10回に1回は全部のフォルダを見る。
 
 import * as db from './db.js';
 import { fileRefs, fileExt } from './model.js';
 
 const FORMAT = 'daigaku-note-ops';
 let cfg = {};
-let st = { key: '', sentC: 0, seen: [], sentFiles: [] };
+let st = { key: '', sentC: 0, cur: {}, tags: {}, sentFiles: [] };
 let recorder = null, onRemoteChange = () => {}, onStatus = () => {};
-let timer = 0, running = false, again = false, dirsReady = '';
+let timer = 0, running = false, again = false, dirsReady = '', rounds = 0;
 
 export const config = () => ({ ...cfg });
 const enabled = () => !!(cfg.url && cfg.user);
@@ -24,7 +30,7 @@ export async function init(opts) {
   onStatus = opts.onStatus;
   cfg = (await db.getMeta('dav')) || {};
   const saved = await db.getMeta('davState');
-  if (saved && saved.key === stateKey()) st = saved;
+  if (saved && saved.key === stateKey()) st = migrate(saved);
   onStatus(enabled() ? 'クラウド同期: 準備中' : '');
   setInterval(() => { if (enabled() && cfg.auto !== false && document.visibilityState === 'visible') syncNow(); }, 60_000);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') schedule(500); });
@@ -34,12 +40,33 @@ export async function init(opts) {
 
 const stateKey = () => `${cfg.url}|${cfg.user}`;
 
+// 「ops/<端末>/<開始>-<終了>.json」の終了番号。形が違う名前は null
+const endOf = (name) => {
+  const m = /^(\d+)-(\d+)\.json$/.exec(name);
+  return m ? Number(m[2]) : null;
+};
+// 以前の版の「読んだファイルの一覧」(seen)をカーソルに置き換える。
+// 以前の版も開始番号の順に読んでいて、途中で失敗したら止まるので、読んだファイルの終了番号の最大まではすべて読んである
+function migrate(s) {
+  s.cur = s.cur || {};
+  s.tags = s.tags || {};
+  if (Array.isArray(s.seen)) {
+    for (const path of s.seen) {
+      const m = /^ops\/([^/]+)\/([^/]+)$/.exec(path);
+      const end = m && endOf(m[2]);
+      if (end != null && end > (s.cur[m[1]] || 0)) s.cur[m[1]] = end;
+    }
+    delete s.seen;
+  }
+  return s;
+}
+
 export async function configure(next) {
   cfg = next;
   if (cfg.url && !cfg.url.endsWith('/')) cfg.url += '/';
   await db.setMeta('dav', cfg);
   if (st.key !== stateKey()) {
-    st = { key: stateKey(), sentC: 0, seen: [], sentFiles: [] };
+    st = { key: stateKey(), sentC: 0, cur: {}, tags: {}, sentFiles: [] };
     await db.setMeta('davState', st);
   }
 }
@@ -70,24 +97,27 @@ async function mkcol(path) {
   await dav('MKCOL', path, { ok: [201, 405, 301] }); // 405 = すでにある
 }
 
-// フォルダの中身(名前の一覧。フォルダは末尾に / )
+// フォルダの中身。[{ name, tag }](フォルダは名前の末尾に / 、tag は ETag。返さないサーバーでは '')
 async function list(path) {
-  const body = '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>';
+  const body = '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getetag/></d:prop></d:propfind>';
   const res = await dav('PROPFIND', path, { body, headers: { Depth: '1', 'Content-Type': 'application/xml' }, ok: [207, 404] });
   if (res.status === 404) return [];
   const xml = new DOMParser().parseFromString(await res.text(), 'application/xml');
-  const self = new URL(base() + path).pathname.replace(/\/+$/, '');
-  const names = [];
+  const self = decodeURIComponent(new URL(base() + path).pathname).replace(/\/+$/, '');
+  const out = [];
   for (const r of xml.getElementsByTagNameNS('DAV:', 'response')) {
     const href = r.getElementsByTagNameNS('DAV:', 'href')[0]?.textContent || '';
     const p = decodeURIComponent(new URL(href, base()).pathname);
     const isDir = r.getElementsByTagNameNS('DAV:', 'collection').length > 0 || p.endsWith('/');
     const clean = p.replace(/\/+$/, '');
-    if (clean === decodeURIComponent(self)) continue;
+    if (clean === self) continue;
+    // 404 の propstat に入った空の getetag は使わない(値が入っているものだけ)
+    let tag = '';
+    for (const e of r.getElementsByTagNameNS('DAV:', 'getetag')) if (e.textContent.trim()) tag = e.textContent.trim();
     const name = clean.split('/').pop();
-    names.push(isDir ? name + '/' : name);
+    out.push({ name: isDir ? name + '/' : name, tag });
   }
-  return names;
+  return out;
 }
 
 // ファイルを手元に持っているか、サーバーから取ってこられたら true
@@ -144,17 +174,21 @@ export async function syncNow(manual = false) {
       await db.setMeta('davState', st);
     }
 
-    // 2) ほかの端末の変更を読み込む
-    const seen = new Set(st.seen);
+    // 2) ほかの端末の変更を読み込む(端末ごとに、カーソルより後のファイルだけ)
+    const full = manual || rounds++ % 10 === 0;
     const changed = new Set();
     let got = 0;
-    for (const dir of await list('ops/')) {
+    for (const { name: dir, tag } of await list('ops/')) {
       if (!dir.endsWith('/') || dir === me + '/') continue;
-      const files = (await list(`ops/${dir}`)).filter((f) => f.endsWith('.json')).sort();
+      const dev = dir.slice(0, -1);
+      if (!full && tag && st.tags[dev] === tag) continue; // 前に見たときから変わっていない
+      const files = (await list(`ops/${dir}`))
+        .map((f) => ({ name: f.name, end: endOf(f.name) }))
+        .filter((f) => f.end != null && f.end > (st.cur[dev] || 0))
+        .sort((a, b) => a.end - b.end || (a.name < b.name ? -1 : 1));
       for (const f of files) {
-        const path = `ops/${dir}${f}`;
-        if (seen.has(path)) continue;
-        const json = await (await dav('GET', path)).json();
+        if (f.end <= (st.cur[dev] || 0)) continue; // 同じ終了番号のファイルを先に読んだ
+        const json = await (await dav('GET', `ops/${dir}${f.name}`)).json();
         const ops = (json.ops || []).filter((o) => o && typeof o.id === 'string' && typeof o.l === 'number' && o.n && o.t);
         for (const op of ops) {
           for (const ref of fileRefs(op)) {
@@ -164,10 +198,11 @@ export async function syncNow(manual = false) {
         }
         got += await db.putOps(ops, recorder.clock);
         for (const op of ops) changed.add(op.n);
-        seen.add(path);
-        st.seen = [...seen];
+        st.cur[dev] = f.end;
         await db.setMeta('davState', st);
       }
+      // 全部読めたときだけ目印を覚える(途中で失敗したら次も中を見る)
+      if (tag) { st.tags[dev] = tag; await db.setMeta('davState', st); }
     }
     // 3) まだ手元にないファイル(送った端末がまだ上げていなかったもの、古い版のアプリでは受け取らなかった画像)を取りに行く
     if (!st.filesScanned) {
@@ -202,3 +237,6 @@ export async function syncNow(manual = false) {
     if (again) { again = false; schedule(1000); }
   }
 }
+
+// テスト用
+export const _test = { migrate, endOf };
