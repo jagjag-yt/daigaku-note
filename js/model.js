@@ -258,6 +258,21 @@ export function strokeHit(e, x, y, r) {
   return false;
 }
 
+// op が使うファイル(PDF・画像)。同期でファイルも一緒に送るため
+export function fileRefs(op) {
+  const p = op.p || {};
+  if (op.t === 'page.add') {
+    const bg = p.page && p.page.bg;
+    if (bg && bg.type === 'pdf' && bg.hash) return [{ hash: bg.hash, type: 'application/pdf' }];
+  } else if (op.t === 'stroke.add') {
+    const d = p.s;
+    if (d && d.tool === 'image' && d.hash) return [{ hash: d.hash, type: d.mime || 'image/png' }];
+  }
+  return [];
+}
+// 同期先に置くときのファイルの拡張子
+export const fileExt = (type) => ({ 'application/pdf': 'pdf', 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' })[type] || 'bin';
+
 // 筆圧から線の太さ(pt)
 // pr: 2  本物の筆圧つきの線。ふつうの筆圧(0.2 前後)で今までの線とほぼ同じ太さになり、
 //        軽く書くと細く(最小で 0.55 倍)、強く書くと太く(最大で 1.15 倍)なる。平方根で、弱い筆圧の差を大きめに出す

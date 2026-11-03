@@ -1,7 +1,8 @@
-// 同期の土台:op と PDF をまとめた「同期ファイル」を書き出し、別の端末で取り込む。
+// 同期の土台:op と PDF・画像をまとめた「同期ファイル」を書き出し、別の端末で取り込む。
 // 取り込みは「まだ持っていない op を足すだけ」なので、何度取り込んでも、どの順で取り込んでも結果は同じ。
 // 後で WebDAV や自前サーバーに載せ替えるときも、この形(op の集合の送り合い)をそのまま使う。
 import * as db from './db.js';
+import { fileRefs } from './model.js';
 
 export const FORMAT = 'daigaku-note-sync';
 
@@ -15,9 +16,7 @@ const blobToDataUrl = (blob) => new Promise((res, rej) => {
 export async function buildSyncFile(device, noteId = null) {
   const ops = noteId ? await db.opsForNote(noteId) : await db.allOps();
   const hashes = new Set();
-  for (const op of ops) {
-    if (op.t === 'page.add' && op.p.page.bg && op.p.page.bg.type === 'pdf') hashes.add(op.p.page.bg.hash);
-  }
+  for (const op of ops) for (const r of fileRefs(op)) hashes.add(r.hash);
   const files = [];
   for (const h of hashes) {
     const f = await db.getFile(h);

@@ -2,11 +2,12 @@
 //
 // サーバーには「ただのファイル置き場」として使う。自前のサーバープログラムは要らない。
 //   <フォルダ>/daigaku-note/ops/<端末ID>/<開始番号>-<終了番号>.json  … その端末が書いた変更(追記のみ)
-//   <フォルダ>/daigaku-note/files/<sha256>.pdf                        … 読み込んだ PDF
+//   <フォルダ>/daigaku-note/files/<sha256>.pdf(.png .jpg など)          … 読み込んだ PDF・画像
 // 各端末は自分の変更だけを書き込み、ほかの端末のファイルを読み込む。
 // 変更は順番に関係なく合わさるので、同時に書いても衝突しない。
 
 import * as db from './db.js';
+import { fileRefs, fileExt } from './model.js';
 
 const FORMAT = 'daigaku-note-ops';
 let cfg = {};
@@ -109,14 +110,15 @@ export async function syncNow(manual = false) {
     let sent = 0;
     if (mine.length) {
       for (const op of mine) {
-        const bg = op.t === 'page.add' && op.p.page.bg;
-        if (bg && bg.type === 'pdf' && !st.sentFiles.includes(bg.hash)) {
-          const head = await dav('HEAD', `files/${bg.hash}.pdf`, { ok: [200, 404] });
+        for (const ref of fileRefs(op)) {
+          if (st.sentFiles.includes(ref.hash)) continue;
+          const name = `files/${ref.hash}.${fileExt(ref.type)}`;
+          const head = await dav('HEAD', name, { ok: [200, 404] });
           if (head.status === 404) {
-            const f = await db.getFile(bg.hash);
-            if (f) await dav('PUT', `files/${bg.hash}.pdf`, { body: f.data, headers: { 'Content-Type': 'application/pdf' } });
+            const f = await db.getFile(ref.hash);
+            if (f) await dav('PUT', name, { body: f.data, headers: { 'Content-Type': ref.type } });
           }
-          st.sentFiles.push(bg.hash);
+          st.sentFiles.push(ref.hash);
         }
       }
       const from = mine[0].c, to = mine[mine.length - 1].c;
@@ -140,10 +142,11 @@ export async function syncNow(manual = false) {
         const json = await (await dav('GET', path)).json();
         const ops = (json.ops || []).filter((o) => o && typeof o.id === 'string' && typeof o.l === 'number' && o.n && o.t);
         for (const op of ops) {
-          const bg = op.t === 'page.add' && op.p.page.bg;
-          if (bg && bg.type === 'pdf' && !(await db.hasFile(bg.hash))) {
-            const res = await dav('GET', `files/${bg.hash}.pdf`, { ok: [200, 404] });
-            if (res.status === 200) await db.putFile({ hash: bg.hash, name: bg.hash + '.pdf', type: 'application/pdf', data: await res.blob() });
+          for (const ref of fileRefs(op)) {
+            if (await db.hasFile(ref.hash)) continue;
+            const name = `${ref.hash}.${fileExt(ref.type)}`;
+            const res = await dav('GET', 'files/' + name, { ok: [200, 404] });
+            if (res.status === 200) await db.putFile({ hash: ref.hash, name, type: ref.type, data: new Blob([await res.blob()], { type: ref.type }) });
           }
           recorder.observe(op);
         }
