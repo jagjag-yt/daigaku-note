@@ -293,6 +293,81 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
   const fromB = await idb(page, `return ops.filter(o => o.d !== ops.find(x => x.t === 'note.create').d).length`);
   if (fromB < 1) throw new Error('端末Bの変更が届いていない');
   log('WebDAV: 端末Bで書いた線が端末Aに自動で届いた');
+  // 自動の同期: カーソルより後だけ読み、変わっていない端末のフォルダは中を見ない
+  // (直前に手動で同期しているので、次の自動の同期は「全部見る回」ではなく ETag で判断する回になる)
+  {
+    const props = [];
+    const onReq = (r) => { if (r.method() === 'PROPFIND') props.push(new (require('url').URL)(r.url()).pathname); };
+    page.on('request', onReq);
+    const autoSync = async () => {
+      props.length = 0;
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      await page.waitForTimeout(2500);
+    };
+    const lookedInside = () => props.some((p) => /\/ops\/.+\//.test(p));
+    const status = () => page.evaluate(() => document.querySelector('#dav-form .sync-status').textContent);
+    const davReq = (method, p, body) => fetch(DAV + p, { method, body, headers: { Authorization: 'Basic ' + Buffer.from('test:pass').toString('base64') } });
+    const davPut = async (p, body) => { await davReq('MKCOL', p.replace(/[^/]+$/, '')); await davReq('PUT', p, body); };
+    const fixed = !!process.env.FIXEDTAG;
+
+    const before = await idb(page, 'return ops.length');
+    await draw(pb, [[bb.x + 60, bb.y + 500], [bb.x + 300, bb.y + 480]]);
+    await pb.waitForTimeout(6500);
+    await autoSync();
+    let after = await idb(page, 'return ops.length');
+    if (fixed) {
+      // フォルダの ETag が変わらないサーバー: 自動の同期では気づけないが、手動の同期で(2回続けて)気づき、以後は ETag を使わない
+      if (after !== before || lookedInside()) throw new Error('ETag が変わらないサーバーのまねができていない');
+      for (let k = 0; k < 2; k++) {
+        if (k) { await draw(pb, [[bb.x + 60, bb.y + 620], [bb.x + 300, bb.y + 600]]); await pb.waitForTimeout(6500); }
+        const b1 = await idb(page, 'return ops.length');
+        await page.click('#sync-btn');
+        await page.click('#dav-form button[type=submit]');
+        await page.waitForTimeout(2500);
+        await page.click('#sync-close');
+        after = await idb(page, 'return ops.length');
+        if (after <= b1) throw new Error('手動の同期で端末Bの新しい線が届いていない');
+      }
+      const b2 = after;
+      await draw(pb, [[bb.x + 60, bb.y + 560], [bb.x + 300, bb.y + 540]]);
+      await pb.waitForTimeout(6500);
+      await autoSync();
+      after = await idb(page, 'return ops.length');
+      if (after <= b2) throw new Error('ETag が当てにならないと分かったあとも、自動の同期で届いていない');
+      log('WebDAV: フォルダの ETag が変わらないサーバーでも、手動の同期のあとは自動で届く');
+    } else {
+      if (after <= before) throw new Error('自動の同期で端末Bの新しい線が届いていない');
+      if (!process.env.NOETAG && !lookedInside()) throw new Error('端末Bのフォルダを見ずに届いた?: ' + props.join(' '));
+      log('WebDAV: ETag が変わった端末のフォルダだけ見て、新しい線が届いた(', after - before, '件)');
+      await autoSync();
+      if ((await idb(page, 'return ops.length')) !== after) throw new Error('変更がないのに op が増えた');
+      if (!process.env.NOETAG && lookedInside()) throw new Error('変わっていない端末のフォルダの中まで見ている: ' + props.join(' '));
+      log('WebDAV: 変更がないときは', props.length, '回の問い合わせで済んだ');
+    }
+
+    // 壊れたファイル・新しい版の形のファイルがあっても、ほかの端末の変更は読める。カーソルは進めない
+    const op = (d, c, n, t, p) => ({ id: `${d}:${c}`, d, c, l: 9000 + c, n, t, p, ts: Date.now() });
+    await davPut('daigaku-note/ops/aaaa1/000000001-000000001.json', '{"format":"daigaku-note-ops","ver');
+    await davPut('daigaku-note/ops/aaaa2/000000001-000000001.json', JSON.stringify({ format: 'daigaku-note-ops', version: 2, ops: [] }));
+    await davPut('daigaku-note/ops/aaaa3/000000001-000000002.json', '{"broken');
+    await davPut('daigaku-note/ops/aaaa3/000000001-000000003.json', JSON.stringify({ format: 'daigaku-note-ops', version: 1, device: 'aaaa3', ops: [op('aaaa3', 1, 'nz', 'note.create', { title: '壊れたファイルの後' })] }));
+    await davPut('daigaku-note/ops/zzzz9/000000001-000000001.json', JSON.stringify({ format: 'daigaku-note-ops', version: 1, device: 'zzzz9', ops: [op('zzzz9', 1, 'nz9', 'note.create', { title: '後ろの端末' })] }));
+    await page.click('#sync-btn');
+    await page.click('#dav-form button[type=submit]');
+    await page.waitForTimeout(2500);
+    const st1 = await status();
+    await page.click('#sync-close');
+    const titles = await idb(page, `return ops.filter(o => o.t === 'note.create').map(o => o.p.title)`);
+    if (!titles.includes('後ろの端末') || !titles.includes('壊れたファイルの後')) throw new Error('壊れたファイルの後の変更が読めていない: ' + titles.join(','));
+    if (!/アプリを更新/.test(st1)) throw new Error('新しい版の形のファイルを知らせていない: ' + st1);
+    const cur = await page.evaluate(() => new Promise((res) => {
+      const r = indexedDB.open('daigaku-note');
+      r.onsuccess = () => { const g = r.result.transaction('meta').objectStore('meta').get('davState'); g.onsuccess = () => res(g.result.cur); };
+    }));
+    if (cur.aaaa1 || cur.aaaa2 || cur.aaaa3 !== 3) throw new Error('カーソルの進み方がおかしい: ' + JSON.stringify(cur));
+    log('WebDAV: 壊れたファイル・新しい版のファイルがあっても、ほかの変更は読めて、カーソルは進めない(', st1.replace(/^.*?。/, ''), ')');
+    page.off('request', onReq);
+  }
   if (gnTitle) {
     // 取り込んだ画像のファイルも同期で届き、表示される
     await pb.click('#back');

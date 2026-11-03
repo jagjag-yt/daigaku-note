@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: テスト
-        run: node --test test/model.test.mjs
+        run: npm test
       - name: 公開するファイルだけ集める
         run: |
           mkdir _site

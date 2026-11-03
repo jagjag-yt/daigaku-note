@@ -6,7 +6,7 @@
   "description": "大学ノート: 無料・オフライン・クロスプラットフォームの手書きノート(PWA)",
   "scripts": {
     "start": "node serve.mjs 8123",
-    "test": "node --test test/model.test.mjs test/shape.test.mjs"
+    "test": "node --test test/model.test.mjs test/shape.test.mjs test/webdav.test.mjs test/goodnotes.test.mjs"
   },
   "license": "MIT"
 }
