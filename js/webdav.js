@@ -49,6 +49,21 @@ const rangeOf = (name) => {
   return m ? { from: Number(m[1]), end: Number(m[2]) } : null;
 };
 const endOf = (name) => rangeOf(name)?.end ?? null;
+// 送るものを決める。st は sentC と resent だけを見る。
+// 以前の版では、GoodNotes の取り込み中に番号を取ってから保存するまでの間に別の op が送られると、取り込んだ op が「送り済み」の
+// 後ろに取り残されることがあった。取り込んだ op を持つ端末は、この版で一度だけ、取り込んだ最初の番号から今回の分までを
+// 1つのファイルで送り直す(終了番号が読む側のカーソルより大きいので、読む側は読む)。取り込んでいない端末は送り直さない
+function planSend(own, fresh, st) {
+  if (!fresh.length) return null;
+  const to = fresh[fresh.length - 1].c;
+  if (!st.resent && st.sentC > 0) {
+    const first = own.find((o) => o.c <= st.sentC && o.p && o.p.s && o.p.s.src === 'goodnotes');
+    // 取り込みの最初の op(note.create)には src がないので、同じノートの最初の番号から
+    const start = first && own.find((o) => o.n === first.n);
+    if (start) return { from: start.c, to, out: own.filter((o) => o.c >= start.c && o.c <= to), resend: true };
+  }
+  return { from: st.sentC + 1, to, out: fresh, resend: false };
+}
 // まだ送っていない自分の op(pending)と、そのうち送り済みの続きから抜けなく並んでいるところ(fresh)。own は番号の順
 function unsent(own, sentC) {
   const pending = own.filter((o) => o.c > sentC);
@@ -73,14 +88,23 @@ function migrate(s) {
 }
 
 export async function configure(next) {
-  // 同期の途中で設定が変わると、古いサーバーに送った分を新しいサーバーに送ったことにしてしまうので、終わるまで待つ
+  // 同期の途中で設定が変わると、古いサーバーに送った分を新しいサーバーに送ったことにしてしまうので、終わるまで待つ。
+  // 通信は時間切れ(dav())で必ず終わるので、待ちは永久には続かない。待ち終えたら設定を変え終わるまで同期を入れない
   while (running) await new Promise((r) => setTimeout(r, 100));
-  cfg = next;
-  if (cfg.url && !cfg.url.endsWith('/')) cfg.url += '/';
-  await db.setMeta('dav', cfg);
-  if (st.key !== stateKey()) {
-    st = { key: stateKey(), sentC: 0, cur: {}, tags: {}, sentFiles: [] };
+  running = true;
+  try {
+    const nextCfg = { ...next };
+    if (nextCfg.url && !nextCfg.url.endsWith('/')) nextCfg.url += '/';
+    cfg = nextCfg;
+    if (st.key !== stateKey()) {
+      st = { key: stateKey(), sentC: 0, cur: {}, tags: {}, sentFiles: [] };
+      gapSince = 0;
+      lastFull = 0;
+    }
+    await db.setMeta('dav', cfg);
     await db.setMeta('davState', st);
+  } finally {
+    running = false;
   }
 }
 
@@ -97,7 +121,19 @@ function base() {
 
 async function dav(method, path, { body, headers = {}, ok = [200, 201, 204, 207] } = {}) {
   const auth = 'Basic ' + btoa(unescape(encodeURIComponent(`${cfg.user}:${cfg.pass || ''}`)));
-  const res = await fetch(base() + path, { method, body, headers: { Authorization: auth, ...headers }, cache: 'no-store' });
+  // 時間切れ: 通信が止まったままだと同期が終わらず、設定の保存も待ち続けるため。大きなファイルを送るときは長めに
+  const ctl = new AbortController();
+  const big = body && (body.size || body.length || 0) > 1_000_000;
+  const t = setTimeout(() => ctl.abort(), big ? 300_000 : 60_000);
+  let res;
+  try {
+    res = await fetch(base() + path, { method, body, headers: { Authorization: auth, ...headers }, cache: 'no-store', signal: ctl.signal });
+  } catch (e) {
+    if (e.name === 'AbortError') throw new TypeError('時間切れ'); // 接続できないときと同じ扱い
+    throw e;
+  } finally {
+    clearTimeout(t);
+  }
   if (!ok.includes(res.status)) {
     const err = new Error(`${method} ${path || '/'}: ${res.status}`);
     err.status = res.status;
@@ -164,9 +200,9 @@ export async function syncNow(manual = false) {
     }
 
     // 1) 自分の新しい変更を書き込む
-    // 送るのは「送り済みの番号の続きから、抜けなく並んでいるところまで」。番号を取ってから保存するまでに間がある処理の途中だと、
-    // 後の番号が先に保存されていることがある。それを先に送ると、前の番号が「送り済み」の後ろに取り残されてしまう。
-    // 抜けが2分たっても埋まらなければ(保存の前にアプリが閉じられたなど)、その番号はもう来ないので、抜けたまま送る。
+    // 送るのは「送り済みの番号の続きから、抜けなく並んでいるところまで」。後の番号が先に保存されていることがあり
+    // (保存に失敗して番号だけ進んだときなど)、それを先に送ると、前の番号が「送り済み」の後ろに取り残されてしまうため。
+    // 抜けが2分たっても埋まらなければ、その番号はもう来ないので、抜けたまま送る。
     const own = (await db.opsByDevice(me)).sort((a, b) => a.c - b.c);
     const { pending, fresh: ready } = unsent(own, st.sentC);
     let fresh = ready;
@@ -175,14 +211,8 @@ export async function syncNow(manual = false) {
       if (Date.now() - gapSince >= GAP_WAIT) { fresh = pending; gapSince = 0; }
     } else gapSince = 0;
     let sent = 0;
-    if (fresh.length) {
-      const to = fresh[fresh.length - 1].c;
-      // この版で一度だけ、送り済みの分も含めて全部を1つのファイルで送り直す(以前の版で取り残された番号を救うため)。
-      // 読む側は終了番号で読むので、1番からのファイルでも読まれる
-      const resend = !st.resent;
-      const out = resend ? own.filter((o) => o.c <= to) : fresh;
-      const from = resend ? 1 : st.sentC + 1;
-      for (const op of out) {
+    const put = async (plan) => {
+      for (const op of plan.out) {
         for (const ref of fileRefs(op)) {
           if (st.sentFiles.includes(ref.hash)) continue;
           const name = `files/${ref.hash}.${fileExt(ref.type)}`;
@@ -194,11 +224,26 @@ export async function syncNow(manual = false) {
           st.sentFiles.push(ref.hash);
         }
       }
-      const body = JSON.stringify({ format: FORMAT, version: 1, device: me, ops: out });
-      await dav('PUT', `ops/${me}/${String(from).padStart(9, '0')}-${String(to).padStart(9, '0')}.json`, { body, headers: { 'Content-Type': 'application/json' } });
-      st.sentC = to;
+      const body = JSON.stringify({ format: FORMAT, version: 1, device: me, ops: plan.out });
+      await dav('PUT', `ops/${me}/${String(plan.from).padStart(9, '0')}-${String(plan.to).padStart(9, '0')}.json`, { body, headers: { 'Content-Type': 'application/json' } });
+    };
+    let plan = planSend(own, fresh, st);
+    if (plan && plan.resend) {
+      // 送り直しは大きくなりうる。サーバーに断られたら(大きすぎるなど)あきらめて、ふつうに送る
+      try { await put(plan); } catch (e) {
+        if (e instanceof TypeError) throw e; // 接続できない: 次の同期でもう一度
+        console.warn('送り直しをあきらめました', e);
+        plan = { ...planSend(own, fresh, { ...st, resent: true }) };
+        await put(plan);
+      }
+    } else if (plan) await put(plan);
+    if (plan) {
+      st.sentC = plan.to;
       st.resent = true;
       sent = fresh.length;
+      await db.setMeta('davState', st);
+    } else if (!st.resent && st.sentC === 0) {
+      st.resent = true; // 一度も送っていない端末には取り残しはない
       await db.setMeta('davState', st);
     }
     if (gapSince) schedule(15_000); // 抜けが埋まったか、また見に来る
@@ -206,7 +251,7 @@ export async function syncNow(manual = false) {
     // 2) ほかの端末の変更を読み込む(端末ごとに、カーソルより後のファイルだけを終了番号の順に)
     const full = manual || !lastFull || Date.now() - lastFull >= FULL_EVERY;
     const changed = new Set();
-    let got = 0, newer = false, broken = false;
+    let got = 0, newer = false, broken = false, suspicious = false;
     for (const { name: dir, tag } of await list('ops/')) {
       if (!dir.endsWith('/') || dir === me + '/') continue;
       const dev = dir.slice(0, -1);
@@ -226,8 +271,16 @@ export async function syncNow(manual = false) {
           if (!(e instanceof SyntaxError)) throw e;
           // 書き込みの途中で切れた壊れたファイル。同じ範囲をふくむ後のファイルがあればそちらで読む
           if (files.some((g) => g !== f && g.from <= f.from && g.end >= f.end)) continue;
-          broken = stopped = true; // この端末はここで止める(ほかの端末は続ける)。次の同期でまた試す
-          break;
+          // この端末はここで止める(ほかの端末は続ける)。次の同期でまた試し、20回読めなければあきらめて先へ進む
+          const key = `${dev}/${f.name}`;
+          st.badTries = st.badTries || {};
+          st.badTries[key] = (st.badTries[key] || 0) + 1;
+          if (st.badTries[key] < 20) { broken = stopped = true; await db.setMeta('davState', st); break; }
+          delete st.badTries[key];
+          st.lost = (st.lost || 0) + 1;
+          st.cur[dev] = f.end;
+          await db.setMeta('davState', st);
+          continue;
         }
         if (!json || json.format !== FORMAT || !(json.version <= 1)) {
           newer = stopped = true; // 新しい版のアプリが書いた形。読んだことにはせず、アプリの更新を待つ
@@ -246,12 +299,22 @@ export async function syncNow(manual = false) {
         read++;
         await db.setMeta('davState', st);
       }
-      // ETag が前と同じなのに新しいファイルがあった: このサーバーの ETag は当てにならない
-      if (sameTag && read && !st.etagBad) { st.etagBad = true; await db.setMeta('davState', st); }
+      // ETag が前と同じなのに新しいファイルがあった: このサーバーの ETag は当てにならないかもしれない
+      if (sameTag && read) suspicious = true;
       // 最後まで読めたときだけ目印を覚える(途中で止まったら次も中を見る)
       if (tag && !stopped && st.tags[dev] !== tag) { st.tags[dev] = tag; await db.setMeta('davState', st); }
     }
-    if (full) lastFull = Date.now();
+    if (full) {
+      lastFull = Date.now();
+      // 全部見る回で2回続けて「ETag が同じなのに新しいファイル」なら、以後は ETag を使わない
+      // (1回で決めないのは、ETag を少し遅れて更新するサーバーもあるため)
+      const sus = suspicious ? (st.etagSus || 0) + 1 : 0;
+      if (sus !== (st.etagSus || 0)) {
+        st.etagSus = sus;
+        if (sus >= 2) st.etagBad = true;
+        await db.setMeta('davState', st);
+      }
+    }
     // 3) まだ手元にないファイル(送った端末がまだ上げていなかったもの、古い版のアプリでは受け取らなかった画像)を取りに行く
     if (!st.filesScanned) {
       // 一度だけ、全部の op を見て足りないファイルを探す(画像に対応していない版から更新したとき用)
@@ -273,7 +336,9 @@ export async function syncNow(manual = false) {
     const time = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
     let note = '';
     if (newer) note = '。ほかの端末が新しい版の大学ノートで書いた変更があります。アプリを更新してください';
-    else if (broken) note = '。読めないファイルがあったので、一部の変更は次の同期で取り直します';
+    else if (broken) note = '。ほかの端末の変更のファイルに読めないものがありました。次の同期で読み直します';
+    else if (st.lost) note = `。ほかの端末の変更のファイルのうち ${st.lost} 個が壊れていて読めませんでした`;
+    if (gapSince) note += '。保存の終わっていない変更があるので、送るのを少し待っています';
     onStatus(`クラウド同期: ${time} に同期しました` + (manual ? `(送信 ${sent}件・受信 ${got}件)` : '') + note);
     if (got) onRemoteChange(changed);
   } catch (e) {
@@ -295,4 +360,4 @@ export async function syncNow(manual = false) {
 }
 
 // テスト用
-export const _test = { migrate, endOf, rangeOf, unsent };
+export const _test = { migrate, endOf, rangeOf, unsent, planSend };

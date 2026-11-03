@@ -30,3 +30,22 @@ test('自分の op は、送り済みの続きから抜けなく並んでいる�
   assert.deepEqual(r.fresh, []);
   assert.deepEqual(r.pending.map((o) => o.c), [5]);
 });
+
+test('送り直しは、以前の版で GoodNotes を取り込んだ端末だけが、取り込んだノートの最初の番号から一度だけ', () => {
+  const { planSend } = _test;
+  const op = (c, n, src) => ({ c, n, t: src ? 'stroke.add' : 'note.create', p: src ? { s: { src } } : {} });
+  const own = [op(1, 'a'), op(2, 'a', 'pen'), op(3, 'g'), op(4, 'g', 'goodnotes'), op(5, 'g', 'goodnotes'), op(6, 'a', 'pen'), op(7, 'a', 'pen')];
+  const fresh = own.slice(6);
+  // 以前の版から更新した端末(6 番まで送り済み)。取り込んだノート g の最初(3 番)から送り直す
+  let p = planSend(own, fresh, { sentC: 6 });
+  assert.deepEqual([p.from, p.to, p.resend, p.out.map((o) => o.c)], [3, 7, true, [3, 4, 5, 6, 7]]);
+  // 送り直し済み: ふつうに続きだけ
+  p = planSend(own, fresh, { sentC: 6, resent: true });
+  assert.deepEqual([p.from, p.to, p.resend, p.out.map((o) => o.c)], [7, 7, false, [7]]);
+  // 取り込んでいない端末は送り直さない
+  const plain = [op(1, 'a'), op(2, 'a', 'pen'), op(3, 'a', 'pen')];
+  p = planSend(plain, plain.slice(2), { sentC: 2 });
+  assert.deepEqual([p.from, p.resend], [3, false]);
+  // 送るものがなければ何もしない
+  assert.equal(planSend(own, [], { sentC: 7 }), null);
+});

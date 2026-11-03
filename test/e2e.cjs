@@ -316,14 +316,18 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
     await autoSync();
     let after = await idb(page, 'return ops.length');
     if (fixed) {
-      // フォルダの ETag が変わらないサーバー: 自動の同期では気づけないが、手動の同期で気づき、以後は ETag を使わない
+      // フォルダの ETag が変わらないサーバー: 自動の同期では気づけないが、手動の同期で(2回続けて)気づき、以後は ETag を使わない
       if (after !== before || lookedInside()) throw new Error('ETag が変わらないサーバーのまねができていない');
-      await page.click('#sync-btn');
-      await page.click('#dav-form button[type=submit]');
-      await page.waitForTimeout(2500);
-      await page.click('#sync-close');
-      after = await idb(page, 'return ops.length');
-      if (after <= before) throw new Error('手動の同期で端末Bの新しい線が届いていない');
+      for (let k = 0; k < 2; k++) {
+        if (k) { await draw(pb, [[bb.x + 60, bb.y + 620], [bb.x + 300, bb.y + 600]]); await pb.waitForTimeout(6500); }
+        const b1 = await idb(page, 'return ops.length');
+        await page.click('#sync-btn');
+        await page.click('#dav-form button[type=submit]');
+        await page.waitForTimeout(2500);
+        await page.click('#sync-close');
+        after = await idb(page, 'return ops.length');
+        if (after <= b1) throw new Error('手動の同期で端末Bの新しい線が届いていない');
+      }
       const b2 = after;
       await draw(pb, [[bb.x + 60, bb.y + 560], [bb.x + 300, bb.y + 540]]);
       await pb.waitForTimeout(6500);
