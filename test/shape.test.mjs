@@ -109,3 +109,9 @@ test('角の丸い四角形も長方形になる', () => {
     assert.equal(shape(polygon(cs, { start: 0.3, step: 1.5 })), 'rect', 'r ' + f);
   }
 });
+
+test('台形・平行四辺形・五角形は長方形にしない', () => {
+  for (const k of [20, 30, 40]) assert.equal(shape(polygon([[k, 0], [120 - k, 0], [120, 80], [0, 80]], { start: 0.2 })), 'quad', '台形 ' + k);
+  for (const k of [20, 30]) assert.equal(shape(polygon([[k, 0], [120 + k, 0], [120, 80], [0, 80]], { start: 0.2 })), 'quad', '平行四辺形 ' + k);
+  assert.notEqual(shape(polygon([[50, 0], [100, 40], [100, 100], [0, 100], [0, 40]], { start: 0.1 })), 'rect', '家の形');
+});

@@ -324,22 +324,23 @@ export function recognizeShape(flat) {
   }
   ellErr /= n;
 
+  // 多角形からのずれの平均(pt)
+  const polyErr = corners.length === 3 || corners.length === 4 ? polyErrOf(pts, corners) : Infinity;
   // 角の丸い四角形は、角がうまく見つからない(丸みの途中が角になる)ことがある。
-  // 外接する長方形が、楕円よりはっきり沿っていれば長方形にする
+  // 見つかった角の多角形より、外接する長方形のほうがよく沿い、楕円よりはっきり沿っていれば長方形にする
+  // (台形・平行四辺形・五角形は、外接する長方形からのずれが大きいので当たらない)
   {
     const rc = axisRect(pts, [bx0, bx1, by0, by1]);
     const rErr = polyErrOf(pts, rc);
-    if (rErr < ellErr * 0.6 && rErr < size * 0.06) return { type: 'rect', pts: densify(rc, true, p) };
+    if (rErr < polyErr && rErr < ellErr * 0.6 && rErr < size * 0.02) return { type: 'rect', pts: densify(rc, true, p) };
   }
-  if (corners.length === 3 || corners.length === 4) {
-    // 多角形からのずれの平均(pt)
-    const polyErr = polyErrOf(pts, corners);
+  if (polyErr < Infinity) {
     if (polyErr <= ellErr && polyErr < size * 0.06) {
       if (corners.length === 3) return { type: 'triangle', pts: densify(corners, true, p) };
       // 辺がほぼ水平・垂直なら、きれいな長方形にする。
       // 各辺の位置: まず角の位置から大まかに決め、各点をいちばん近い辺に振り分けて、その中央値にする
       // (角の位置は手ぶれで数 pt ずれることがあり、外接する長方形は書き終わりのはみ出しに引っぱられる)。
-      // 水平・垂直かどうかは、角どうしの向きか、その長方形に点がどれだけ沿っているかで決める
+      // 水平・垂直かどうかは、辺の傾きか、辺の両端の横ずれ(6pt まで)で決める
       // (細長い枠では、角が少しずれるだけで短い辺の向きが大きく変わるため)
       const sx = corners.map((c) => c[0]).sort((u, v) => u - v), sy = corners.map((c) => c[1]).sort((u, v) => u - v);
       const e = [(sx[0] + sx[1]) / 2, (sx[2] + sx[3]) / 2, (sy[0] + sy[1]) / 2, (sy[2] + sy[3]) / 2];
@@ -347,9 +348,10 @@ export function recognizeShape(flat) {
       const axis = corners.every((c, i) => {
         const d = corners[(i + 1) % 4];
         const ang = Math.abs(Math.atan2(d[1] - c[1], d[0] - c[0])) % (Math.PI / 2);
-        return Math.min(ang, Math.PI / 2 - ang) < 0.22;
+        const dev = Math.min(ang, Math.PI / 2 - ang);
+        return dev < 0.22 || dist(c[0], c[1], d[0], d[1]) * Math.sin(dev) < Math.min(6, minSide * 0.3);
       });
-      if (x1 - x0 > 4 && y1 - y0 > 4 && (axis || polyErrOf(pts, rc) < polyErr * 1.6 + 0.5)) return { type: 'rect', pts: densify(rc, true, p) };
+      if (x1 - x0 > 4 && y1 - y0 > 4 && axis) return { type: 'rect', pts: densify(rc, true, p) };
       return { type: 'quad', pts: densify(corners, true, p) };
     }
   }
