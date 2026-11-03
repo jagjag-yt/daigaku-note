@@ -192,6 +192,39 @@ function perpDist(p, a, b) {
   return Math.abs(dy * p[0] - dx * p[1] + b[0] * a[1] - b[1] * a[0]) / l;
 }
 
+// 点 p と線分 ab の距離
+function segDist(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const l2 = dx * dx + dy * dy;
+  const t = l2 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0;
+  return dist(p[0], p[1], a[0] + t * dx, a[1] + t * dy);
+}
+
+// 点の列と、閉じた多角形 cs のずれの平均
+function polyErrOf(pts, cs) {
+  let sum = 0;
+  for (const q of pts) {
+    let m = Infinity;
+    for (let i = 0; i < cs.length; i++) m = Math.min(m, segDist(q, cs[i], cs[(i + 1) % cs.length]));
+    sum += m;
+  }
+  return sum / pts.length;
+}
+
+// 水平・垂直な長方形を当てはめる。e = [左, 右, 上, 下] の大まかな位置。
+// 各点をいちばん近い辺に振り分けて、その中央値を辺の位置にする → [[x0,y0],[x1,y0],[x1,y1],[x0,y1]]
+function axisRect(pts, e) {
+  const side = [[], [], [], []];
+  for (const [x, y] of pts) {
+    const ds = [Math.abs(x - e[0]), Math.abs(x - e[1]), Math.abs(y - e[2]), Math.abs(y - e[3])];
+    const k = ds.indexOf(Math.min(...ds));
+    side[k].push(k < 2 ? x : y);
+  }
+  const med = (v, f) => { if (!v.length) return f; v.sort((u, w) => u - w); return v[v.length >> 1]; };
+  const [x0, x1, y0, y1] = side.map((v, i) => med(v, e[i]));
+  return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+}
+
 function douglasPeucker(pts, eps) {
   if (pts.length < 3) return pts;
   let maxD = 0, idx = 0;
@@ -223,7 +256,7 @@ export function recognizeShape(flat) {
   const pts = [];
   let psum = 0;
   for (let i = 0; i < flat.length; i += 3) { pts.push([flat[i], flat[i + 1]]); psum += flat[i + 2]; }
-  const n = pts.length;
+  let n = pts.length;
   if (n < 6) return null;
   const p = Math.round((psum / n) * 100) / 100;
   let L = 0;
@@ -241,36 +274,88 @@ export function recognizeShape(flat) {
 
   // 閉じた図形(始点と終点が近い)
   if (chord > L * 0.22) return null;
-  const closedPts = [...pts.slice(0, -1), first];
-  const simp = douglasPeucker(closedPts, L * 0.045);
-  const corners = simp.slice(0, -1);
-  // 始点付近に余計な頂点が残ることがあるので、近すぎる頂点はまとめる
-  const merged = [];
-  for (const c of corners) {
-    if (!merged.some((m) => dist(m[0], m[1], c[0], c[1]) < L * 0.06)) merged.push(c);
+  // 書き終わりが始点を通り過ぎていたら、始点にいちばん近づいたところで切る
+  {
+    let bi = n - 1, bd = chord;
+    for (let i = Math.floor(n * 0.7); i < n - 1; i++) {
+      const dd = dist(pts[i][0], pts[i][1], first[0], first[1]);
+      if (dd < bd) { bd = dd; bi = i; }
+    }
+    if (bi < n - 1 && bi >= 5) { pts.length = bi + 1; n = pts.length; }
   }
-  if (merged.length === 3) return { type: 'triangle', pts: densify(merged, true, p) };
-  if (merged.length === 4) {
-    const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);
-    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
-    // 辺がほぼ水平・垂直なら、きれいな長方形にする
-    const axis = merged.every((c, i) => {
-      const d = merged[(i + 1) % 4];
-      const ang = Math.abs(Math.atan2(d[1] - c[1], d[0] - c[0])) % (Math.PI / 2);
-      return Math.min(ang, Math.PI / 2 - ang) < 0.22;
-    });
-    if (axis) return { type: 'rect', pts: densify([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], true, p) };
-    return { type: 'quad', pts: densify(merged, true, p) };
-  }
-  // 円・楕円
   const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);
-  const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-  let rx = (Math.max(...xs) - Math.min(...xs)) / 2, ry = (Math.max(...ys) - Math.min(...ys)) / 2;
-  if (rx < 4 || ry < 4) return null;
-  let err = 0;
-  for (const [x, y] of pts) err += Math.abs(Math.hypot((x - cx) / rx, (y - cy) / ry) - 1);
-  err /= n;
-  if (err > 0.16) return null;
+  const bx0 = Math.min(...xs), bx1 = Math.max(...xs), by0 = Math.min(...ys), by1 = Math.max(...ys);
+  const size = (bx1 - bx0 + by1 - by0) / 2;
+  if (bx1 - bx0 < 8 || by1 - by0 < 8) return null;
+
+  // 多角形の候補: 角を探す(始点と終点は必ず頂点として残る)。
+  // しきい値は周の長さだけでなく短い辺の長さでも抑える(細長い枠で短い辺を潰さない)
+  const minSide = Math.min(bx1 - bx0, by1 - by0);
+  const closedPts = [...pts.slice(0, -1), first];
+  const simp = douglasPeucker(closedPts, Math.min(L * 0.045, minSide * 0.25));
+  // 辺の途中から書き始めると、始点(と終点)が余計な頂点として残る。両隣を結ぶ線の上にある頂点は除く
+  const dropStraight = (cs) => {
+    while (cs.length > 3) {
+      let mi = -1, md = Infinity;
+      cs.forEach((c, i) => {
+        const dv = perpDist(c, cs[(i + cs.length - 1) % cs.length], cs[(i + 1) % cs.length]);
+        if (dv < md) { md = dv; mi = i; }
+      });
+      if (md > Math.min(L * 0.035, minSide * 0.2)) break;
+      cs.splice(mi, 1);
+    }
+    return cs;
+  };
+  // そのあと、近すぎる頂点(書き終わりの小さなはみ出しなど)はまとめる
+  const corners = [];
+  for (const c of dropStraight(simp.slice(0, -1))) {
+    if (!corners.some((m) => dist(m[0], m[1], c[0], c[1]) < Math.min(L * 0.06, minSide * 0.3))) corners.push(c);
+  }
+  dropStraight(corners);
+
+  // 円・楕円の候補(外接する長方形から)
+  const cx = (bx0 + bx1) / 2, cy = (by0 + by1) / 2;
+  let rx = (bx1 - bx0) / 2, ry = (by1 - by0) / 2;
+  // 楕円からのずれの平均(pt)。中心から見た方向で、楕円の上の点までの距離を測る
+  let ellErr = 0;
+  for (const [x, y] of pts) {
+    const rho = Math.hypot((x - cx) / rx, (y - cy) / ry);
+    ellErr += rho ? Math.abs(1 - 1 / rho) * Math.hypot(x - cx, y - cy) : Math.min(rx, ry);
+  }
+  ellErr /= n;
+
+  // 多角形からのずれの平均(pt)
+  const polyErr = corners.length === 3 || corners.length === 4 ? polyErrOf(pts, corners) : Infinity;
+  // 角の丸い四角形は、角がうまく見つからない(丸みの途中が角になる)ことがある。
+  // 見つかった角の多角形より、外接する長方形のほうがよく沿い、楕円よりはっきり沿っていれば長方形にする
+  // (台形・平行四辺形・五角形は、外接する長方形からのずれが大きいので当たらない)
+  {
+    const rc = axisRect(pts, [bx0, bx1, by0, by1]);
+    const rErr = polyErrOf(pts, rc);
+    if (rErr < polyErr && rErr < ellErr * 0.6 && rErr < size * 0.02) return { type: 'rect', pts: densify(rc, true, p) };
+  }
+  if (polyErr < Infinity) {
+    if (polyErr <= ellErr && polyErr < size * 0.06) {
+      if (corners.length === 3) return { type: 'triangle', pts: densify(corners, true, p) };
+      // 辺がほぼ水平・垂直なら、きれいな長方形にする。
+      // 各辺の位置: まず角の位置から大まかに決め、各点をいちばん近い辺に振り分けて、その中央値にする
+      // (角の位置は手ぶれで数 pt ずれることがあり、外接する長方形は書き終わりのはみ出しに引っぱられる)。
+      // 水平・垂直かどうかは、辺の傾きか、辺の両端の横ずれ(6pt まで)で決める
+      // (細長い枠では、角が少しずれるだけで短い辺の向きが大きく変わるため)
+      const sx = corners.map((c) => c[0]).sort((u, v) => u - v), sy = corners.map((c) => c[1]).sort((u, v) => u - v);
+      const e = [(sx[0] + sx[1]) / 2, (sx[2] + sx[3]) / 2, (sy[0] + sy[1]) / 2, (sy[2] + sy[3]) / 2];
+      const rc = axisRect(pts, e), [[x0, y0], , [x1, y1]] = rc;
+      const axis = corners.every((c, i) => {
+        const d = corners[(i + 1) % 4];
+        const ang = Math.abs(Math.atan2(d[1] - c[1], d[0] - c[0])) % (Math.PI / 2);
+        const dev = Math.min(ang, Math.PI / 2 - ang);
+        return dev < 0.22 || dist(c[0], c[1], d[0], d[1]) * Math.sin(dev) < Math.min(6, minSide * 0.3);
+      });
+      if (x1 - x0 > 4 && y1 - y0 > 4 && axis) return { type: 'rect', pts: densify(rc, true, p) };
+      return { type: 'quad', pts: densify(corners, true, p) };
+    }
+  }
+  if (rx < 4 || ry < 4 || ellErr > size * 0.08) return null;
   if (rx / ry > 0.85 && rx / ry < 1.18) rx = ry = (rx + ry) / 2;
   const out = [];
   const k = Math.max(24, Math.ceil((Math.PI * (rx + ry)) / 3));

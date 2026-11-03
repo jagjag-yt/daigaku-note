@@ -48,7 +48,7 @@ const S = {
   eraser: { si: 1, markerOnly: false },
   fit: true, // 幅に合わせた拡大率のままか(手で拡大したら false)
   fingerDraw: false,
-  shapes: true,
+  shapes: false, // 図形補正(既定はオフ)
   pressure: true, // ペンの筆圧で線の太さを変える
   undo: [],
   redo: [],
@@ -68,7 +68,9 @@ async function init() {
   S.rec = new Recorder(device, clock.c, clock.l);
   const prefs = (await db.getMeta('prefs')) || {};
   if (prefs.fingerDraw) S.fingerDraw = true;
-  if (prefs.shapes === false) S.shapes = false;
+  // 図形補正は v19 から既定オフ。以前の版は既定オンのまま prefs.shapes を保存していたので、
+  // その値は読まず、v19 以降に自分でオンにしたとき(shapeSnap)だけオンにする
+  if (prefs.shapeSnap === true) S.shapes = true;
   if (prefs.pressure === false) S.pressure = false;
   if (prefs.pen) S.pen = prefs.pen;
   if (prefs.marker) S.marker = prefs.marker;
@@ -111,7 +113,7 @@ async function init() {
 }
 
 function savePrefs() {
-  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapes: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool });
+  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool });
 }
 
 function route() {
@@ -1309,7 +1311,7 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v18\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v19\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 書いている線の入力の中身(1回の move にまとめられた点の数、座標が整数か、筆圧)
 const debugOn = /[?&]debug/.test(location.search);
@@ -1529,7 +1531,25 @@ function lassoSvg(poly) {
 // main: まとめて届いた点のときの、イベント本体(筆圧の取得に使う)
 function addPoint(e, main = e) {
   const a = active, d = a.d;
-  if (a.shaped) return;
+  if (a.shaped) {
+    // 図形に整えたあと、ペンを止めた位置から大きく動かしたら、書いている途中で止まっただけとみなして
+    // 整える前の線に戻し、続きを書けるようにする。小さな揺れは無視する(図形のまま)
+    // 止めている間に届いた点も、戻したときに使えるよう取っておく
+    if (!a.unshaped) return;
+    if (Math.hypot(e.clientX - a.holdAt[0], e.clientY - a.holdAt[1]) < UNSHAPE_PX) {
+      if (a.held.length < 2000) a.held.push([e, main]);
+      return;
+    }
+    d.pts = a.unshaped;
+    delete d.shape;
+    a.shaped = false;
+    a.unshaped = null;
+    a.holdAt = null;
+    const held = a.held;
+    a.held = [];
+    for (const [he, hm] of held) addPoint(he, hm);
+  }
+  holdCheck(a, e);
   const [x, y] = pagePoint(a.v, e);
   const n0 = d.pts.length / 3;
   if (n0) {
@@ -1557,20 +1577,30 @@ function addPoint(e, main = e) {
     } else if (d.pr === 2 && n0) p = d.pts[d.pts.length - 1];
   }
   d.pts.push(Math.round(x * 100) / 100, Math.round(y * 100) / 100, Math.round(p * 100) / 100);
-  // 図形補正: ペンを止めたら図形に整える
-  if (S.shapes && S.tool === 'pen') {
-    clearTimeout(a.holdTimer);
-    a.holdTimer = setTimeout(() => {
-      if (active !== a || a.shaped) return;
-      const shape = recognizeShape(d.pts);
-      if (!shape) return;
-      d.pts = shape.pts;
-      d.shape = shape.type;
-      a.shaped = true;
-      paintLive(a.v, strokeSvg('live', d, geometry(d)));
-    }, 550);
-  }
   requestLive(() => paintLive(a.v, strokeSvg('live', d, geometry(d))));
+}
+
+// 図形補正: 書き終わりにペンを止めたら(HOLD_MS の間 HOLD_PX 以内にとどまったら)図形に整える。
+// 止めているつもりでもペン先は少し揺れて点が届き続けるので、点が来るたびに待ち直すのではなく、
+// 止まり始めた位置から HOLD_PX 以上動いたときだけ待ち直す
+const HOLD_MS = 500, HOLD_PX = 5, UNSHAPE_PX = 14; // 画面上の px
+function holdCheck(a, e) {
+  if (!S.shapes) return;
+  if (a.holdAt && Math.hypot(e.clientX - a.holdAt[0], e.clientY - a.holdAt[1]) < HOLD_PX) return;
+  a.holdAt = [e.clientX, e.clientY];
+  clearTimeout(a.holdTimer);
+  a.holdTimer = setTimeout(() => {
+    if (active !== a || a.shaped) return;
+    const d = a.d, shape = recognizeShape(d.pts);
+    if (!shape) return;
+    a.unshaped = d.pts;
+    a.held = [];
+    d.pts = shape.pts;
+    d.shape = shape.type;
+    a.shaped = true;
+    cancelAnimationFrame(liveFrame);
+    paintLive(a.v, strokeSvg('live', d, geometry(d)));
+  }, HOLD_MS);
 }
 
 function eraseAt(e) {
@@ -1629,6 +1659,7 @@ async function onUp(e) {
   if (e.pointerType === 'pen' && e.type === 'pointercancel' && !a.shaped && a.d.pts.length) {
     const [x, y] = a.lastXY || [e.clientX, e.clientY];
     const how = 'cancel';
+    a.holdAt = null; // つないだあとに止めたときも、図形補正の待ちを始め直す
     penPending = { a, x, y, how, t: performance.now(), timer: setTimeout(flushPen, PEN_JOIN[how].ms) };
     paintLive(a.v, strokeSvg('live', a.d, geometry(a.d)));
     lastPenTime = Date.now();
