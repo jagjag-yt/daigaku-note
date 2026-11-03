@@ -33,8 +33,8 @@ test('自分の op は、送り済みの続きから抜けなく並んでいる�
 
 test('送り直しは、以前の版で GoodNotes を取り込んだ端末だけが、取り込んだノートの最初の番号から一度だけ', () => {
   const { planSend } = _test;
-  // 手で作ったノートは表紙の色を持つ。取り込んだノートは持たない
-  const op = (c, n, src) => ({ c, n, t: src ? 'stroke.add' : 'note.create', p: src ? { s: { src } } : n === 'g' || n === 'pdf' ? {} : { cover: '#888' } });
+  // 以前の版では、手で作ったノートも表紙の色を持たなかった(表紙の色では見分けない)
+  const op = (c, n, src) => ({ c, n, t: src ? 'stroke.add' : 'note.create', p: src ? { s: { src } } : { title: n } });
   const own = [op(1, 'a'), op(2, 'a', 'pen'), op(3, 'g'), op(4, 'g', 'goodnotes'), op(5, 'g', 'goodnotes'), op(6, 'a', 'pen'), op(7, 'a', 'pen')];
   const fresh = own.slice(6);
   // 以前の版から更新した端末(6 番まで送り済み)。取り込んだノート g の最初(3 番)から送り直す
@@ -48,9 +48,9 @@ test('送り直しは、以前の版で GoodNotes を取り込んだ端末だけ
   p = planSend(plain, plain.slice(2), { sentC: 2 });
   assert.deepEqual([p.from, p.resend], [3, false]);
   // 線のない取り込み(PDF だけのノート)も送り直す
-  const pdfOnly = [op(1, 'a'), op(2, 'pdf'), { c: 3, n: 'pdf', t: 'page.add', p: {} }, op(4, 'a', 'pen')];
-  p = planSend(pdfOnly, pdfOnly.slice(3), { sentC: 3 });
-  assert.deepEqual([p.from, p.to, p.resend], [2, 4, true]);
+  const pdfOnly = [op(1, 'a'), { c: 2, n: 'a', t: 'page.add', p: { page: { id: 'p', bg: { type: 'blank' } } } }, op(3, 'pdf'), { c: 4, n: 'pdf', t: 'page.add', p: { page: { id: 'q', bg: { type: 'pdf', hash: 'h', page: 1 } } } }, op(5, 'a', 'pen')];
+  p = planSend(pdfOnly, pdfOnly.slice(4), { sentC: 4 });
+  assert.deepEqual([p.from, p.to, p.resend], [3, 5, true]);
   // 送るものがなければ何もしない
   assert.equal(planSend(own, [], { sentC: 7 }), null);
 });
