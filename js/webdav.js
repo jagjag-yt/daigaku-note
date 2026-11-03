@@ -258,17 +258,22 @@ export async function syncNow(manual = false) {
             const f = await db.getFile(ref.hash);
             try {
               if (f) await dav('PUT', name, { body: f.data, headers: { 'Content-Type': ref.type } });
+              if (st.fileFails) delete st.fileFails[ref.hash];
             } catch (e) {
               // サーバーの大きさの上限を超えるファイル: このファイルは送らずに、変更は送る(ほかの端末ではこのページの背景・画像だけが出ない)。
               // 413 が見えないこともある(断りの応答に CORS のヘッダーがないとブラウザでは TypeError になる)ので、
               // 直前の HEAD は通ったのに送れないことが3回(別々の同期で)続いたら、同じように扱う
+              // (時間切れ・容量不足などほかの失敗は数えない。1回の同期では1回だけ数える)
+              if (e.status !== 413 && !(e instanceof TypeError)) throw e;
               st.fileFails = st.fileFails || {};
-              const n = (st.fileFails[ref.hash] = (st.fileFails[ref.hash] || 0) + 1);
+              if (!failedNow.has(ref.hash)) { failedNow.add(ref.hash); st.fileFails[ref.hash] = (st.fileFails[ref.hash] || 0) + 1; }
               await db.setMeta('davState', st);
-              if (e.status !== 413 && n < 3) throw e;
+              if (e.status !== 413 && st.fileFails[ref.hash] < 3) throw e;
               delete st.fileFails[ref.hash];
               st.tooBig = st.tooBig || [];
-              if (!st.tooBig.includes(ref.hash)) st.tooBig.push(ref.hash);
+              if (!st.tooBig.some((t) => t.hash === ref.hash)) st.tooBig.push({ hash: ref.hash, type: ref.type });
+              st.sentFiles.push(ref.hash);
+              continue;
             }
           }
           st.sentFiles.push(ref.hash);
@@ -279,6 +284,24 @@ export async function syncNow(manual = false) {
     };
     // ふつうの送信: 大きくなりすぎないように(サーバーの上限・遅い回線)、約500KBずつのファイルに分け、送れるたびに進める
     const enc = new TextEncoder();
+    const failedNow = new Set();
+    // 送れなかった PDF・画像を、手動の同期のときにもう一度送ってみる(変更はもう送ってあるので、ファイルだけ)
+    if (manual && st.tooBig && st.tooBig.length) {
+      const still = [];
+      for (const t of st.tooBig) {
+        if (typeof t !== 'object') continue; // 古い形(ハッシュだけ)は型が分からないので捨てる
+        const name = `files/${t.hash}.${fileExt(t.type)}`;
+        try {
+          const head = await dav('HEAD', name, { ok: [200, 404] });
+          const f = head.res.status === 404 ? await db.getFile(t.hash) : null;
+          if (f) await dav('PUT', name, { body: f.data, headers: { 'Content-Type': t.type } });
+        } catch (e) {
+          still.push(t);
+        }
+      }
+      st.tooBig = still;
+      await db.setMeta('davState', st);
+    }
     const sendPlain = async (ops) => {
       let i = 0;
       while (i < ops.length) {
@@ -415,6 +438,11 @@ export async function syncNow(manual = false) {
       st.filesScanned = true;
       await db.setMeta('davState', st);
     }
+    // あきらめたファイルも、手動の同期のときにもう一度取りに行く
+    if (manual && st.gaveUp && st.gaveUp.length) {
+      st.missing = [...(st.missing || []), ...st.gaveUp];
+      st.gaveUp = [];
+    }
     if (st.missing && st.missing.length) {
       const still = [];
       for (const m of st.missing) {
@@ -424,7 +452,7 @@ export async function syncNow(manual = false) {
         // サーバーにずっと無いファイルは、50回試したらあきらめる(毎回取りに行き続けないように)。時間切れは数えない
         if (r !== 'later') m.tries = (m.tries || 0) + 1;
         else m.later = (m.later || 0) + 1; // 時間切れが続くファイルも、200回であきらめる
-        if ((m.later || 0) >= 200 || (m.tries || 0) >= 50) { st.filesLost = (st.filesLost || 0) + 1; continue; }
+        if ((m.later || 0) >= 200 || (m.tries || 0) >= 50) { (st.gaveUp = st.gaveUp || []).push({ hash: m.hash, type: m.type, n: m.n }); continue; }
         still.push(m);
       }
       st.missing = still;
@@ -442,16 +470,9 @@ export async function syncNow(manual = false) {
     if (sendErr) note += `。この端末の変更を送れませんでした(${sendErr.timeout ? '時間切れ' : sendErr instanceof TypeError ? 'サーバーに断られたか、接続が切れました' : sendErr.message})。次の同期でもう一度送ります`;
     if (st.tooBig && st.tooBig.length) {
       note += `。PDF・画像のうち ${st.tooBig.length} 個はサーバーに送れませんでした(大きさの上限を超えた可能性があります)`;
-      if (manual) { // 手動の同期で知らせたら、次の同期でもう一度送ってみる(サーバーの上限を上げたときのため)
-        st.sentFiles = st.sentFiles.filter((h) => !st.tooBig.includes(h));
-        st.tooBig = [];
-        await db.setMeta('davState', st);
-      }
+      note += '。手動で同期すると、もう一度送ってみます';
     }
-    if (st.filesLost) {
-      note += `。ほかの端末の PDF・画像のうち ${st.filesLost} 個を取得できませんでした`;
-      if (manual) { st.filesLost = 0; await db.setMeta('davState', st); }
-    }
+    if (st.gaveUp && st.gaveUp.length) note += `。ほかの端末の PDF・画像のうち ${st.gaveUp.length} 個を取得できませんでした(手動で同期すると、もう一度取りに行きます)`;
     onStatus(`クラウド同期: ${time} に同期しました` + (manual ? `(送信 ${sent}件・受信 ${got}件)` : '') + note);
     if (got) onRemoteChange(changed);
   } catch (e) {
