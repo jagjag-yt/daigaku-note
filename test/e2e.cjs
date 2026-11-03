@@ -12,6 +12,7 @@ const DAV = process.env.DAV || 'http://localhost:8125/dav/';
 const GN = process.env.GN;
 const log = (...a) => console.log('✓', ...a);
 const shot = (p, n) => p.screenshot({ path: path.join(OUT, n) });
+let gnTitle = null; // 画像入りの GoodNotes を取り込んだときのノート名(同期の確認用)
 
 async function makePdf() {
   const doc = await PDFLib.PDFDocument.create();
@@ -85,7 +86,7 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
   // 四角形
   await draw(page, [[X(0.45), Y(0.35)], [X(0.6), Y(0.352)], [X(0.601), Y(0.55)], [X(0.452), Y(0.548)], [X(0.45), Y(0.352)]], { hold: 900, steps: 6 });
   await page.waitForTimeout(200);
-  const shapes = await idb(page, "return ops.filter(o => o.t === 'stroke.add' && o.p.s.shape).map(o => o.p.s.shape)");
+  const shapes = await idb(page, "return ops.filter(o => (o.t === 'stroke.add' || o.t === 'item.add') && o.p.s.shape).map(o => o.p.s.shape)");
   if (!shapes.includes('circle') && !shapes.includes('ellipse')) throw new Error('円の補正に失敗 ' + shapes);
   if (!shapes.includes('rect')) throw new Error('四角の補正に失敗 ' + shapes);
   log('図形補正:', shapes.join(', '));
@@ -94,7 +95,7 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
   await page.click('#tool-marker');
   await draw(page, [[X(0.04), Y(0.15)], [X(0.4), Y(0.15)]]);
   await page.waitForTimeout(150);
-  const marker = await idb(page, "return ops.filter(o => o.t === 'stroke.add' && o.p.s.tool === 'marker').length");
+  const marker = await idb(page, "return ops.filter(o => (o.t === 'stroke.add' || o.t === 'item.add') && o.p.s.tool === 'marker').length");
   if (marker !== 1) throw new Error('蛍光ペン');
   log('蛍光ペン');
   await shot(page, 'v2-1-ink.png');
@@ -174,6 +175,31 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
     const n = await page.locator('.page').count();
     const title = await page.textContent('#title');
     log('GoodNotes取り込み:', title, n, 'ページ', await countT(page, 'stroke.add'), '本(累計)');
+    // 画像・テキストボックス: 表示され、投げ縄で選んで動かせる
+    const items = await page.locator('g.item').count();
+    log('GoodNotes取り込み: 画像・テキスト', items, '個');
+    const img = page.locator('g.item image').first();
+    if (await img.count()) {
+      gnTitle = title;
+      await img.scrollIntoViewIfNeeded();
+      await page.waitForTimeout(500);
+      const ib = await img.boundingBox();
+      await page.click('#tool-lasso');
+      const m = 14;
+      await draw(page, [[ib.x - m, ib.y - m], [ib.x + ib.width + m, ib.y - m], [ib.x + ib.width + m, ib.y + ib.height + m], [ib.x - m, ib.y + ib.height + m], [ib.x - m, ib.y - m + 2]]);
+      const label = await page.textContent('.sel-box .sel-bar span');
+      if (!/画像/.test(label)) throw new Error('投げ縄で画像を選べない: ' + label);
+      const tf0 = await countT(page, 'stroke.tf');
+      await draw(page, [[ib.x + ib.width / 2, ib.y + ib.height / 2], [ib.x + ib.width / 2 + 40, ib.y + ib.height / 2 + 30]]);
+      await page.waitForTimeout(300);
+      if ((await countT(page, 'stroke.tf')) !== tf0 + 1) throw new Error('画像を動かせない');
+      const ib2 = await img.boundingBox();
+      if (Math.abs(ib2.x - ib.x - 40) > 3) throw new Error('画像の表示が動いていない');
+      log('GoodNotes取り込み: 投げ縄で画像を選んで動かせた(' + label + ')');
+      await page.click('.sel-box [data-a=off]');
+      await page.click('#tool-pen');
+      await shot(page, 'v2-6-goodnotes-image.png');
+    }
     await page.locator('.page').nth(n - 1).scrollIntoViewIfNeeded();
     await page.waitForTimeout(800);
     await shot(page, 'v2-6-goodnotes-last.png');
@@ -216,6 +242,16 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
   const fromB = await idb(page, `return ops.filter(o => o.d !== ops.find(x => x.t === 'note.create').d).length`);
   if (fromB < 1) throw new Error('端末Bの変更が届いていない');
   log('WebDAV: 端末Bで書いた線が端末Aに自動で届いた');
+  if (gnTitle) {
+    // 取り込んだ画像のファイルも同期で届き、表示される
+    await pb.click('#back');
+    await pb.click(`.card:has-text(${JSON.stringify(gnTitle)}) .cover`);
+    await pb.waitForSelector('.page');
+    const imgB = pb.locator('g.item image').first();
+    await imgB.waitFor({ timeout: 10000 });
+    await imgB.scrollIntoViewIfNeeded();
+    log('WebDAV: 取り込んだ画像も端末Bに届いて表示された');
+  }
   await pb.screenshot({ path: path.join(OUT, 'v2-7-ipad.png') });
 
   if (errors.length) { console.log('ERRORS:', errors); process.exitCode = 1; }

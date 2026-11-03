@@ -3,6 +3,7 @@ import * as db from './db.js';
 import { pagesOf, strokesOf, styleOf, bgOf } from './model.js';
 import { centerline, outline, smoothClosedPath, linePath, variableWidth } from './ink.js';
 import { templatePrims } from './templates.js';
+import { isItem, itemRect, textPng } from './items.js';
 
 let pdfjsP = null;
 function pdfjs() {
@@ -109,6 +110,7 @@ export async function exportPdf(note) {
   const out = await L.PDFDocument.create();
   const srcDocs = new Map();
   const rgb = (hex) => L.rgb(...hexToRgb(hex));
+  const images = new Map(); // 同じ画像は一度だけ埋め込む
   for (const pg of pagesOf(note)) {
     const bg = bgOf(pg);
     let page;
@@ -129,8 +131,40 @@ export async function exportPdf(note) {
       }
       for (const [x, y, r, c] of prim.dots) page.drawCircle({ x, y: pg.h - y, size: r, color: rgb(c) });
     }
-    const toPdf = viewToPdf(page);
-    for (const e of strokesOf(note, pg.id)) {
+    const toPdf = viewToPdf(page, pg);
+    const k = toPdf.k;
+    const rot = (((page.getRotation().angle || 0) % 360) + 360) % 360;
+    const all = strokesOf(note, pg.id);
+    // 画像・テキストボックスは手書きの下に置く
+    for (const e of all) {
+      if (!isItem(e.data)) continue;
+      const d = styleOf(e);
+      let img, r = itemRect(d, e.off), w = r.w, h = r.h;
+      try {
+        if (d.tool === 'image') {
+          const f = await db.getFile(d.hash);
+          if (!f) continue;
+          img = await embedImage(out, f, images);
+        } else {
+          const t = await textPng(d);
+          img = await out.embedPng(t.bytes);
+          w = t.w;
+          h = t.h;
+        }
+      } catch (err) {
+        console.warn('PDF に入れられない部品を飛ばしました', err);
+        continue;
+      }
+      if (!img) continue;
+      // 部品の左下の角を基準に置き、ページの回転の分だけ逆に回す
+      const [X, Y] = toPdf(r.x, r.y + h);
+      page.drawImage(img, { x: X, y: Y, width: w * toPdf.kx, height: h * toPdf.ky, rotate: L.degrees(rot) });
+    }
+    // 線のつなぎ目を丸くする(画面と同じ。尖ったつなぎ目だと、急に折り返す太い線から角が飛び出す)
+    const roundJoin = L.setLineJoin && L.LineJoinStyle;
+    if (roundJoin) page.pushOperators(L.pushGraphicsState(), L.setLineJoin(L.LineJoinStyle.Round));
+    for (const e of all) {
+      if (isItem(e.data)) continue;
       const d = styleOf(e);
       const [ox, oy] = e.off;
       // SVG のパスは y が下向きなので、PDF の座標 (X, Y) を (X, -Y) にして原点に置く
@@ -142,27 +176,57 @@ export async function exportPdf(note) {
         page.drawSvgPath(smoothClosedPath(outline(d, line), map), { x: 0, y: 0, color: rgb(d.color), ...extra });
       } else if (line.length === 1) {
         const [X, Y] = toPdf(line[0][0] + ox, line[0][1] + oy);
-        page.drawCircle({ x: X, y: Y, size: d.width / 2, color: rgb(d.color), ...extra });
+        page.drawCircle({ x: X, y: Y, size: (d.width / 2) * k, color: rgb(d.color), ...extra });
       } else {
         page.drawSvgPath(linePath(line, map), {
-          x: 0, y: 0, borderColor: rgb(d.color), borderWidth: d.width,
+          x: 0, y: 0, borderColor: rgb(d.color), borderWidth: d.width * k,
           borderLineCap: L.LineCapStyle.Round, ...extra,
         });
       }
     }
+    if (roundJoin) page.pushOperators(L.popGraphicsState());
   }
   return out.save();
 }
 
+// 画像を PDF に埋め込む(PNG と JPEG はそのまま、それ以外はキャンバスで PNG にする)
+async function embedImage(out, f, cache) {
+  if (cache.has(f.hash)) return cache.get(f.hash);
+  const bytes = new Uint8Array(await f.data.arrayBuffer());
+  let img;
+  if (bytes[0] === 0x89 && bytes[1] === 0x50) img = await out.embedPng(bytes);
+  else if (bytes[0] === 0xff && bytes[1] === 0xd8) img = await out.embedJpg(bytes);
+  else {
+    const bmp = await createImageBitmap(f.data);
+    const c = document.createElement('canvas');
+    [c.width, c.height] = [bmp.width, bmp.height];
+    c.getContext('2d').drawImage(bmp, 0, 0);
+    const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
+    img = await out.embedPng(new Uint8Array(await blob.arrayBuffer()));
+  }
+  cache.set(f.hash, img);
+  return img;
+}
+
 // 画面上の座標(左上原点・回転後)→ PDF の座標(左下原点・回転前)
-function viewToPdf(page) {
+// ページの大きさが PDF と違うとき(GoodNotes の用紙は PDF を拡大して表示している)は、その分だけ縮める。
+// 縮める倍率は toPdf.k(線の太さ・画像の大きさに掛ける)
+function viewToPdf(page, pg) {
   const box = page.getCropBox();
   const cx = box.x, cy = box.y, cw = box.width, ch = box.height;
   const rot = (((page.getRotation().angle || 0) % 360) + 360) % 360;
+  const [dw, dh] = rot % 180 ? [ch, cw] : [cw, ch];
+  const kx = pg && pg.w > 0 ? dw / pg.w : 1, ky = pg && pg.h > 0 ? dh / pg.h : 1;
+  let f;
   switch (rot) {
-    case 90: return (x, y) => [cx + y, cy + x];
-    case 180: return (x, y) => [cx + cw - x, cy + y];
-    case 270: return (x, y) => [cx + cw - y, cy + ch - x];
-    default: return (x, y) => [cx + x, cy + ch - y];
+    case 90: f = (x, y) => [cx + y, cy + x]; break;
+    case 180: f = (x, y) => [cx + cw - x, cy + y]; break;
+    case 270: f = (x, y) => [cx + cw - y, cy + ch - x]; break;
+    default: f = (x, y) => [cx + x, cy + ch - y];
   }
+  const map = (x, y) => f(x * kx, y * ky);
+  map.k = Math.sqrt(kx * ky);
+  map.kx = kx;
+  map.ky = ky;
+  return map;
 }

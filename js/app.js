@@ -1,8 +1,9 @@
 import * as db from './db.js';
 import {
-  Recorder, emptyNote, applyOp, pagesOf, strokesOf, buildLibrary, newId, strokeHit, styleOf, bgOf, PAGE_A4,
+  Recorder, emptyNote, applyOp, pagesOf, strokesOf, buildLibrary, newId, strokeHit, styleOf, bgOf, PAGE_A4, addType,
 } from './model.js';
-import { drawStroke, recognizeShape, strokeInLasso, geometry, strokeSvg } from './ink.js';
+import { drawStroke, recognizeShape, strokeInLasso, geometry, strokeSvg, pointInPolygon } from './ink.js';
+import { isItem, itemSvg, drawItem, itemInLasso, onImageReady, releaseImages } from './items.js';
 import { TEMPLATES, SIZES, templatePrims, sizeById } from './templates.js';
 import { importPdf, renderPdfPage, exportPdf } from './pdf.js';
 import { buildSyncFile, importSyncFile } from './sync.js';
@@ -102,6 +103,7 @@ async function init() {
   bindLibrary();
   buildToolbar();
   bindEditor();
+  onImageReady(onImageLoaded);
   await dav.init({ recorder: S.rec, onRemoteChange: onRemoteChange, onStatus: setSyncStatus });
   search.init({ onProgress: (msg) => { const el = $('#search-status'); if (el) el.textContent = msg; } });
   window.addEventListener('hashchange', route);
@@ -282,7 +284,7 @@ function thumbsDirty(ops) {
   if (!S.sidebar || !S.thumbs?.size) return;
   for (const op of ops) {
     const p = op.p || {};
-    if (op.t === 'stroke.add') dirtyThumbs.add(p.s.pageId);
+    if (op.t === 'stroke.add' || op.t === 'item.add') dirtyThumbs.add(p.s.pageId);
     const ids = p.ids || Object.keys(p.tf || p.styles || {});
     for (const id of ids) { const d = S.note.strokes.get(id)?.data; if (d) dirtyThumbs.add(d.pageId); }
   }
@@ -385,7 +387,11 @@ function bindLibrary() {
         const r = await importGoodnotes(file, S.rec);
         dav.schedule();
         for (const pid of r.pageIds) search.markDirty(r.noteId, pid);
-        toast(`「${r.title}」を取り込みました(${r.pages}ページ、手書き${r.strokes}本)`, 5000);
+        const parts = [`${r.pages}ページ`, `手書き${r.strokes}本`];
+        if (r.images) parts.push(`画像${r.images}枚`);
+        if (r.texts) parts.push(`テキスト${r.texts}個`);
+        const skipped = r.skippedImages ? `。表示できない形式の画像${r.skippedImages}枚は取り込んでいません` : '';
+        toast(`「${r.title}」を取り込みました(${parts.join('、')})${skipped}`, skipped ? 8000 : 5000);
         if (files.length === 1) location.hash = '#/note/' + r.noteId;
         else showLibrary();
       } catch (err) {
@@ -971,6 +977,7 @@ function closeEditor() {
   if (pages) pages.innerHTML = '';
   $('#pp-list').innerHTML = '';
   S.thumbs = new Map();
+  releaseImages();
 }
 
 function fitZoom() {
@@ -1178,6 +1185,39 @@ function scaledCtx(canvas, pg) {
   return ctx;
 }
 
+// 画像・テキストボックスは手書きの下に置く
+function layered(list) {
+  if (!list.some((e) => isItem(e.data))) return list;
+  return [...list.filter((e) => isItem(e.data)), ...list.filter((e) => !isItem(e.data))];
+}
+function inkSvg(e) {
+  const d = styleOf(e);
+  return isItem(d) ? itemSvg(e.id, d, e.off) : strokeSvg(e.id, d, geoOf(e), e.off);
+}
+// 画像を読み終えたら、その画像のあるページとサムネイルを描き直す
+let laterHashes = null;
+function onImageLoaded(hashes) {
+  if (!S.note) return;
+  const pages = new Set();
+  for (const e of S.note.strokes.values()) if (e.alive && e.data && hashes.has(e.data.hash)) pages.add(e.data.pageId);
+  for (const id of pages) {
+    const v = S.views.get(id);
+    // 書いている・消している・動かしている最中のページは、終わってから描き直す
+    if (v && v.ready && ((active && active.v === v) || (penPending && penPending.a.v === v))) {
+      // 書き終わってから1回だけ描き直す(先送りした画像はまとめておく)
+      if (!laterHashes) {
+        laterHashes = new Set();
+        setTimeout(() => { const hs = laterHashes; laterHashes = null; onImageLoaded(hs); }, 400);
+      }
+      for (const h of hashes) laterHashes.add(h);
+      continue;
+    }
+    if (v && v.ready) paintInk(v);
+    const row = S.thumbs?.get(id), pg = S.note.pages.get(id);
+    if (row && pg && row.dataset.drawn) drawThumb(row.querySelector('canvas'), pg);
+  }
+}
+
 // 線の形は一度作ったら覚えておく(線の中身は変わらないので)
 function geoOf(e) {
   if (!e.geo) e.geo = geometry(e.data);
@@ -1198,7 +1238,7 @@ function paintInk(v, hidden, moving) {
     }
     return;
   }
-  v.strokes.innerHTML = strokesOf(S.note, v.pg.id).map((e) => strokeSvg(e.id, styleOf(e), geoOf(e), e.off)).join('');
+  v.strokes.innerHTML = layered(strokesOf(S.note, v.pg.id)).map(inkSvg).join('');
   v.els.clear();
   for (const el of v.strokes.children) v.els.set(el.dataset.id, el);
 }
@@ -1207,7 +1247,7 @@ function paintInk(v, hidden, moving) {
 function appendStroke(v, id) {
   const e = S.note.strokes.get(id);
   if (!v.ready || !e) return;
-  v.strokes.insertAdjacentHTML('beforeend', strokeSvg(e.id, styleOf(e), geoOf(e), e.off));
+  v.strokes.insertAdjacentHTML('beforeend', inkSvg(e));
   v.els.set(id, v.strokes.lastElementChild);
 }
 
@@ -1539,7 +1579,7 @@ function eraseAt(e) {
   const r = ERASER_SIZES[S.eraser.si ?? 1] / S.zoom;
   let changed = false;
   for (const st of strokesOf(S.note, a.v.pg.id, a.hits)) {
-    if (S.eraser.markerOnly && st.data.tool !== 'marker') continue;
+    if (isItem(st.data) || (S.eraser.markerOnly && st.data.tool !== 'marker')) continue;
     if (strokeHit(st, x, y, r)) { a.hits.add(st.id); changed = true; }
   }
   if (changed) paintInk(a.v, a.hits);
@@ -1562,7 +1602,8 @@ async function onUp(e) {
   if (a.kind === 'lasso') {
     paintLive(a.v, '');
     if (a.poly.length < 3) return;
-    const ids = new Set(strokesOf(S.note, a.v.pg.id).filter((st) => strokeInLasso(st, a.poly)).map((st) => st.id));
+    const inLasso = (st) => (isItem(st.data) ? itemInLasso(st, a.poly, pointInPolygon) : strokeInLasso(st, a.poly));
+    const ids = new Set(strokesOf(S.note, a.v.pg.id).filter(inLasso).map((st) => st.id));
     if (ids.size) {
       S.sel = { pageId: a.v.pg.id, ids };
       refreshToolbar();
@@ -1641,11 +1682,17 @@ function drawSelection(dx = 0, dy = 0) {
   el.className = 'sel-box';
   const z = S.zoom;
   Object.assign(el.style, { left: (b.x0 + dx) * z + 'px', top: (b.y0 + dy) * z + 'px', width: (b.x1 - b.x0) * z + 'px', height: (b.y1 - b.y0) * z + 'px' });
-  el.innerHTML = `<div class="sel-bar"><span>${S.sel.ids.size}本を選択中</span><button data-a="del">削除</button><button data-a="dup">複製</button><button data-a="off">選択解除</button></div>`;
+  el.innerHTML = `<div class="sel-bar"><span>${selLabel()}</span><button data-a="del">削除</button><button data-a="dup">複製</button><button data-a="off">選択解除</button></div>`;
   el.querySelector('[data-a=del]').onclick = deleteSelection;
   el.querySelector('[data-a=dup]').onclick = duplicateSelection;
   el.querySelector('[data-a=off]').onclick = clearSelection;
   v.el.appendChild(el);
+}
+
+function selLabel() {
+  let n = 0, k = 0;
+  for (const id of S.sel.ids) { if (isItem(S.note.strokes.get(id)?.data)) k++; else n++; }
+  return k ? (n ? `${n}本の線と${k}個の画像・テキストを選択中` : `${k}個の画像・テキストを選択中`) : `${n}本を選択中`;
 }
 
 function clearSelection() {
@@ -1673,7 +1720,7 @@ async function duplicateSelection() {
     const st = S.note.strokes.get(id);
     const d = styleOf(st);
     const nd = { ...d, id: newId(), pts: d.pts.map((v, i) => (i % 3 === 0 ? v + st.off[0] + 12 : i % 3 === 1 ? v + st.off[1] + 12 : v)) };
-    ops.push(mk('stroke.add', { s: nd }));
+    ops.push(mk(addType(nd), { s: nd }));
     ids.add(nd.id);
   }
   pushUndo({ undo: [['stroke.del', { ids: [...ids] }]], redo: [['stroke.undel', { ids: [...ids] }]], pages: [pid] });
@@ -2131,7 +2178,7 @@ async function duplicatePage(pg) {
   for (const e of strokesOf(S.note, pg.id)) {
     const nid = newId();
     ids.push(nid);
-    ops.push(mk('stroke.add', { s: { ...e.data, id: nid, pageId: id } }));
+    ops.push(mk(addType(e.data), { s: { ...e.data, id: nid, pageId: id } }));
     if (e.off[0] || e.off[1]) ops.push(mk('stroke.tf', { tf: { [nid]: e.off } }));
     if (e.color) ops.push(mk('stroke.style', { styles: { [nid]: { color: e.color } } }));
   }
@@ -2179,7 +2226,10 @@ function drawThumb(canvas, pg) {
     const c2 = scaledCtx(canvas, pg);
     // 小さく描くと罫線が消えるので、画面で 0.8px 以上の太さにする
     if (bg?.type === 'blank') paintTemplate(c2, bg, pg.w, pg.h, 1.6 / scale);
-    for (const e of strokesOf(S.note, pg.id)) drawStroke(c2, styleOf(e), e.off, geoOf(e));
+    for (const e of layered(strokesOf(S.note, pg.id))) {
+      if (isItem(e.data)) drawItem(c2, styleOf(e), e.off);
+      else drawStroke(c2, styleOf(e), e.off, geoOf(e));
+    }
   };
   if (bg?.type === 'pdf') {
     // 前の描画が終わっていなければ止める
