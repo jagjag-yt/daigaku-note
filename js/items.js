@@ -1,8 +1,8 @@
 // 画像とテキストボックス(ここでは「部品」と呼ぶ)。いまは GoodNotes から取り込んだものだけが対象。
 //
-// 部品は線と同じ stroke.add の op で保存し、tool が 'image' / 'text' のものを部品として扱う。
+// 部品は item.add の op で足し(中身は線と同じ形)、tool が 'image' / 'text' のものを部品として扱う。
 // pts には四隅 (x, y, 0) を入れておくので、投げ縄での選択・移動・複製・削除・元に戻す・ページの複製は
-// 線と同じ仕組みのまま動く。部品を知らない古い版のアプリでは太さ 0 の線になり、何も表示されない。
+// 線と同じ仕組み(stroke.tf / stroke.del など)のまま動く。部品を知らない古い版のアプリは item.add を無視する。
 //   画像:          { tool: 'image', hash, mime, pts, width: 0, color }
 //   テキストボックス・付箋: { tool: 'text', text, size, font, color, fill, border: { w, color }, radius,
 //                         pad(左右の余白), padT(上の余白), wrap(幅で折り返すか), foot(付箋の下の小さな文字), pts, width: 0 }
@@ -45,10 +45,13 @@ function measurer() {
   return measureCtx;
 }
 
-const layoutCache = new WeakMap();
+// 組んだ結果を覚えておく(色を変えた部品は描くたびに別のオブジェクトになるので、中身で引く)
+const layoutCache = new Map();
 // 行の配列 [{ s: 文字列, y: 基準線の y(部品の上端から) }]
 export function textLayout(d) {
-  const cached = layoutCache.get(d);
+  const r0 = itemRect(d);
+  const key = JSON.stringify([d.text, d.size, d.font, d.pad, d.padT, d.wrap, r0.w]);
+  const cached = layoutCache.get(key);
   if (cached) return cached;
   const ctx = measurer();
   ctx.font = fontOf(d);
@@ -75,7 +78,8 @@ export function textLayout(d) {
     lines.push(line);
   }
   const out = lines.map((s, i) => ({ s, y: top + d.size * (ASCENT + i * LINE) }));
-  layoutCache.set(d, out);
+  if (layoutCache.size > 2000) layoutCache.clear();
+  layoutCache.set(key, out);
   return out;
 }
 
@@ -88,14 +92,37 @@ function footOf(d, r) {
 // 画像のデータは IndexedDB に入っているので、読み終わるまでは灰色の枠を出し、読めたら描き直してもらう
 const urls = new Map(); // hash → object URL(読み込み中は Promise)
 const decoded = new Map(); // hash → 読み込み済みの HTMLImageElement(キャンバス用。読み込み中は 'loading')
-let readyListener = () => {};
-export function onImageReady(fn) { readyListener = fn; }
+let listener = () => {};
+export function onImageReady(fn) { listener = fn; }
+// 読み終わった知らせはまとめて1回にする(画像の多いページで、何度も描き直さないように)
+let readyHashes = new Set(), readyTimer = 0;
+function readyListener(hash) {
+  readyHashes.add(hash);
+  if (readyTimer) return;
+  readyTimer = setTimeout(() => {
+    const hs = readyHashes;
+    readyHashes = new Set();
+    readyTimer = 0;
+    listener(hs);
+  }, 50);
+}
+
+// ノートを閉じたら、読み込んだ画像を手放す(写真の多いノートを続けて開いてもメモリが増え続けないように)
+let gen = 0;
+export function releaseImages() {
+  gen++;
+  for (const u of urls.values()) if (typeof u === 'string') URL.revokeObjectURL(u);
+  urls.clear();
+  decoded.clear();
+}
 
 export function imageUrl(hash) {
   const u = urls.get(hash);
   if (typeof u === 'string') return u;
   if (!u) {
+    const g = gen;
     urls.set(hash, db.getFile(hash).then((f) => {
+      if (g !== gen) return; // 読んでいる間にノートが閉じられた
       // まだ同期で届いていないときは覚えずに消しておき、次に描くときにもう一度探す
       if (!f) { urls.delete(hash); return; }
       urls.set(hash, URL.createObjectURL(f.data));
@@ -216,10 +243,10 @@ export async function textPng(d, scale = 4) {
   return { bytes: new Uint8Array(await blob.arrayBuffer()), w: c.width / scale, h: c.height / scale };
 }
 
-// 部品が投げ縄の中にあるか: 中心が入っているか、四隅の半分以上が入っていれば選ぶ
+// 部品が投げ縄の中にあるか: 四隅のうち3つ以上が入っていれば選ぶ
+// (大きな画像の上に書いた字だけを囲んだときに、画像まで選ばないように)
 export function itemInLasso(e, poly, pointInPolygon) {
   const r = itemRect(e.data, e.off);
-  if (pointInPolygon(r.x + r.w / 2, r.y + r.h / 2, poly)) return true;
   const c = [[r.x, r.y], [r.x + r.w, r.y], [r.x + r.w, r.y + r.h], [r.x, r.y + r.h]];
-  return c.filter(([x, y]) => pointInPolygon(x, y, poly)).length >= 2;
+  return c.filter(([x, y]) => pointInPolygon(x, y, poly)).length >= 3;
 }

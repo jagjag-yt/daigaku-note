@@ -86,7 +86,7 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
   // 四角形
   await draw(page, [[X(0.45), Y(0.35)], [X(0.6), Y(0.352)], [X(0.601), Y(0.55)], [X(0.452), Y(0.548)], [X(0.45), Y(0.352)]], { hold: 900, steps: 6 });
   await page.waitForTimeout(200);
-  const shapes = await idb(page, "return ops.filter(o => o.t === 'stroke.add' && o.p.s.shape).map(o => o.p.s.shape)");
+  const shapes = await idb(page, "return ops.filter(o => (o.t === 'stroke.add' || o.t === 'item.add') && o.p.s.shape).map(o => o.p.s.shape)");
   if (!shapes.includes('circle') && !shapes.includes('ellipse')) throw new Error('円の補正に失敗 ' + shapes);
   if (!shapes.includes('rect')) throw new Error('四角の補正に失敗 ' + shapes);
   log('図形補正:', shapes.join(', '));
@@ -95,7 +95,7 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
   await page.click('#tool-marker');
   await draw(page, [[X(0.04), Y(0.15)], [X(0.4), Y(0.15)]]);
   await page.waitForTimeout(150);
-  const marker = await idb(page, "return ops.filter(o => o.t === 'stroke.add' && o.p.s.tool === 'marker').length");
+  const marker = await idb(page, "return ops.filter(o => (o.t === 'stroke.add' || o.t === 'item.add') && o.p.s.tool === 'marker').length");
   if (marker !== 1) throw new Error('蛍光ペン');
   log('蛍光ペン');
   await shot(page, 'v2-1-ink.png');

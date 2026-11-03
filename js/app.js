@@ -1,9 +1,9 @@
 import * as db from './db.js';
 import {
-  Recorder, emptyNote, applyOp, pagesOf, strokesOf, buildLibrary, newId, strokeHit, styleOf, bgOf, PAGE_A4,
+  Recorder, emptyNote, applyOp, pagesOf, strokesOf, buildLibrary, newId, strokeHit, styleOf, bgOf, PAGE_A4, addType,
 } from './model.js';
 import { drawStroke, recognizeShape, strokeInLasso, geometry, strokeSvg, pointInPolygon } from './ink.js';
-import { isItem, itemSvg, drawItem, itemInLasso, onImageReady } from './items.js';
+import { isItem, itemSvg, drawItem, itemInLasso, onImageReady, releaseImages } from './items.js';
 import { TEMPLATES, SIZES, templatePrims, sizeById } from './templates.js';
 import { importPdf, renderPdfPage, exportPdf } from './pdf.js';
 import { buildSyncFile, importSyncFile } from './sync.js';
@@ -284,7 +284,7 @@ function thumbsDirty(ops) {
   if (!S.sidebar || !S.thumbs?.size) return;
   for (const op of ops) {
     const p = op.p || {};
-    if (op.t === 'stroke.add') dirtyThumbs.add(p.s.pageId);
+    if (op.t === 'stroke.add' || op.t === 'item.add') dirtyThumbs.add(p.s.pageId);
     const ids = p.ids || Object.keys(p.tf || p.styles || {});
     for (const id of ids) { const d = S.note.strokes.get(id)?.data; if (d) dirtyThumbs.add(d.pageId); }
   }
@@ -977,6 +977,7 @@ function closeEditor() {
   if (pages) pages.innerHTML = '';
   $('#pp-list').innerHTML = '';
   S.thumbs = new Map();
+  releaseImages();
 }
 
 function fitZoom() {
@@ -1194,13 +1195,18 @@ function inkSvg(e) {
   return isItem(d) ? itemSvg(e.id, d, e.off) : strokeSvg(e.id, d, geoOf(e), e.off);
 }
 // 画像を読み終えたら、その画像のあるページとサムネイルを描き直す
-function onImageLoaded(hash) {
+function onImageLoaded(hashes) {
   if (!S.note) return;
   const pages = new Set();
-  for (const e of S.note.strokes.values()) if (e.alive && e.data && e.data.hash === hash) pages.add(e.data.pageId);
+  for (const e of S.note.strokes.values()) if (e.alive && e.data && hashes.has(e.data.hash)) pages.add(e.data.pageId);
   for (const id of pages) {
     const v = S.views.get(id);
-    if (v && v.ready && !(active && active.v === v)) paintInk(v);
+    // 書いている・消している・動かしている最中のページは、終わってから描き直す
+    if (v && v.ready && ((active && active.v === v) || (penPending && penPending.a.v === v))) {
+      setTimeout(() => onImageLoaded(hashes), 400);
+      continue;
+    }
+    if (v && v.ready) paintInk(v);
     const row = S.thumbs?.get(id), pg = S.note.pages.get(id);
     if (row && pg && row.dataset.drawn) drawThumb(row.querySelector('canvas'), pg);
   }
@@ -1708,7 +1714,7 @@ async function duplicateSelection() {
     const st = S.note.strokes.get(id);
     const d = styleOf(st);
     const nd = { ...d, id: newId(), pts: d.pts.map((v, i) => (i % 3 === 0 ? v + st.off[0] + 12 : i % 3 === 1 ? v + st.off[1] + 12 : v)) };
-    ops.push(mk('stroke.add', { s: nd }));
+    ops.push(mk(addType(nd), { s: nd }));
     ids.add(nd.id);
   }
   pushUndo({ undo: [['stroke.del', { ids: [...ids] }]], redo: [['stroke.undel', { ids: [...ids] }]], pages: [pid] });
@@ -2166,7 +2172,7 @@ async function duplicatePage(pg) {
   for (const e of strokesOf(S.note, pg.id)) {
     const nid = newId();
     ids.push(nid);
-    ops.push(mk('stroke.add', { s: { ...e.data, id: nid, pageId: id } }));
+    ops.push(mk(addType(e.data), { s: { ...e.data, id: nid, pageId: id } }));
     if (e.off[0] || e.off[1]) ops.push(mk('stroke.tf', { tf: { [nid]: e.off } }));
     if (e.color) ops.push(mk('stroke.style', { styles: { [nid]: { color: e.color } } }));
   }

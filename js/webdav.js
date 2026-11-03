@@ -90,6 +90,20 @@ async function list(path) {
   return names;
 }
 
+// ファイルを手元に持っているか、サーバーから取ってこられたら true
+async function fetchFile(ref) {
+  if (await db.hasFile(ref.hash)) return true;
+  const name = `${ref.hash}.${fileExt(ref.type)}`;
+  const res = await dav('GET', 'files/' + name, { ok: [200, 404] });
+  if (res.status !== 200) return false;
+  await db.putFile({ hash: ref.hash, name, type: ref.type, data: new Blob([await res.blob()], { type: ref.type }) });
+  return true;
+}
+function addMissing(ref, n) {
+  st.missing = st.missing || [];
+  if (!st.missing.some((m) => m.hash === ref.hash)) st.missing.push({ hash: ref.hash, type: ref.type, n });
+}
+
 export async function syncNow(manual = false) {
   if (!enabled()) return;
   if (running) { again = true; return; }
@@ -143,10 +157,7 @@ export async function syncNow(manual = false) {
         const ops = (json.ops || []).filter((o) => o && typeof o.id === 'string' && typeof o.l === 'number' && o.n && o.t);
         for (const op of ops) {
           for (const ref of fileRefs(op)) {
-            if (await db.hasFile(ref.hash)) continue;
-            const name = `${ref.hash}.${fileExt(ref.type)}`;
-            const res = await dav('GET', 'files/' + name, { ok: [200, 404] });
-            if (res.status === 200) await db.putFile({ hash: ref.hash, name, type: ref.type, data: new Blob([await res.blob()], { type: ref.type }) });
+            if (!(await fetchFile(ref))) addMissing(ref, op.n);
           }
           recorder.observe(op);
         }
@@ -156,6 +167,20 @@ export async function syncNow(manual = false) {
         st.seen = [...seen];
         await db.setMeta('davState', st);
       }
+    }
+    // 3) まだ手元にないファイル(送った端末がまだ上げていなかったもの、古い版のアプリでは受け取らなかった画像)を取りに行く
+    if (!st.filesScanned) {
+      // 一度だけ、全部の op を見て足りないファイルを探す(画像に対応していない版から更新したとき用)
+      for (const op of await db.allOps()) for (const ref of fileRefs(op)) if (!(await db.hasFile(ref.hash))) addMissing(ref, op.n);
+      st.filesScanned = true;
+      await db.setMeta('davState', st);
+    }
+    if (st.missing && st.missing.length) {
+      const still = [];
+      for (const m of st.missing) {
+        if (await fetchFile(m)) { changed.add(m.n); got++; } else still.push(m);
+      }
+      if (still.length !== st.missing.length) { st.missing = still; await db.setMeta('davState', st); }
     }
     const time = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
     onStatus(`クラウド同期: ${time} に同期しました` + (manual ? `(送信 ${sent}件・受信 ${got}件)` : ''));

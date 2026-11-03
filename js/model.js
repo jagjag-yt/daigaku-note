@@ -138,7 +138,8 @@ export function applyOp(note, op) {
       }
       break;
     }
-    case 'stroke.add': {
+    case 'stroke.add':
+    case 'item.add': { // 画像・テキストボックス(js/items.js)。線と同じに扱う
       const d = p.s;
       const e = strokeEntry(note, d.id);
       e.data = d;
@@ -258,13 +259,18 @@ export function strokeHit(e, x, y, r) {
   return false;
 }
 
+// 画像・テキストボックスは別の種類の op で足す。部品を知らない古い版のアプリには無視してもらう
+// (stroke.add だと古い版では枠線として描かれ、消しゴムで見えないまま消せてしまう)。移動・削除・色は線と同じ op
+export const isItemData = (d) => !!d && (d.tool === 'image' || d.tool === 'text');
+export const addType = (d) => (isItemData(d) ? 'item.add' : 'stroke.add');
+
 // op が使うファイル(PDF・画像)。同期でファイルも一緒に送るため
 export function fileRefs(op) {
   const p = op.p || {};
   if (op.t === 'page.add') {
     const bg = p.page && p.page.bg;
     if (bg && bg.type === 'pdf' && bg.hash) return [{ hash: bg.hash, type: 'application/pdf' }];
-  } else if (op.t === 'stroke.add') {
+  } else if (op.t === 'item.add') {
     const d = p.s;
     if (d && d.tool === 'image' && d.hash) return [{ hash: d.hash, type: d.mime || 'image/png' }];
   }

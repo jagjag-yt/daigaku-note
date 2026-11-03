@@ -211,7 +211,7 @@ function quadTo(out, a, c, b) {
 }
 // 始点と「制御点・終点」の並びから中心線を作る。stride = 1区間の値の数、ctrl/end = 区間の中で x の位置、wOf = 太さの読み方
 function bezierLine(start, segs, stride, ctrl, end, wOf) {
-  if (!start || !stride || segs.length % stride) return null;
+  if (!start || start.length < 2 || !stride || segs.length % stride) return null;
   const line = [[start[0], start[1], wOf(start, 0)]];
   for (let i = 0; i < segs.length; i += stride) {
     const c = [segs[i + ctrl], segs[i + ctrl + 1], wOf(segs, i + ctrl)];
@@ -221,36 +221,42 @@ function bezierLine(start, segs, stride, ctrl, end, wOf) {
   return line;
 }
 
-// 図形(線・四角・曲線など)はペンの点ではなく、形そのものが記録されている
-//   9.1 = 直線 {1:始点, 2:終点}(推測)、9.2 = 曲線 {1:始点, 2:制御点, 3:終点}、9.3 = 四角 {1:中心, 2:{幅,高さ}}、15 = 太さ
+// 図形はペンの点ではなく、形そのものが記録されている。15 = 太さ
+//   9.1 = 折れ線 {1: 点, 1: 点, …}、9.2 = 曲線 {1:始点, 2:制御点, 3:終点}、
+//   9.3 = 四角 {1:中心, 2:{幅,高さ}, 3:回転(推測)}、9.4 = 楕円 {1:中心, 2:{横の半径,縦の半径}, 3:回転(ラジアン)}
+// 知らない形は推測でつながず、取り込まない
 function shapeLine(sh) {
   const w = fin(one(sh, 15), 1.6);
   const P = (m, f) => xy(sub(m, f));
+  const rot = (cx, cy, a) => (q) => {
+    if (!a) return q;
+    const c = Math.cos(a), s = Math.sin(a), dx = q[0] - cx, dy = q[1] - cy;
+    return [cx + dx * c - dy * s, cy + dx * s + dy * c];
+  };
   let line = null;
-  const rect = sub(sh, 3), curve = sub(sh, 2), seg = sub(sh, 1);
+  const poly = sub(sh, 1), curve = sub(sh, 2), rect = sub(sh, 3), ell = sub(sh, 4);
   if (rect && P(rect, 1) && P(rect, 2)) {
     const [cx, cy] = P(rect, 1), [rw, rh] = P(rect, 2);
     const x0 = cx - rw / 2, y0 = cy - rh / 2, x1 = cx + rw / 2, y1 = cy + rh / 2;
-    line = [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]];
+    line = [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]].map(rot(cx, cy, fin(one(rect, 3))));
+  } else if (ell && P(ell, 1) && P(ell, 2)) {
+    const [cx, cy] = P(ell, 1), [rx, ry] = P(ell, 2);
+    const n = Math.max(24, Math.min(96, Math.ceil((Math.abs(rx) + Math.abs(ry)) * 1.5)));
+    line = [];
+    for (let k = 0; k <= n; k++) {
+      const t = (k / n) * Math.PI * 2;
+      line.push([cx + Math.cos(t) * rx, cy + Math.sin(t) * ry]);
+    }
+    line = line.map(rot(cx, cy, fin(one(ell, 3))));
   } else if (curve && P(curve, 1) && P(curve, 2) && P(curve, 3)) {
     const a = [...P(curve, 1), w], c = [...P(curve, 2), w], b = [...P(curve, 3), w];
     line = [a];
     quadTo(line, a, c, b);
-  } else if (seg && P(seg, 1) && P(seg, 2)) {
-    line = [P(seg, 1), P(seg, 2)];
-  } else {
-    // 知らない形: 中に書かれている点をつなぐ
-    for (const [, vals] of sh) {
-      for (const v of vals) {
-        if (!(v instanceof Uint8Array)) continue;
-        let m;
-        try { m = pb(v); } catch { continue; }
-        const pts = [...m.values()].flat().map((x) => { try { return x instanceof Uint8Array ? xy(pb(x)) : null; } catch { return null; } }).filter(Boolean);
-        if (pts.length >= 2) { line = pts; break; }
-      }
-      if (line) break;
-    }
+  } else if (poly) {
+    line = (poly.get(1) || []).map((v) => { try { return v instanceof Uint8Array ? xy(pb(v)) : null; } catch { return null; } }).filter(Boolean);
+    if (line.length < 2) line = null;
   }
+  if (line && !line.every((q) => Number.isFinite(q[0]) && Number.isFinite(q[1]))) line = null;
   return line && { line: line.map((q) => [q[0], q[1], w]), width: w, shape: true };
 }
 
@@ -267,7 +273,7 @@ function strokeLine(raw) {
     const nseg = v[1].length - 1;
     if (nseg > 0 && v[3].length % nseg === 0 && v[3].length / nseg >= 6) {
       line = bezierLine(v[2], v[3], v[3].length / nseg, 0, 3, (a, i) => a[i + 2] * 2);
-    } else if (v[2].length >= 3) line = [[v[2][0], v[2][1], v[2][2] * 2]];
+    } else if (nseg === 0 && v[2].length >= 3) line = [[v[2][0], v[2][1], v[2][2] * 2]];
   } else if (t.sig.startsWith('vuA(v)A(S(uuuuu))A(S(uuuuuuuuuuu))')) {
     width = v[1];
     line = bezierLine(v[3].slice(0, 5), v[4], 11, 1, 6, (a, i) => a[i + 2] * 2);
@@ -276,13 +282,17 @@ function strokeLine(raw) {
     const w = () => width;
     line = v[3].length >= 2 ? bezierLine(v[3].slice(0, 2), v[4], 4, 0, 2, w) : null;
   } else return null;
-  return line && line.length ? { line, width } : null;
+  if (!line || !line.length || !line.every((q) => Number.isFinite(q[0]) && Number.isFinite(q[1]))) return null;
+  return { line, width };
 }
 
-// 描く命令が「q Q」(何もしない)だけの PDF か
+// 白紙の PDF か: 描く命令が「白で塗る」だけ(GoodNotes の白紙は、白い四角を塗るか、何も描かない)。
+// 罫線などの色のある塗り・線・文字・画像があれば白紙ではない。判断できないときも白紙ではないことにする
+const PAINT = new Set(['f', 'F', 'f*', 'B', 'B*', 'b', 'b*']);
+const MARK = new Set(['S', 's', 'Tj', 'TJ', "'", '"', 'Do', 'sh', 'BI', 'EI']);
 async function isBlankPdf(data) {
   const text = new TextDecoder('latin1').decode(data);
-  const re = /stream\r?\n/g;
+  const re = /(?:^|[^d])stream\r?\n/g; // 「endstream」の中の stream には当てない
   let m, streams = 0;
   while ((m = re.exec(text))) {
     const start = m.index + m[0].length;
@@ -291,16 +301,27 @@ async function isBlankPdf(data) {
     let stop = end;
     while (stop > start && (data[stop - 1] === 0x0a || data[stop - 1] === 0x0d)) stop--;
     let body = data.subarray(start, stop);
-    const dict = text.slice(Math.max(0, m.index - 300), m.index);
-    if (/\/Subtype\s*\/Image|\/N\s+[134]\b/.test(dict.slice(dict.lastIndexOf('<<')))) continue; // 画像・色の情報
-    if (/FlateDecode/.test(dict.slice(dict.lastIndexOf('<<')))) {
+    const dictAll = text.slice(Math.max(0, m.index - 400), m.index);
+    const dict = dictAll.slice(dictAll.lastIndexOf('<<'));
+    if (/\/Subtype\s*\/Image|\/N\s+[134]\b|\/Type\s*\/(XRef|ObjStm|Metadata)/.test(dict)) continue; // 画像・色の情報など
+    if (/\/Filter/.test(dict)) {
+      if (!/FlateDecode/.test(dict) || /\[\s*\//.test(dict.slice(dict.indexOf('/Filter')))) return false;
       try {
         const ds = new DecompressionStream('deflate');
         body = new Uint8Array(await new Response(new Blob([body]).stream().pipeThrough(ds)).arrayBuffer());
       } catch { return false; }
     }
     streams++;
-    if (!/^[\sqQ]*$/.test(new TextDecoder('latin1').decode(body))) return false;
+    let nums = [], white = false;
+    for (const tok of new TextDecoder('latin1').decode(body).split(/\s+/)) {
+      if (!tok) continue;
+      if (/^[-+]?(\d+\.?\d*|\.\d+)$/.test(tok)) { nums.push(+tok); continue; }
+      if (tok === 'scn' || tok === 'sc' || tok === 'rg' || tok === 'g') white = nums.length > 0 && nums.every((v) => v === 1);
+      else if (tok === 'k') white = nums.length === 4 && nums.every((v) => v === 0);
+      else if (PAINT.has(tok)) { if (!white) return false; }
+      else if (MARK.has(tok)) return false;
+      nums = [];
+    }
   }
   return streams > 0;
 }
@@ -376,7 +397,7 @@ function parseRich(r) {
 function richStyle(rich, fallbackSize) {
   const valid = (f, v) => v !== undefined && !(f === 40 && !(v > 0));
   const pick = (f) => {
-    const a = rich.style && one(rich.style, f);
+    const a = rich.style ? one(rich.style, f) : undefined;
     if (valid(f, a)) return a;
     const b = rich.def && one(rich.def, f);
     return valid(f, b) ? b : undefined;
@@ -562,14 +583,14 @@ export async function importGoodnotes(file, recorder) {
       if (it.kind === 'image') {
         const img = await saveImage(it.att);
         if (!img) { skippedImages++; continue; }
-        ops.push(recorder.make(noteId, 'stroke.add', {
+        ops.push(recorder.make(noteId, 'item.add', {
           s: { id: newId(), pageId, tool: 'image', hash: img.hash, mime: img.type, color: '#000000', width: 0, pr: false, pts: cornerPts(it.x, it.y, it.w, it.h), src: 'goodnotes' },
         }));
         images++;
       } else {
         // 文字も枠も塗りもないテキストボックスは、見えないので取り込まない
         if (!it.text.trim() && !it.border && !it.fill) continue;
-        ops.push(recorder.make(noteId, 'stroke.add', {
+        ops.push(recorder.make(noteId, 'item.add', {
           s: {
             id: newId(), pageId, tool: 'text', text: it.text, size: Math.round(it.size * 100) / 100, font: it.font, color: it.color,
             fill: it.fill, border: it.border, radius: it.radius || 0, pad: it.pad, padT: it.padT, wrap: it.wrap, foot: it.foot || '',
@@ -597,26 +618,29 @@ export async function importGoodnotes(file, recorder) {
       const sh = sub(m, 9);
       try { got = (sh && sh.size && shapeLine(sh)) || (raw && strokeLine(raw)); } catch { got = null; }
       const r2 = (x) => Math.round(x * 100) / 100;
+      // 投げ縄で動かした線は、点はそのままで「ずらす量」(フィールド6)が記録されている
+      const [ox, oy] = xy(sub(m, 6)) || [0, 0];
       if (got) {
-        const ws = got.line.map((q) => q[2]).filter((x) => x > 0);
-        const maxW = Math.max(got.width || 0, ...ws);
-        const minW = ws.length ? Math.min(...ws) : maxW;
+        let maxW = got.width || 0, minW = Infinity;
+        for (const q of got.line) if (q[2] > 0) { maxW = Math.max(maxW, q[2]); minW = Math.min(minW, q[2]); }
+        if (minW === Infinity) minW = maxW;
+        maxW = Math.min(80, maxW);
         s.width = r2(Math.min(80, Math.max(0.3, got.width || maxW || s.width)));
         // 太さが変わる線は、太さの比を筆圧として持たせる(太さ = width × (0.3 + 筆圧))
         s.pr = !marker && !got.shape && !got.width && maxW > 0 && minW < maxW * 0.9;
-        if (s.pr) s.width = r2(maxW);
+        if (s.pr) s.width = r2(Math.max(0.3, maxW));
         if (got.shape) s.shape = true;
         else s.sm = 0.3; // 元の点はなめらかなので、ほとんどならさない
         for (const [x, y, w] of got.line) {
           const p = s.pr ? Math.max(0, Math.min(0.7, w / maxW - 0.3)) : 0.5;
-          s.pts.push(r2(x), r2(y), r2(p));
+          s.pts.push(r2(x + ox), r2(y + oy), r2(p));
         }
       } else {
         // 形式が分からない線: 座標らしい float の並びを探す(以前からの方法)
         let pts = null;
         try { pts = raw && strokePoints(raw); } catch { pts = null; }
         if (!pts) continue;
-        for (let k = 0; k < pts.length; k += 2) s.pts.push(r2(pts[k]), r2(pts[k + 1]), 0.5);
+        for (let k = 0; k < pts.length; k += 2) s.pts.push(r2(pts[k] + ox), r2(pts[k + 1] + oy), 0.5);
       }
       if (!s.pts.length) continue;
       ops.push(recorder.make(noteId, 'stroke.add', { s }));
