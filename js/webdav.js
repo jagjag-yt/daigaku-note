@@ -178,9 +178,13 @@ export async function syncNow(manual = false) {
     if (st.missing && st.missing.length) {
       const still = [];
       for (const m of st.missing) {
-        if (await fetchFile(m)) { changed.add(m.n); got++; } else still.push(m);
+        if (await fetchFile(m)) { changed.add(m.n); got++; continue; }
+        // サーバーにずっと無いファイルは、50回試したらあきらめる(毎回取りに行き続けないように)
+        m.tries = (m.tries || 0) + 1;
+        if (m.tries < 50) still.push(m);
       }
-      if (still.length !== st.missing.length) { st.missing = still; await db.setMeta('davState', st); }
+      st.missing = still;
+      await db.setMeta('davState', st);
     }
     const time = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
     onStatus(`クラウド同期: ${time} に同期しました` + (manual ? `(送信 ${sent}件・受信 ${got}件)` : ''));

@@ -288,8 +288,9 @@ function strokeLine(raw) {
 
 // 白紙の PDF か: 描く命令が「白で塗る」だけ(GoodNotes の白紙は、白い四角を塗るか、何も描かない)。
 // 罫線などの色のある塗り・線・文字・画像があれば白紙ではない。判断できないときも白紙ではないことにする
-const PAINT = new Set(['f', 'F', 'f*', 'B', 'B*', 'b', 'b*']);
-const MARK = new Set(['S', 's', 'Tj', 'TJ', "'", '"', 'Do', 'sh', 'BI', 'EI']);
+const PAINT = new Set(['f', 'F', 'f*']);
+// 線・塗りと線・文字(BT から始まる)・画像・グラデーション
+const MARK = new Set(['S', 's', 'B', 'B*', 'b', 'b*', 'BT', 'Tj', 'TJ', "'", '"', 'Do', 'sh', 'BI', 'EI']);
 async function isBlankPdf(data) {
   const text = new TextDecoder('latin1').decode(data);
   const re = /(?:^|[^d])stream\r?\n/g; // 「endstream」の中の stream には当てない
@@ -313,10 +314,13 @@ async function isBlankPdf(data) {
     }
     streams++;
     let nums = [], white = false;
+    const saved = [];
     for (const tok of new TextDecoder('latin1').decode(body).split(/\s+/)) {
       if (!tok) continue;
       if (/^[-+]?(\d+\.?\d*|\.\d+)$/.test(tok)) { nums.push(+tok); continue; }
-      if (tok === 'scn' || tok === 'sc' || tok === 'rg' || tok === 'g') white = nums.length > 0 && nums.every((v) => v === 1);
+      if (tok === 'q') saved.push(white);
+      else if (tok === 'Q') white = saved.length ? saved.pop() : false;
+      else if (tok === 'scn' || tok === 'sc' || tok === 'rg' || tok === 'g') white = nums.length > 0 && nums.every((v) => v === 1);
       else if (tok === 'k') white = nums.length === 4 && nums.every((v) => v === 0);
       else if (PAINT.has(tok)) { if (!white) return false; }
       else if (MARK.has(tok)) return false;
