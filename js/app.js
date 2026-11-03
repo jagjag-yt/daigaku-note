@@ -1311,7 +1311,17 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v20\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v21\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+}
+// 図形補正の様子(最後の数本): オン/オフ、最後に止めていた時間と揺れ、整えた結果
+const debugShapes = [];
+function debugShape(a) {
+  const still = a.holdT ? ((performance.now() - a.holdT) / 1000).toFixed(2) + '秒' : '-';
+  const r = !S.shapes ? 'オフ' : `止めた ${still} 揺れ ${(a.holdMax || 0).toFixed(1)}px → ${a.dbgShape || '待ち中に離した'}${a.unshapedN ? ' 戻した' + a.unshapedN : ''} 点 ${a.d.pts.length / 3}`;
+  debugShapes.push('図形 ' + r);
+  if (debugShapes.length > 4) debugShapes.shift();
+  debugCounts['図形'] = '\n' + debugShapes.join('\n');
+  debugCount(null);
 }
 // 書いている線の入力の中身(1回の move にまとめられた点の数、座標が整数か、筆圧)
 const debugOn = /[?&]debug/.test(location.search);
@@ -1545,6 +1555,7 @@ function addPoint(e, main = e) {
     a.shaped = false;
     a.unshaped = null;
     a.holdAt = null;
+    if (debugOn) { a.unshapedN = (a.unshapedN || 0) + 1; a.dbgShape = ''; }
     const held = a.held;
     a.held = [];
     for (const [he, hm] of held) addPoint(he, hm);
@@ -1586,12 +1597,18 @@ function addPoint(e, main = e) {
 const HOLD_MS = 500, HOLD_PX = 5, UNSHAPE_PX = 14; // 画面上の px
 function holdCheck(a, e) {
   if (!S.shapes) return;
-  if (a.holdAt && Math.hypot(e.clientX - a.holdAt[0], e.clientY - a.holdAt[1]) < HOLD_PX) return;
+  if (a.holdAt) {
+    const dd = Math.hypot(e.clientX - a.holdAt[0], e.clientY - a.holdAt[1]);
+    if (dd < HOLD_PX) { if (debugOn) a.holdMax = Math.max(a.holdMax || 0, dd); return; }
+  }
   a.holdAt = [e.clientX, e.clientY];
+  if (debugOn) { a.holdT = performance.now(); a.holdMax = 0; }
   clearTimeout(a.holdTimer);
   a.holdTimer = setTimeout(() => {
+    if (debugOn) a.dbgShape = active !== a ? '別の線' : a.shaped ? '整え済み' : '';
     if (active !== a || a.shaped) return;
     const d = a.d, shape = recognizeShape(d.pts);
+    if (debugOn) a.dbgShape = shape ? shape.type : '図形でない';
     if (!shape) return;
     a.unshaped = d.pts;
     a.held = [];
@@ -1679,6 +1696,7 @@ function flushPen() {
 
 async function finishStroke(a) {
   const d = a.d;
+  if (debugOn && d.pts.length) debugShape(a);
   if (!d.pts.length) return paintLive(a.v, '');
   pushUndo({ undo: [['stroke.del', { ids: [d.id] }]], redo: [['stroke.undel', { ids: [d.id] }]], pages: [a.v.pg.id] });
   // commit は最初に op をノートに反映するので、その直後に確定した線を足し、書いている最中の線を消す
