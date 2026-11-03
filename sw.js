@@ -1,6 +1,6 @@
 // オフラインでも起動できるように、アプリ本体を端末にキャッシュする。
 // 中身を変えたら VERSION を上げる。
-const VERSION = 'daigaku-note-v16';
+const VERSION = 'daigaku-note-v17';
 const ASSETS = [
   './', 'index.html', 'style.css', 'manifest.webmanifest',
   'js/app.js', 'js/db.js', 'js/model.js', 'js/pdf.js', 'js/sync.js',
