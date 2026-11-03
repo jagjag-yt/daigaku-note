@@ -259,6 +259,10 @@ export function strokeHit(e, x, y, r) {
 }
 
 // 筆圧から線の太さ(pt)
+// pr: 2  本物の筆圧つきの線。ふつうの筆圧(0.2 前後)で今までの線とほぼ同じ太さになり、
+//        軽く書くと細く(最小で 0.55 倍)、強く書くと太く(最大で 1.15 倍)なる。平方根で、弱い筆圧の差を大きめに出す
+// pr: true 以前の線(筆圧は実際には一定の 0.5 だった)。見た目を変えないため式はそのまま
 export function widthAt(d, p) {
+  if (d.pr === 2) return d.width * (0.55 + 0.6 * Math.sqrt(Math.max(0, Math.min(1, p))));
   return d.pr ? d.width * (0.3 + p) : d.width;
 }
