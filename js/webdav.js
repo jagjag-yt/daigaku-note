@@ -57,9 +57,15 @@ function planSend(own, fresh, st) {
   if (!fresh.length) return null;
   const to = fresh[fresh.length - 1].c;
   if (!st.resent && st.sentC > 0) {
-    const first = own.find((o) => o.c <= st.sentC && o.p && o.p.s && o.p.s.src === 'goodnotes');
-    // 取り込みの最初の op(note.create)には src がないので、同じノートの最初の番号から
-    const start = first && own.find((o) => o.n === first.n);
+    // 取り込んだノート: 線などに src: 'goodnotes' の印がある。線のないノート(PDF だけ)は印がないので、
+    // 表紙の色を持たない note.create(取り込みで作ったノートの形。手で作ったノートは表紙の色を持つ)も対象にする
+    const imported = new Set();
+    for (const o of own) {
+      if (o.c > st.sentC) break;
+      if (o.p && o.p.s && o.p.s.src === 'goodnotes') imported.add(o.n);
+      else if (o.t === 'note.create' && !(o.p && o.p.cover)) imported.add(o.n);
+    }
+    const start = own.find((o) => o.c <= st.sentC && imported.has(o.n));
     if (start) return { from: start.c, to, out: own.filter((o) => o.c >= start.c && o.c <= to), resend: true };
   }
   return { from: st.sentC + 1, to, out: fresh, resend: false };
@@ -95,16 +101,17 @@ export async function configure(next) {
   try {
     const nextCfg = { ...next };
     if (nextCfg.url && !nextCfg.url.endsWith('/')) nextCfg.url += '/';
+    const key = `${nextCfg.url}|${nextCfg.user}`;
+    const nextSt = st.key === key ? st : { key, sentC: 0, cur: {}, tags: {}, sentFiles: [] };
+    // 保存できてからメモリの設定を変える(保存に失敗したときに、メモリと保存の内容がずれないように)
+    await db.setMeta('dav', nextCfg);
+    await db.setMeta('davState', nextSt);
+    if (nextSt !== st) { gapSince = 0; lastFull = 0; }
     cfg = nextCfg;
-    if (st.key !== stateKey()) {
-      st = { key: stateKey(), sentC: 0, cur: {}, tags: {}, sentFiles: [] };
-      gapSince = 0;
-      lastFull = 0;
-    }
-    await db.setMeta('dav', cfg);
-    await db.setMeta('davState', st);
+    st = nextSt;
   } finally {
     running = false;
+    again = againManual = false; // 設定のあとはアプリが手動の同期を始める
   }
 }
 
@@ -119,27 +126,30 @@ function base() {
   return cfg.url + 'daigaku-note/';
 }
 
-async function dav(method, path, { body, headers = {}, ok = [200, 201, 204, 207] } = {}) {
+// read: 'json' | 'text' | 'blob' なら本文まで読んで { res, data } を返す(本文の読み込みにも時間切れをかけるため)
+async function dav(method, path, { body, headers = {}, ok = [200, 201, 204, 207], read = null } = {}) {
   const auth = 'Basic ' + btoa(unescape(encodeURIComponent(`${cfg.user}:${cfg.pass || ''}`)));
-  // 時間切れ: 通信が止まったままだと同期が終わらず、設定の保存も待ち続けるため。大きなファイルを送るときは長めに
+  // 時間切れ: 通信が止まったままだと同期が終わらず、設定の保存も待ち続けるため。大きなファイルを送る・受け取るときは長めに
   const ctl = new AbortController();
-  const big = body && (body.size || body.length || 0) > 1_000_000;
-  const t = setTimeout(() => ctl.abort(), big ? 300_000 : 60_000);
-  let res;
+  const size = body ? body.size || body.length || 0 : 0;
+  let t = setTimeout(() => ctl.abort(), size > 1_000_000 ? 300_000 : 60_000);
   try {
-    res = await fetch(base() + path, { method, body, headers: { Authorization: auth, ...headers }, cache: 'no-store', signal: ctl.signal });
+    const res = await fetch(base() + path, { method, body, headers: { Authorization: auth, ...headers }, cache: 'no-store', signal: ctl.signal });
+    if (!ok.includes(res.status)) {
+      const err = new Error(`${method} ${path || '/'}: ${res.status}`);
+      err.status = res.status;
+      throw err;
+    }
+    if (!read || res.status !== 200 && res.status !== 207) return { res, data: null };
+    const len = Number(res.headers.get('Content-Length')) || 0;
+    if (len > 1_000_000) { clearTimeout(t); t = setTimeout(() => ctl.abort(), 300_000); }
+    return { res, data: await res[read]() };
   } catch (e) {
     if (e.name === 'AbortError') throw new TypeError('時間切れ'); // 接続できないときと同じ扱い
     throw e;
   } finally {
     clearTimeout(t);
   }
-  if (!ok.includes(res.status)) {
-    const err = new Error(`${method} ${path || '/'}: ${res.status}`);
-    err.status = res.status;
-    throw err;
-  }
-  return res;
 }
 
 async function mkcol(path) {
@@ -149,9 +159,9 @@ async function mkcol(path) {
 // フォルダの中身。[{ name, tag }](フォルダは名前の末尾に / 、tag は ETag。返さないサーバーでは '')
 async function list(path) {
   const body = '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getetag/></d:prop></d:propfind>';
-  const res = await dav('PROPFIND', path, { body, headers: { Depth: '1', 'Content-Type': 'application/xml' }, ok: [207, 404] });
+  const { res, data } = await dav('PROPFIND', path, { body, headers: { Depth: '1', 'Content-Type': 'application/xml' }, ok: [207, 404], read: 'text' });
   if (res.status === 404) return [];
-  const xml = new DOMParser().parseFromString(await res.text(), 'application/xml');
+  const xml = new DOMParser().parseFromString(data, 'application/xml');
   const self = decodeURIComponent(new URL(base() + path).pathname).replace(/\/+$/, '');
   const out = [];
   for (const r of xml.getElementsByTagNameNS('DAV:', 'response')) {
@@ -174,9 +184,9 @@ async function fetchFile(ref) {
   if (await db.hasFile(ref.hash)) return true;
   const name = `${ref.hash}.${fileExt(ref.type)}`;
   // 404 以外の失敗(403・500 など)でも、このファイルだけ飛ばして次の同期で取り直す
-  const res = await dav('GET', 'files/' + name, { ok: [200, 404] }).catch((e) => { if (e instanceof TypeError) throw e; return null; });
-  if (!res || res.status !== 200) return false;
-  await db.putFile({ hash: ref.hash, name, type: ref.type, data: new Blob([await res.blob()], { type: ref.type }) });
+  const r = await dav('GET', 'files/' + name, { ok: [200, 404], read: 'blob' }).catch((e) => { if (e instanceof TypeError) throw e; return null; });
+  if (!r || r.res.status !== 200) return false;
+  await db.putFile({ hash: ref.hash, name, type: ref.type, data: new Blob([r.data], { type: ref.type }) });
   return true;
 }
 function addMissing(ref, n) {
@@ -217,7 +227,7 @@ export async function syncNow(manual = false) {
           if (st.sentFiles.includes(ref.hash)) continue;
           const name = `files/${ref.hash}.${fileExt(ref.type)}`;
           const head = await dav('HEAD', name, { ok: [200, 404] });
-          if (head.status === 404) {
+          if (head.res.status === 404) {
             const f = await db.getFile(ref.hash);
             if (f) await dav('PUT', name, { body: f.data, headers: { 'Content-Type': ref.type } });
           }
@@ -229,12 +239,19 @@ export async function syncNow(manual = false) {
     };
     let plan = planSend(own, fresh, st);
     if (plan && plan.resend) {
-      // 送り直しは大きくなりうる。サーバーに断られたら(大きすぎるなど)あきらめて、ふつうに送る
+      // 送り直しは大きくなりうる。失敗したら(大きすぎて断られた・時間切れなど。ブラウザでは理由が分からないことも多い)
+      // 今回はふつうに送る。3回失敗したら送り直しはあきらめる
       try { await put(plan); } catch (e) {
-        if (e instanceof TypeError) throw e; // 接続できない: 次の同期でもう一度
-        console.warn('送り直しをあきらめました', e);
-        plan = { ...planSend(own, fresh, { ...st, resent: true }) };
-        await put(plan);
+        console.warn('送り直しに失敗しました', e);
+        st.resendTries = (st.resendTries || 0) + 1;
+        if (st.resendTries >= 3) st.resent = true;
+        await db.setMeta('davState', st);
+        plan = planSend(own, fresh, { ...st, resent: true });
+        await put(plan); // 接続できないなら、ここで同期全体が失敗する(次の同期でもう一度)
+        st.sentC = plan.to; // 続きは送れた。送り直しは次の同期でもう一度(3回まで)
+        sent = fresh.length;
+        await db.setMeta('davState', st);
+        plan = null;
       }
     } else if (plan) await put(plan);
     if (plan) {
@@ -251,7 +268,7 @@ export async function syncNow(manual = false) {
     // 2) ほかの端末の変更を読み込む(端末ごとに、カーソルより後のファイルだけを終了番号の順に)
     const full = manual || !lastFull || Date.now() - lastFull >= FULL_EVERY;
     const changed = new Set();
-    let got = 0, newer = false, broken = false, suspicious = false;
+    let got = 0, newer = false, broken = false, suspicious = false, trustworthy = false;
     for (const { name: dir, tag } of await list('ops/')) {
       if (!dir.endsWith('/') || dir === me + '/') continue;
       const dev = dir.slice(0, -1);
@@ -266,16 +283,18 @@ export async function syncNow(manual = false) {
         if (f.end <= (st.cur[dev] || 0)) continue; // 同じ範囲を先に読んだ
         let json;
         try {
-          json = await (await dav('GET', `ops/${dir}${f.name}`)).json();
+          json = (await dav('GET', `ops/${dir}${f.name}`, { read: 'json' })).data;
         } catch (e) {
           if (!(e instanceof SyntaxError)) throw e;
           // 書き込みの途中で切れた壊れたファイル。同じ範囲をふくむ後のファイルがあればそちらで読む
           if (files.some((g) => g !== f && g.from <= f.from && g.end >= f.end)) continue;
           // この端末はここで止める(ほかの端末は続ける)。次の同期でまた試し、20回読めなければあきらめて先へ進む
+          // (20回以上、かつ最初に失敗してから1日たったら。書いた端末が同じ名前で書き直すのを待つため)
           const key = `${dev}/${f.name}`;
           st.badTries = st.badTries || {};
-          st.badTries[key] = (st.badTries[key] || 0) + 1;
-          if (st.badTries[key] < 20) { broken = stopped = true; await db.setMeta('davState', st); break; }
+          const bt = (st.badTries[key] = st.badTries[key] || { n: 0, since: Date.now() });
+          bt.n++;
+          if (bt.n < 20 || Date.now() - bt.since < 86_400_000) { broken = stopped = true; await db.setMeta('davState', st); break; }
           delete st.badTries[key];
           st.lost = (st.lost || 0) + 1;
           st.cur[dev] = f.end;
@@ -296,11 +315,13 @@ export async function syncNow(manual = false) {
         got += await db.putOps(ops, recorder.clock);
         for (const op of ops) changed.add(op.n);
         st.cur[dev] = f.end;
+        if (st.badTries) for (const k of Object.keys(st.badTries)) if (k.startsWith(dev + '/')) delete st.badTries[k];
         read++;
         await db.setMeta('davState', st);
       }
       // ETag が前と同じなのに新しいファイルがあった: このサーバーの ETag は当てにならないかもしれない
       if (sameTag && read) suspicious = true;
+      else if (tag && !sameTag && read) trustworthy = true;
       // 最後まで読めたときだけ目印を覚える(途中で止まったら次も中を見る)
       if (tag && !stopped && st.tags[dev] !== tag) { st.tags[dev] = tag; await db.setMeta('davState', st); }
     }
@@ -308,7 +329,8 @@ export async function syncNow(manual = false) {
       lastFull = Date.now();
       // 全部見る回で2回続けて「ETag が同じなのに新しいファイル」なら、以後は ETag を使わない
       // (1回で決めないのは、ETag を少し遅れて更新するサーバーもあるため)
-      const sus = suspicious ? (st.etagSus || 0) + 1 : 0;
+      // 数を戻すのは「ETag が変わっていて新しいファイルもあった」(ETag が正しく働いた)ときだけ
+      const sus = suspicious ? (st.etagSus || 0) + 1 : trustworthy ? 0 : st.etagSus || 0;
       if (sus !== (st.etagSus || 0)) {
         st.etagSus = sus;
         if (sus >= 2) st.etagBad = true;
@@ -337,7 +359,11 @@ export async function syncNow(manual = false) {
     let note = '';
     if (newer) note = '。ほかの端末が新しい版の大学ノートで書いた変更があります。アプリを更新してください';
     else if (broken) note = '。ほかの端末の変更のファイルに読めないものがありました。次の同期で読み直します';
-    else if (st.lost) note = `。ほかの端末の変更のファイルのうち ${st.lost} 個が壊れていて読めませんでした`;
+    else if (st.lost && manual) {
+      note = `。ほかの端末の変更のファイルのうち ${st.lost} 個が壊れていて読めませんでした`;
+      st.lost = 0; // 一度知らせたら消す
+      await db.setMeta('davState', st);
+    }
     if (gapSince) note += '。保存の終わっていない変更があるので、送るのを少し待っています';
     onStatus(`クラウド同期: ${time} に同期しました` + (manual ? `(送信 ${sent}件・受信 ${got}件)` : '') + note);
     if (got) onRemoteChange(changed);
