@@ -4,7 +4,7 @@
 //
 //   node serve.mjs 8124 &  /  node test/davserver.mjs 8125 &
 //   URL=http://localhost:8124/ DAV=http://localhost:8125/dav/ node test/native-e2e.cjs
-const { chromium } = require('playwright');
+const { chromium } = require('@playwright/test');
 const URL = process.env.URL || 'http://localhost:8124/';
 const DAV = process.env.DAV || 'http://localhost:8125/dav/';
 const log = (...a) => console.log('✓', ...a);

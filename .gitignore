@@ -4,3 +4,4 @@ www/
 _site/
 test-results/
 playwright-report/
+test/ui/__screenshots__/

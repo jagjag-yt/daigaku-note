@@ -28,6 +28,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write # 基準のスクショをブランチに足すため
+      actions: write # 足したコミットにも確認を走らせるため
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -49,17 +50,22 @@ jobs:
       - name: 作った基準のスクショをブランチに足す
         if: success() && github.event_name == 'push' && github.ref != 'refs/heads/main'
         run: |
-          git add test/ui/__screenshots__
+          # 基準は手元で作らない(.gitignore に入れてある)ので、ここだけ -f で足す
+          git add -f test/ui/__screenshots__
           if git diff --cached --quiet; then echo "足すものはありません"; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "画面の崩れのテスト: 基準のスクショを更新"
           git push
+          # このトークンでのプッシュでは確認が自動で走らないので、足したコミットにも走らせる(PR のチェックが付くように)
+          gh workflow run ci.yml --ref "$GITHUB_REF_NAME"
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: アプリ版(Android)の動きをブラウザで再現して確かめる
         if: success() || failure()
         run: |
           node serve.mjs 8124 & node test/davserver.mjs 8125 &
-          sleep 1
+          for i in $(seq 1 30); do curl -sf -o /dev/null http://localhost:8124/ && curl -s -o /dev/null http://localhost:8125/ && break; sleep 1; done
           node test/native-e2e.cjs
       - name: 結果(違いの画像つき)を残す
         if: failure()

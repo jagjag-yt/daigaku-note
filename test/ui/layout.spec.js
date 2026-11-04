@@ -69,7 +69,7 @@ async function layoutProblems(page, { touch, safeArea = {} }) {
       }
     }
     // 横にスクロールしてしまう箱(横に並べてスクロールするつもりの箱はないので、どれも崩れ)
-    for (const el of layer.querySelectorAll('*')) {
+    for (const el of [...(layer === document.body ? [] : [layer]), ...layer.querySelectorAll('*')]) {
       if (el.id === 'scroller' || el.closest('#scroller')) continue; // ノートのページは拡大すると横にも動かせる
       const cs = getComputedStyle(el);
       if (/(auto|scroll)/.test(cs.overflowX) && el.scrollWidth > el.clientWidth + 1 && shown(el)) {
@@ -85,6 +85,11 @@ async function layoutProblems(page, { touch, safeArea = {} }) {
       // 検索欄のように、ラベルで囲んだ入力欄はラベル全体が押せる場所
       const box = el.matches('input') && el.closest('label') ? el.closest('label') : el;
       let r = box.getBoundingClientRect();
+      // 位置の確かめは、押せる範囲(ラベル)と入力欄そのものを合わせた範囲で
+      const span = () => {
+        const a = box.getBoundingClientRect(), b = el.getBoundingClientRect();
+        return { left: Math.min(a.left, b.left), right: Math.max(a.right, b.right), top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom) };
+      };
       const cs = getComputedStyle(el);
 
       // 大きさと文字のあふれは、スクロールしないと見えない部品でも確かめる
@@ -103,23 +108,24 @@ async function layoutProblems(page, { touch, safeArea = {} }) {
         if (!scroller && /(auto|scroll)/.test(pcs.overflowX + pcs.overflowY) && (p.scrollWidth > p.clientWidth + 1 || p.scrollHeight > p.clientHeight + 1)) scroller = p;
       }
       if (scroller) { box.scrollIntoView({ block: 'center', inline: 'nearest' }); r = box.getBoundingClientRect(); }
+      const o = span();
       // 切り取る親(overflow が visible でない)で切れていないか
       for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
         const pcs = getComputedStyle(p);
         if (pcs.overflowX === 'visible' && pcs.overflowY === 'visible') continue;
         const pr = p.getBoundingClientRect();
-        if (r.left < pr.left - 1 || r.right > pr.right + 1 || r.top < pr.top - 1 || r.bottom > pr.bottom + 1) {
+        if (o.left < pr.left - 1 || o.right > pr.right + 1 || o.top < pr.top - 1 || o.bottom > pr.bottom + 1) {
           out.push(`${name(el)} が ${name(p)} の枠で切れている`);
           break;
         }
       }
       // 画面の外・画面の端(切り欠き・ホームバー)にかかっていないか。
       // 縦は、ページ全体がスクロールする本棚の中身では確かめない(スクロールすれば見える)
-      if (r.left < edge.left - 1 || r.right > W - edge.right + 1) {
-        out.push(`${name(el)} が画面の横の端にかかっている (${Math.round(r.left)}〜${Math.round(r.right)} / 幅 ${W}、端 ${edge.left}・${edge.right})`);
+      if (o.left < edge.left - 1 || o.right > W - edge.right + 1) {
+        out.push(`${name(el)} が画面の横の端にかかっている (${Math.round(o.left)}〜${Math.round(o.right)} / 幅 ${W}、端 ${edge.left}・${edge.right})`);
       }
-      if ((scroller || fixed || !docScrolls) && (r.top < edge.top - 1 || r.bottom > H - edge.bottom + 1)) {
-        out.push(`${name(el)} が画面の上下の端にかかっている (${Math.round(r.top)}〜${Math.round(r.bottom)} / 高さ ${H}、端 ${edge.top}・${edge.bottom})`);
+      if ((scroller || fixed || !docScrolls) && (o.top < edge.top - 1 || o.bottom > H - edge.bottom + 1)) {
+        out.push(`${name(el)} が画面の上下の端にかかっている (${Math.round(o.top)}〜${Math.round(o.bottom)} / 高さ ${H}、端 ${edge.top}・${edge.bottom})`);
       }
 
       // 隠れていないか(重なり)。真ん中と四隅の近くを押してみる
