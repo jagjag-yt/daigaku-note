@@ -1,2 +1,6 @@
 node_modules/
 *.log
+www/
+_site/
+test-results/
+playwright-report/

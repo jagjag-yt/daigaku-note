@@ -13,6 +13,13 @@
   --shelf: #f6f7f9;
   --desk: #e4e7ec;
   color-scheme: light;
+  /* 画面の端の切り欠き・角の丸み・ホームバーなどを避ける幅。
+     アプリ版の Android(Capacitor)は --safe-area-inset-* を入れてくれるのでそれを優先し、
+     ほか(iPad・iPhone・ブラウザ)は env() を使う */
+  --sa-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  --sa-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
+  --sa-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+  --sa-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
@@ -42,6 +49,7 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 :where(button.on) { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
 [hidden] { display: none !important; }
 .invisible { visibility: hidden; }
+.native .web-only { display: none; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 button.danger { color: var(--danger); }
 
@@ -63,7 +71,7 @@ svg.ic { flex: none; display: block; }
   position: sticky; top: 0; z-index: 3;
   background: color-mix(in srgb, var(--shelf) 88%, transparent);
   -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
-  padding: max(10px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) 4px max(20px, env(safe-area-inset-left));
+  padding: max(10px, var(--sa-top)) max(20px, var(--sa-right)) 4px max(20px, var(--sa-left));
 }
 .lib-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .lib-top h1 { font-size: 30px; font-weight: 700; margin: 4px 0; letter-spacing: .02em; flex: none; white-space: nowrap; }
@@ -79,7 +87,7 @@ svg.ic { flex: none; display: block; }
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 28px 24px;
-  padding: 16px max(20px, env(safe-area-inset-right)) 48px max(20px, env(safe-area-inset-left));
+  padding: 16px max(20px, var(--sa-right)) 48px max(20px, var(--sa-left));
 }
 .card { display: flex; flex-direction: column; align-items: stretch; gap: 8px; min-width: 0; }
 .cover {
@@ -126,13 +134,13 @@ a.cover:active { transform: scale(.98); }
 #editor[hidden] { display: none; }
 .ed-top {
   background: var(--panel); border-bottom: 1px solid var(--line);
-  padding: env(safe-area-inset-top) max(8px, env(safe-area-inset-right)) 0 max(8px, env(safe-area-inset-left));
+  padding: var(--sa-top) max(8px, var(--sa-right)) 0 max(8px, var(--sa-left));
   z-index: 4;
 }
 .ed-row { display: flex; align-items: center; gap: 2px; min-height: 46px; }
 .ed-row.nav { gap: 2px; }
 .ed-title { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.1; }
-.title { font-weight: 600; font-size: 15px; border: none; background: transparent; max-width: 100%; min-height: 26px; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 8px; }
+.title { font-weight: 600; font-size: 15px; border: none; background: transparent; max-width: 100%; min-height: 32px; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-radius: 8px; }
 .saved { color: var(--muted); font-size: 11px; }
 .ed-row.toolbar { justify-content: center; gap: 6px; padding-bottom: 4px; overflow-x: auto; scrollbar-width: none; }
 .ed-row.toolbar::-webkit-scrollbar { display: none; }
@@ -189,7 +197,7 @@ a.cover:active { transform: scale(.98); }
 .sidebar {
   width: 196px; flex: none; display: flex; flex-direction: column;
   background: var(--panel); border-right: 1px solid var(--line);
-  padding-left: env(safe-area-inset-left);
+  padding-left: var(--sa-left);
 }
 .sidebar[hidden] { display: none; }
 .sb-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 8px 4px 16px; font-weight: 600; font-size: 14px; }
@@ -206,13 +214,13 @@ a.cover:active { transform: scale(.98); }
 .pp-info { display: flex; align-items: center; gap: 0; }
 .pp-no { font-size: 12px; color: var(--muted); padding-left: 8px; }
 .pp-row.current .pp-no { color: var(--accent); font-weight: 600; }
-.sb-foot { padding: 8px 12px max(12px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); }
+.sb-foot { padding: 8px 12px max(12px, var(--sa-bottom)); border-top: 1px solid var(--line); }
 .wide-btn { width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--accent); background: var(--accent-soft); border: none; border-radius: 10px; min-height: 38px; }
 
 .page-ind {
-  position: absolute; right: 16px; bottom: max(16px, env(safe-area-inset-bottom));
-  background: rgba(31,41,55,.78); color: #fff; font-size: 13px; padding: 5px 11px; border-radius: 999px;
-  min-height: 0; border: none;
+  position: absolute; right: 16px; bottom: max(16px, var(--sa-bottom));
+  background: rgba(31,41,55,.78); color: #fff; font-size: 13px; padding: 0 12px; border-radius: 999px;
+  min-height: 32px; border: none;
   opacity: .45; transition: opacity .3s ease; font-variant-numeric: tabular-nums;
 }
 /* いつでも押せる(押すとページ番号で移動)。スクロール中だけはっきり見せる */
@@ -261,7 +269,7 @@ dialog .row { display: flex; gap: 8px; flex-wrap: wrap; }
 
 #toast {
   display: flex; align-items: center; gap: 12px;
-  position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); transform: translateX(-50%);
+  position: fixed; left: 50%; bottom: max(24px, var(--sa-bottom)); transform: translateX(-50%);
   background: rgba(31,41,55,.92); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: 14px;
   max-width: calc(100% - 32px); z-index: 30;
 }
@@ -272,7 +280,7 @@ dialog .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .substatus { display: flex; gap: 16px; padding: 0; color: var(--muted); font-size: 12px; }
 .substatus:has(span:empty + span:empty) { display: none; }
 .hit mark { background: #fde68a; color: inherit; }
-.results { display: flex; flex-direction: column; gap: 8px; padding: 16px max(20px, env(safe-area-inset-right)) 32px max(20px, env(safe-area-inset-left)); max-width: 760px; }
+.results { display: flex; flex-direction: column; gap: 8px; padding: 16px max(20px, var(--sa-right)) 32px max(20px, var(--sa-left)); max-width: 760px; }
 .hit { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; text-decoration: none; color: var(--text); }
 .hit-title { font-weight: 600; }
 .hit-page { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 6px; }
@@ -341,7 +349,7 @@ dialog h3 { font-size: 15px; margin: 18px 0 4px; }
 
 /* 用紙・表紙を選ぶ */
 .tpl-pick { max-width: 480px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; color: var(--text); }
-.tpl-opt { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 4px; min-height: 0; border: 2px solid transparent; background: transparent; border-radius: 10px; font-size: 12px; white-space: nowrap; }
+.tpl-opt { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 4px; min-height: 0; border: 2px solid transparent; background: transparent; border-radius: 10px; font-size: 12px; line-height: 1.3; text-align: center; overflow-wrap: anywhere; }
 .tpl-opt svg { width: 100%; height: auto; aspect-ratio: var(--ar, 210 / 297); background: #fff; border-radius: 2px; box-shadow: 0 0 0 1px var(--line), 0 1px 3px rgba(0,0,0,.08); }
 .tpl-opt.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .cover-pick { display: flex; flex-wrap: wrap; gap: 10px; padding: 2px 0; }
@@ -358,7 +366,7 @@ dialog h3 { font-size: 15px; margin: 18px 0 4px; }
 dialog .row.end { justify-content: flex-end; align-items: center; margin-top: 8px; }
 dialog .row .spacer { flex: 1; }
 dialog form h2 { margin-bottom: 14px; }
-dialog { max-height: calc(100% - 32px); overflow-y: auto; position: fixed; padding-top: 18px; }
+dialog { max-height: calc(100% - 32px - var(--sa-top) - var(--sa-bottom)); overflow-y: auto; position: fixed; padding-top: 18px; }
 dialog:focus { outline: none; }
 .dlg-close { position: absolute; right: 10px; top: 10px; color: var(--muted); }
 dialog h2 { padding-right: 40px; }

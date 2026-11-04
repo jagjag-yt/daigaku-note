@@ -9,7 +9,8 @@ import { importPdf, renderPdfPage, exportPdf } from './pdf.js';
 import { buildSyncFile, importSyncFile } from './sync.js';
 import * as search from './search.js';
 import * as dav from './webdav.js';
-import { icon, fillIcons, openPopover, closePopover, menu, retargetPopover } from './ui.js';
+import { icon, fillIcons, openPopover, closePopover, menu, retargetPopover, popoverOpen } from './ui.js';
+import * as native from './native.js';
 
 const $ = (s) => document.querySelector(s);
 // 色と太さは道具ごとに3つずつ「よく使うもの」として並べる。選んでいるものをもう一度押すと入れ替えられる
@@ -89,7 +90,10 @@ async function init() {
   if (['pen', 'marker', 'eraser', 'lasso'].includes(prefs.tool)) S.tool = prefs.tool;
 
   navigator.storage?.persist?.().catch(() => {});
-  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  // アプリ版は中身がアプリに入っているので、オフライン用のキャッシュ(サービスワーカー)は使わない。
+  // 使うと、アプリを更新しても前の版の画面がキャッシュから出てしまう
+  if (native.isNative) document.documentElement.classList.add('native', 'native-' + native.platform);
+  if (!native.isNative && 'serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
     // 新しい版が入ったら、書いている最中でなければ読み込み直して切り替える(書いた線は保存済み)
     const hadController = !!navigator.serviceWorker.controller;
@@ -105,6 +109,7 @@ async function init() {
   bindLibrary();
   buildToolbar();
   bindEditor();
+  bindNative();
   onImageReady(onImageLoaded);
   await dav.init({ recorder: S.rec, onRemoteChange: onRemoteChange, onStatus: setSyncStatus });
   search.init({ onProgress: (msg) => { const el = $('#search-status'); if (el) el.textContent = msg; } });
@@ -184,16 +189,32 @@ function askName(heading, value) {
   });
 }
 
-function download(data, name, type) {
+// アプリ版だけの設定
+function bindNative() {
+  if (!native.isNative) return;
+  // Android のファイル選択は拡張子(.goodnotes)を種類に直せず、選べなくなるので絞らない(中身で確かめる)
+  $('#gn-input').accept = '';
+  // Android の「戻る」: 開いているものを内側から閉じる → ノートから本棚へ → 何もなければアプリを裏へ
+  native.onBackButton(() => {
+    if (popoverOpen()) { closePopover(); return true; }
+    const d = [...document.querySelectorAll('dialog[open]')].pop();
+    if (d) { if (d.requestClose) d.requestClose(); else d.close(); return true; }
+    // ページ一覧は、画面に重なって出ているとき(狭い画面)だけ閉じる。横に並んでいるときはそのまま
+    if (!$('#sidebar').hidden && $('#sb-scrim').getClientRects().length) { $('#pages-close').click(); return true; }
+    if (/^#\/note\//.test(location.hash)) { location.hash = '#/'; return true; }
+    return false;
+  });
+}
+
+// ブラウザではダウンロード、アプリでは共有シートで渡す。渡せたら true
+async function download(data, name, type) {
   const blob = data instanceof Blob ? data : new Blob([data], { type });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  try {
+    return await native.saveFile(blob, name);
+  } catch (e) {
+    toast('書き出せませんでした: ' + e.message, 6000);
+    return false;
+  }
 }
 
 const stamp = () => new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
@@ -423,8 +444,9 @@ function bindLibrary() {
   };
   $('#sync-export').onclick = async () => {
     const json = await buildSyncFile(S.rec.device);
-    download(JSON.stringify(json), `大学ノート同期-${S.rec.device}-${stamp()}.json`, 'application/json');
-    toast(`${json.ops.length}件の変更を書き出しました`);
+    if (await download(JSON.stringify(json), `大学ノート同期-${S.rec.device}-${stamp()}.json`, 'application/json')) {
+      toast(`${json.ops.length}件の変更を書き出しました`);
+    }
   };
   $('#sync-import').onclick = () => $('#sync-input').click();
   $('#sync-input').onchange = async (e) => {
@@ -880,8 +902,8 @@ async function exportCurrentPdf() {
   try {
     toast('PDFを作成しています…', 60000);
     const bytes = await exportPdf(S.note);
-    download(new Blob([bytes], { type: 'application/pdf' }), `${safeName(S.note.title)}.pdf`);
-    toast('PDFを書き出しました');
+    if (await download(new Blob([bytes], { type: 'application/pdf' }), `${safeName(S.note.title)}.pdf`)) toast('PDFを書き出しました');
+    else $('#toast').hidden = true;
   } catch (e) {
     toast('PDFを書き出せませんでした: ' + e.message, 6000);
   }
@@ -1311,7 +1333,7 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v21\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v22\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 図形補正の様子(最後の数本): オン/オフ、最後に止めていた時間と揺れ、整えた結果
 const debugShapes = [];

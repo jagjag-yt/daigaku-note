@@ -15,6 +15,7 @@
 
 import * as db from './db.js';
 import { fileRefs, fileExt } from './model.js';
+import { http, isNative } from './native.js';
 
 const FORMAT = 'daigaku-note-ops';
 let cfg = {};
@@ -144,10 +145,11 @@ async function dav(method, path, { body, headers = {}, ok = [200, 201, 204, 207]
   const ctl = new AbortController();
   const size = !body ? 0 : typeof body === 'string' ? new Blob([body]).size : body.size || body.byteLength || 0; // バイト数
   let t = 0;
-  const arm = (ms) => { clearTimeout(t); t = setTimeout(() => ctl.abort(), ms); };
+  // アプリ版は OS の通信機能が「何も届かない(送れない)時間」で時間切れを作るので、ここでは数えない
+  const arm = (ms) => { clearTimeout(t); if (!isNative) t = setTimeout(() => ctl.abort(), ms); };
   arm(60_000 + size / 20);
   try {
-    const res = await fetch(base() + path, { method, body, headers: { Authorization: auth, ...headers }, cache: 'no-store', signal: ctl.signal });
+    const res = await http(base() + path, { method, body, headers: { Authorization: auth, ...headers }, signal: ctl.signal, idleTimeout: 60_000 });
     if (!ok.includes(res.status)) {
       const err = new Error(`${method} ${path || '/'}: ${res.status}`);
       err.status = res.status;
@@ -478,7 +480,7 @@ export async function syncNow(manual = false) {
   } catch (e) {
     console.error(e);
     let msg = e.message;
-    if (e instanceof TypeError) msg = 'サーバーに接続できません。URL・ネット接続・CORS の設定を確認してください';
+    if (e instanceof TypeError) msg = isNative ? 'サーバーに接続できません。URL とネット接続を確認してください' : 'サーバーに接続できません。URL・ネット接続・CORS の設定を確認してください';
     else if (e.timeout) msg = 'サーバーからの応答がありません(時間切れ)。しばらくしてからもう一度同期します';
     else if (e.status === 401) msg = 'ユーザー名またはパスワードが違います';
     else if (e.status === 404 || e.status === 409) msg = 'フォルダのURLが見つかりません';

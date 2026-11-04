@@ -3,10 +3,27 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "大学ノート: 無料・オフライン・クロスプラットフォームの手書きノート(PWA)",
+  "description": "大学ノート: 無料・オフライン・クロスプラットフォームの手書きノート(PWA / Android / iOS)",
   "scripts": {
     "start": "node serve.mjs 8123",
-    "test": "node --test test/model.test.mjs test/shape.test.mjs test/webdav.test.mjs test/goodnotes.test.mjs"
+    "test": "node --test test/model.test.mjs test/shape.test.mjs test/webdav.test.mjs test/goodnotes.test.mjs test/http.test.mjs test/build.test.mjs",
+    "build:web": "node scripts/build-web.mjs",
+    "test:ui": "playwright test",
+    "test:ui:update": "playwright test --update-snapshots",
+    "cap:sync": "node scripts/build-web.mjs && cap sync",
+    "android": "node scripts/build-web.mjs && cap sync android && cap open android"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@capacitor/android": "8.6.0",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/core": "8.6.0",
+    "@capacitor/filesystem": "8.1.5",
+    "@capacitor/ios": "8.6.0",
+    "@capacitor/share": "8.0.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.6.0",
+    "@playwright/test": "1.63.0"
+  }
 }
