@@ -2,7 +2,7 @@
   "appId": "io.github.jagjagyt.daigakunote",
   "appName": "大学ノート",
   "webDir": "www",
-  "loggingBehavior": "production",
+  "loggingBehavior": "none",
   "plugins": {
     "CapacitorHttp": {
       "enabled": false

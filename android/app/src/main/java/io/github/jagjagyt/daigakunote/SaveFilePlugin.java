@@ -42,7 +42,9 @@ public class SaveFilePlugin extends Plugin {
         try {
             startActivityForResult(call, intent, "saved");
         } catch (ActivityNotFoundException e) {
-            // 保存先を選ぶ画面がない端末(画面の側で共有シートに切り替える)
+            // 保存先を選ぶ画面がない端末(画面の側で共有シートに切り替える)。
+            // startActivityForResult が先に call を預けているので、返してから断る
+            getBridge().releaseCall(call);
             call.reject("保存先を選ぶ画面がありません", "NO_PICKER");
         }
     }
@@ -51,6 +53,16 @@ public class SaveFilePlugin extends Plugin {
     private static File fileOf(String path) {
         String p = path.startsWith("file:") ? Uri.parse(path).getPath() : path;
         return new File(p == null ? path : p);
+    }
+
+    // "wt"(中身を切り詰めて書く)で開く。対応していない保存先だけ "w" にする
+    // (Android 10 以降、"w" では前の中身が後ろに残ることがあるため)
+    private OutputStream openForWrite(Uri dest) throws java.io.IOException {
+        try {
+            return getContext().getContentResolver().openOutputStream(dest, "wt");
+        } catch (IllegalArgumentException | UnsupportedOperationException | java.io.FileNotFoundException e) {
+            return getContext().getContentResolver().openOutputStream(dest, "w");
+        }
     }
 
     @ActivityCallback
@@ -70,7 +82,7 @@ public class SaveFilePlugin extends Plugin {
         new Thread(() -> {
             try (
                 InputStream in = new FileInputStream(src);
-                OutputStream os = getContext().getContentResolver().openOutputStream(dest, "w")
+                OutputStream os = openForWrite(dest)
             ) {
                 if (os == null) throw new java.io.IOException("保存先を開けません");
                 byte[] buf = new byte[64 * 1024];

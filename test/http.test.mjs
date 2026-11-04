@@ -145,6 +145,9 @@ test('Android: 送る本文のファイルが消えていたら送らない(空�
   const write = cap.Plugins.DavHttp.writeChunk;
   cap.Plugins.DavHttp.writeChunk = async (o) => { await write(o); cap.files.delete(`/cache/davhttp/${o.id}.up`); };
   await assert.rejects(m.http(DAV + 'lost.pdf', { method: 'PUT', headers: AUTH, body: new Uint8Array(10) }), TypeError);
+  // 途中までしか書けていない(最後の塊が届いていない)ときも送らない
+  cap.Plugins.DavHttp.writeChunk = async (o) => { if (!o.append) await write(o); };
+  await assert.rejects(m.http(DAV + 'lost.pdf', { method: 'PUT', headers: AUTH, body: new Uint8Array(2_000_000) }), TypeError);
   cap.Plugins.DavHttp.writeChunk = write;
   let res = await m.http(DAV + 'lost.pdf', { headers: AUTH });
   assert.equal(res.status, 404); // 送っていない

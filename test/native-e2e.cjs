@@ -44,6 +44,9 @@ const fakeCapacitor = () => {
         writeFile: async (o) => { window.__native.files[o.path] = [o.data]; return { uri: 'file:///cache/' + o.path }; },
         appendFile: async (o) => { window.__native.files[o.path].push(o.data); },
       },
+      Share: {
+        share: async (o) => { window.__native.shared = (window.__native.shared || []).concat([o]); return {}; },
+      },
       SaveFile: {
         save: async (o) => {
           if (window.__native.saveCancel) { await new Promise((r) => setTimeout(r, 500)); return { saved: false }; } // 人が閉じるまでの間
@@ -154,8 +157,19 @@ async function setDav(p) {
     await page.waitForFunction(() => /書き出せませんでした/.test(document.querySelector('#toast-msg').textContent), null, { timeout: 30000 });
     await page.waitForTimeout(300);
     if (await page.locator('#toast').isHidden()) fail('書き出しの失敗が表示されない');
+    // 保存先を選ぶ画面がない端末では、共有シートで渡す
+    await page.evaluate(() => {
+      document.querySelector('#toast').hidden = true;
+      window.Capacitor.Plugins.SaveFile.save = async () => { throw Object.assign(new Error('保存先を選ぶ画面がありません'), { code: 'NO_PICKER' }); };
+    });
+    await page.click('#more-btn');
+    await page.click('#export-pdf');
+    await page.waitForFunction(() => (window.__native.shared || []).length === 1, null, { timeout: 30000 });
+    const sh = await page.evaluate(() => window.__native.shared[0]);
+    if (sh.files?.[0] !== `file:///cache/export/${TITLE}.pdf`) fail('共有シートに渡したファイルがおかしい: ' + JSON.stringify(sh));
+    await page.waitForFunction(() => /PDFを書き出しました/.test(document.querySelector('#toast-msg').textContent) && !document.querySelector('#toast').hidden);
     await page.evaluate(() => { window.Capacitor.Plugins.SaveFile.save = window.__saveOrig; });
-    log('PDF を保存先を選ぶ画面で書き出せる(閉じただけなら何も出さない・失敗は知らせる)');
+    log('PDF を保存先を選ぶ画面で書き出せる(閉じただけなら何も出さない・失敗は知らせる・選ぶ画面がなければ共有シート)');
 
     await page.evaluate(() => window.__native.back());
     await page.waitForSelector('#library:not([hidden])');

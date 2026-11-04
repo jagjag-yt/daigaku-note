@@ -9,7 +9,8 @@ on:
   pull_request:
   workflow_dispatch:
 concurrency:
-  group: ci-${{ github.ref }}
+  # 基準のスクショを足したあとに起動する run(workflow_dispatch)が、元の push の run を取り消さないよう event も分ける
+  group: ci-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 permissions:
   contents: read
@@ -58,7 +59,7 @@ jobs:
           git commit -m "画面の崩れのテスト: 基準のスクショを更新"
           git push
           # このトークンでのプッシュでは確認が自動で走らないので、足したコミットにも走らせる(PR のチェックが付くように)
-          gh workflow run ci.yml --ref "$GITHUB_REF_NAME"
+          gh workflow run ci.yml --ref "$GITHUB_REF_NAME" || echo "::warning::足したコミットの確認を走らせられませんでした(Actions の画面から手で走らせてください)"
         env:
           GH_TOKEN: ${{ github.token }}
       - name: アプリ版(Android)の動きをブラウザで再現して確かめる
@@ -66,6 +67,7 @@ jobs:
         run: |
           node serve.mjs 8124 & node test/davserver.mjs 8125 &
           for i in $(seq 1 30); do curl -sf -o /dev/null http://localhost:8124/ && curl -s -o /dev/null http://localhost:8125/ && break; sleep 1; done
+          curl -sf -o /dev/null http://localhost:8124/ && curl -s -o /dev/null http://localhost:8125/ || { echo "テスト用のサーバーが起動しません"; exit 1; }
           node test/native-e2e.cjs
       - name: 結果(違いの画像つき)を残す
         if: failure()
