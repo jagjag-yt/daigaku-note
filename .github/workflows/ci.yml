@@ -66,8 +66,7 @@ jobs:
         if: success() || failure()
         run: |
           node serve.mjs 8124 & node test/davserver.mjs 8125 &
-          for i in $(seq 1 30); do curl -sf -o /dev/null http://localhost:8124/ && curl -s -o /dev/null http://localhost:8125/ && break; sleep 1; done
-          curl -sf -o /dev/null http://localhost:8124/ && curl -s -o /dev/null http://localhost:8125/ || { echo "テスト用のサーバーが起動しません"; exit 1; }
+          timeout 30 bash -c 'until curl -sf -o /dev/null http://localhost:8124/ && curl -s -o /dev/null http://localhost:8125/; do sleep 1; done' || { echo "::error::テスト用のサーバーが起動しません"; exit 1; }
           node test/native-e2e.cjs
       - name: 結果(違いの画像つき)を残す
         if: failure()

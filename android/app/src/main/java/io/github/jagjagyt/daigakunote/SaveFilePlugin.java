@@ -68,6 +68,8 @@ public class SaveFilePlugin extends Plugin {
     @ActivityCallback
     private void saved(PluginCall call, ActivityResult result) {
         if (call == null) return;
+        // 預けた call を返す(返さないと保存のたびに溜まる。手元の参照で resolve / reject はできる)
+        getBridge().releaseCall(call);
         Intent data = result.getData();
         if (result.getResultCode() != Activity.RESULT_OK || data == null || data.getData() == null) {
             JSObject out = new JSObject();

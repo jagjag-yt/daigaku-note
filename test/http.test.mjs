@@ -139,7 +139,7 @@ test('Android: 大きなファイルは少しずつ渡して送り、受け取�
   assert.equal(cap.files.size, 0);
 });
 
-test('Android: 送る本文のファイルが消えていたら送らない(空の PUT を成功にしない)。受け取ったファイルが読めなければ失敗', async () => {
+test('Android: 送る本文のファイルが消えていたり途中までだったら送らない(空の PUT を成功にしない)。受け取ったファイルが読めなければ失敗', async () => {
   const cap = fakeAndroid();
   const m = await load(cap);
   const write = cap.Plugins.DavHttp.writeChunk;
