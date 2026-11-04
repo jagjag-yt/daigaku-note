@@ -2,8 +2,15 @@
   "appId": "io.github.jagjagyt.daigakunote",
   "appName": "大学ノート",
   "webDir": "www",
+  "loggingBehavior": "production",
   "plugins": {
-    "CapacitorHttp": { "enabled": false },
-    "SystemBars": { "insetsHandling": "css", "initialViewportFitValueHint": "cover", "style": "LIGHT" }
+    "CapacitorHttp": {
+      "enabled": false
+    },
+    "SystemBars": {
+      "insetsHandling": "css",
+      "initialViewportFitValueHint": "cover",
+      "style": "LIGHT"
+    }
   }
 }

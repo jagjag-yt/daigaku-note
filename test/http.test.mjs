@@ -48,6 +48,10 @@ function fakeAndroid(log = []) {
         },
         async request(o) {
           log.push(o);
+          const upFile = files.get(`/cache/davhttp/${o.id}.up`);
+          if (o.bodyFile && (!upFile || (o.bodySize >= 0 && upFile.length !== o.bodySize))) {
+            throw Object.assign(new Error('送る本文を用意できませんでした'), { code: 'NETWORK' });
+          }
           const ctl = new AbortController();
           ctrls.set(o.id, ctl);
           const up = `/cache/davhttp/${o.id}.up`;
@@ -133,6 +137,22 @@ test('Android: 大きなファイルは少しずつ渡して送り、受け取�
   assert.deepEqual(new Uint8Array(await res.arrayBuffer()), big);
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(cap.files.size, 0);
+});
+
+test('Android: 送る本文のファイルが消えていたら送らない(空の PUT を成功にしない)。受け取ったファイルが読めなければ失敗', async () => {
+  const cap = fakeAndroid();
+  const m = await load(cap);
+  const write = cap.Plugins.DavHttp.writeChunk;
+  cap.Plugins.DavHttp.writeChunk = async (o) => { await write(o); cap.files.delete(`/cache/davhttp/${o.id}.up`); };
+  await assert.rejects(m.http(DAV + 'lost.pdf', { method: 'PUT', headers: AUTH, body: new Uint8Array(10) }), TypeError);
+  cap.Plugins.DavHttp.writeChunk = write;
+  let res = await m.http(DAV + 'lost.pdf', { headers: AUTH });
+  assert.equal(res.status, 404); // 送っていない
+  // 受け取ったファイルが OS に消された(読むと 404)
+  const conv = cap.convertFileSrc;
+  cap.convertFileSrc = () => 'data:text/plain,';
+  await assert.rejects(m.http(DAV, { method: 'PROPFIND', headers: { ...AUTH, Depth: '1' } }), TypeError);
+  cap.convertFileSrc = conv;
 });
 
 test('Android: 本文の用意の途中で取り消すと、送らずに AbortError', async () => {

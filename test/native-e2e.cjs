@@ -46,7 +46,7 @@ const fakeCapacitor = () => {
       },
       SaveFile: {
         save: async (o) => {
-          if (window.__native.saveCancel) return { saved: false };
+          if (window.__native.saveCancel) { await new Promise((r) => setTimeout(r, 500)); return { saved: false }; } // 人が閉じるまでの間
           const path = o.path.replace('file:///cache/', '');
           window.__native.saved.push({ ...o, data: join(window.__native.files[path]) });
           return { saved: true };
@@ -67,6 +67,7 @@ async function device(browser, viewport, errors, name) {
   const ctx = await browser.newContext({ viewport, hasTouch: false });
   const page = await ctx.newPage();
   page.on('pageerror', (e) => errors.push(`${name}: ${e.message}`));
+  if (process.env.DEBUG) page.on('console', (m) => console.log(`  [${name}]`, m.text()));
   // ブラウザから WebDAV サーバーへ直接送ったら失敗(アプリ版では OS の通信だけを使うはず)
   page.on('request', (r) => { if (r.url().startsWith(DAV)) errors.push(`${name}: ブラウザから直接送った ${r.method()} ${r.url()}`); });
   const sent = [];
@@ -138,10 +139,13 @@ async function setDav(p) {
     if (!Buffer.from(sv.data, 'base64').subarray(0, 5).equals(Buffer.from('%PDF-'))) fail('書き出した PDF が壊れている');
     await page.waitForFunction(() => /PDFを書き出しました/.test(document.querySelector('#toast-msg').textContent));
     // 選ぶ画面を閉じただけなら、何も出さない
-    await page.evaluate(() => { window.__native.saveCancel = true; });
+    await page.evaluate(() => { window.__native.saveCancel = true; document.querySelector('#toast').hidden = true; });
     await page.click('#more-btn');
     await page.click('#export-pdf');
-    await page.waitForFunction(() => document.querySelector('#toast').hidden, null, { timeout: 30000 });
+    // 「作成しています」は60秒出したままにする表示なので、5秒以内に消えれば「閉じた」の処理で消したもの
+    await page.waitForFunction(() => /PDFを作成しています/.test(document.querySelector('#toast-msg').textContent) && !document.querySelector('#toast').hidden);
+    await page.waitForFunction(() => document.querySelector('#toast').hidden, null, { timeout: 5000 });
+    if (!/PDFを作成しています/.test(await page.textContent('#toast-msg'))) fail('選ぶ画面を閉じたのに、ほかの表示が出た: ' + (await page.textContent('#toast-msg')));
     await page.evaluate(() => { window.__native.saveCancel = false; });
     // 書き出しに失敗したら、エラーを出したままにする
     await page.evaluate(() => { window.__saveOrig = window.Capacitor.Plugins.SaveFile.save; window.Capacitor.Plugins.SaveFile.save = async () => { throw new Error('テストの失敗'); }; });
@@ -194,4 +198,4 @@ async function setDav(p) {
   } finally {
     await browser.close();
   }
-})().catch((e) => { console.error('✗', e.message); process.exit(1); });
+})().catch((e) => { console.error('✗', e.message, process.env.DEBUG ? e.stack : ''); process.exit(1); });

@@ -9,7 +9,7 @@ import { importPdf, renderPdfPage, exportPdf } from './pdf.js';
 import { buildSyncFile, importSyncFile } from './sync.js';
 import * as search from './search.js';
 import * as dav from './webdav.js';
-import { icon, fillIcons, openPopover, closePopover, menu, retargetPopover, popoverOpen } from './ui.js';
+import { icon, fillIcons, openPopover, closePopover, menu, retargetPopover, popoverOpen, safeRect } from './ui.js';
 import * as native from './native.js';
 
 const $ = (s) => document.querySelector(s);
@@ -197,10 +197,18 @@ function bindNative() {
   if (native.platform === 'android') $('#gn-input').accept = '';
   // Android のアプリ版は、画面の端の幅(--safe-area-inset-*)を読み込みのあとや画面を回したときに入れてくる。
   // 入ったら、幅に合わせた表示などを合わせ直す
-  let saTimer = 0;
+  // (値が変わったときだけ。書いている最中なら、書き終わるまで待つ)
+  let saTimer = 0, saLast = '';
+  const saNow = () => { const r = safeRect(); return [r.top, r.left, innerWidth - r.right, innerHeight - r.bottom].map(Math.round).join(','); };
+  const saCheck = () => {
+    if (active || penPending) { saTimer = setTimeout(saCheck, 300); return; }
+    const now = saNow();
+    if (now !== saLast) { saLast = now; window.dispatchEvent(new Event('resize')); }
+  };
+  saLast = saNow();
   new MutationObserver(() => {
     clearTimeout(saTimer);
-    saTimer = setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+    saTimer = setTimeout(saCheck, 50);
   }).observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
   // Android の「戻る」: 開いているものを内側から閉じる → ノートから本棚へ → 何もなければアプリを裏へ
   native.onBackButton(() => {
@@ -611,7 +619,7 @@ function noteMenu(anchor, n) {
     } },
     { icon: 'export', label: '同期ファイルとして書き出す', attrs: { 'data-act': 'export' }, onClick: async () => {
       const json = await buildSyncFile(S.rec.device, n.id);
-      download(JSON.stringify(json), `${safeName(n.title)}.daigaku.json`, 'application/json');
+      if ((await download(JSON.stringify(json), `${safeName(n.title)}.daigaku.json`, 'application/json')) === 'saved') toast('書き出しました');
     } },
     '-',
     { el: covers },

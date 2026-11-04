@@ -1,8 +1,10 @@
 package io.github.jagjagyt.daigakunote;
 
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.net.Uri;
+import android.provider.DocumentsContract;
 import androidx.activity.result.ActivityResult;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -37,7 +39,12 @@ public class SaveFilePlugin extends Plugin {
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType(mime);
         intent.putExtra(Intent.EXTRA_TITLE, name);
-        startActivityForResult(call, intent, "saved");
+        try {
+            startActivityForResult(call, intent, "saved");
+        } catch (ActivityNotFoundException e) {
+            // 保存先を選ぶ画面がない端末(画面の側で共有シートに切り替える)
+            call.reject("保存先を選ぶ画面がありません", "NO_PICKER");
+        }
     }
 
     // "file:///data/.../cache/export/a.pdf" でも "/data/.../a.pdf" でも受け付ける
@@ -63,7 +70,7 @@ public class SaveFilePlugin extends Plugin {
         new Thread(() -> {
             try (
                 InputStream in = new FileInputStream(src);
-                OutputStream os = getContext().getContentResolver().openOutputStream(dest, "wt")
+                OutputStream os = getContext().getContentResolver().openOutputStream(dest, "w")
             ) {
                 if (os == null) throw new java.io.IOException("保存先を開けません");
                 byte[] buf = new byte[64 * 1024];
@@ -73,6 +80,10 @@ public class SaveFilePlugin extends Plugin {
                 out.put("saved", true);
                 call.resolve(out);
             } catch (Exception e) {
+                // 選んだ時点で空のファイルができているので、書けなかったら消しておく
+                try {
+                    DocumentsContract.deleteDocument(getContext().getContentResolver(), dest);
+                } catch (Exception ignored) {}
                 call.reject("保存できませんでした: " + e.getMessage());
             }
         }).start();

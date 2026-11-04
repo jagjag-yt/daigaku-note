@@ -61,20 +61,22 @@ const noBodyStatus = (status, method) => status === 204 || status === 205 || sta
 
 async function androidRequest(id, url, method, headers, body, idleTimeout, signal) {
   const dav = plugin('DavHttp');
+  const blob = body == null ? null : body instanceof Blob ? body : new Blob([body]);
   try {
-    if (body != null) {
-      const blob = body instanceof Blob ? body : new Blob([body]);
+    if (blob) {
       for (let off = 0; off === 0 || off < blob.size; off += CHUNK) {
         if (signal?.aborted) throw abortError();
         await dav.writeChunk({ id, data: await toBase64(blob.slice(off, off + CHUNK)), append: off > 0 });
       }
     }
     if (signal?.aborted) throw abortError();
-    const r = await dav.request({ id, url, method, headers, bodyFile: body != null, idleTimeout }).catch(nativeError);
+    const r = await dav.request({ id, url, method, headers, bodyFile: !!blob, bodySize: blob ? blob.size : -1, idleTimeout }).catch(nativeError);
     let data = null;
     if (!noBodyStatus(r.status, method) && r.size > 0) {
       // 受け取った本文はファイルにある。画面からはファイルの URL で読む(base64 を通さない)
-      data = await (await fetch(cap.convertFileSrc(r.file))).blob();
+      const f = await fetch(cap.convertFileSrc(r.file));
+      data = await f.blob();
+      if (!f.ok || data.size !== r.size) throw new TypeError('受け取った本文を読めませんでした');
     }
     return new Response(data, { status: r.status, headers: cleanHeaders(r.headers || {}) });
   } finally {
@@ -179,14 +181,20 @@ export async function saveFile(blob, name, type = blob.type || 'application/octe
       else await fs.appendFile({ path: `export/${name}`, data, directory: 'CACHE' });
     }
     if (platform === 'android') {
-      const r = await save.save({ path: uri, name, mime: type });
-      return r?.saved ? 'saved' : 'cancelled';
+      try {
+        const r = await save.save({ path: uri, name, mime: type });
+        return r?.saved ? 'saved' : 'cancelled';
+      } catch (e) {
+        // 保存先を選ぶ画面がない端末では、共有シートで渡す
+        if (e?.code !== 'NO_PICKER' || !plugin('Share')) throw e;
+      }
     }
     try {
-      await save.share({ title: name, files: [uri] });
+      await plugin('Share').share({ title: name, files: [uri] });
       return 'saved';
     } catch (e) {
       if (/cancel/i.test(e?.message || '')) return 'cancelled'; // 共有シートを閉じただけ
+      console.warn(e);
       throw new Error('共有できませんでした');
     }
   } finally {

@@ -85,6 +85,7 @@ public class DavHttpPlugin extends Plugin {
         if (id == null) return;
         String data = call.getString("data", "");
         boolean append = call.getBoolean("append", false);
+        dir.mkdirs(); // 動いている間に OS がキャッシュを消すこともある
         try (OutputStream os = new FileOutputStream(new File(dir, id + ".up"), append)) {
             os.write(Base64.decode(data, Base64.DEFAULT));
             call.resolve();
@@ -110,9 +111,19 @@ public class DavHttpPlugin extends Plugin {
         final String method = call.getString("method", "GET").toUpperCase(Locale.ROOT);
         final JSObject headers = call.getObject("headers", new JSObject());
         final boolean bodyFile = call.getBoolean("bodyFile", false);
+        // getLong は小さい数(Integer で届く)を読めないので、数ならなんでも受け取る
+        final Object sizeValue = call.getData().opt("bodySize");
+        final long bodySize = sizeValue instanceof Number ? ((Number) sizeValue).longValue() : -1L;
         final int idle = call.getInt("idleTimeout", DEFAULT_IDLE_MS);
         final File up = new File(dir, id + ".up");
         final File down = new File(dir, id + ".down");
+        dir.mkdirs();
+        // 送るはずの本文がそろっていなければ送らない(空の本文で PUT が成功してしまうと、壊れたファイルが残るため)
+        if (bodyFile && (!up.exists() || (bodySize >= 0 && up.length() != bodySize))) {
+            up.delete();
+            call.reject("送る本文を用意できませんでした", "NETWORK");
+            return;
+        }
 
         final Request req;
         try {
@@ -130,7 +141,7 @@ public class DavHttpPlugin extends Plugin {
             if (!method.equals("GET") && !method.equals("HEAD")) {
                 MediaType mt = contentType == null ? null : MediaType.parse(contentType);
                 // PUT などは本文が必須。本文のない MKCOL・DELETE も長さ0の本文で送る
-                body = bodyFile && up.exists() ? RequestBody.create(up, mt) : RequestBody.create(new byte[0], mt);
+                body = bodyFile ? RequestBody.create(up, mt) : RequestBody.create(new byte[0], mt);
             }
             rb.method(method, body);
             req = rb.build();
