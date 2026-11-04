@@ -218,7 +218,7 @@ a.cover:active { transform: scale(.98); }
 .wide-btn { width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--accent); background: var(--accent-soft); border: none; border-radius: 10px; min-height: 38px; }
 
 .page-ind {
-  position: absolute; right: 16px; bottom: max(16px, var(--sa-bottom));
+  position: absolute; right: max(16px, var(--sa-right)); bottom: max(16px, var(--sa-bottom));
   background: rgba(31,41,55,.78); color: #fff; font-size: 13px; padding: 0 12px; border-radius: 999px;
   min-height: 32px; border: none;
   opacity: .45; transition: opacity .3s ease; font-variant-numeric: tabular-nums;
@@ -248,7 +248,7 @@ a.cover:active { transform: scale(.98); }
   flex-direction: column;
   align-items: center;
   gap: 28px;
-  padding: 20px 16px 120px;
+  padding: 20px max(16px, var(--sa-right)) max(120px, calc(var(--sa-bottom) + 100px)) max(16px, var(--sa-left));
   width: max-content;
   min-width: 100%;
 }
@@ -261,7 +261,7 @@ a.cover:active { transform: scale(.98); }
 .page canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 .page svg.ink { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; cursor: crosshair; }
 .page svg.ink .marker { opacity: .38; mix-blend-mode: multiply; }
-dialog { border: 1px solid var(--line); border-radius: 12px; max-width: 520px; width: calc(100% - 32px); padding: 20px; }
+dialog { border: 1px solid var(--line); border-radius: 12px; max-width: 520px; width: calc(100% - 32px - var(--sa-left) - var(--sa-right)); padding: 20px; }
 dialog h2 { margin-top: 0; font-size: 18px; }
 dialog p { line-height: 1.6; font-size: 14px; }
 dialog .small { color: var(--muted); font-size: 12px; }
@@ -366,7 +366,8 @@ dialog h3 { font-size: 15px; margin: 18px 0 4px; }
 dialog .row.end { justify-content: flex-end; align-items: center; margin-top: 8px; }
 dialog .row .spacer { flex: 1; }
 dialog form h2 { margin-bottom: 14px; }
-dialog { max-height: calc(100% - 32px - var(--sa-top) - var(--sa-bottom)); overflow-y: auto; position: fixed; padding-top: 18px; }
+/* 切り欠き・ホームバーを除いた範囲の真ん中に出す */
+dialog { inset: var(--sa-top) var(--sa-right) var(--sa-bottom) var(--sa-left); max-height: calc(100% - 32px - var(--sa-top) - var(--sa-bottom)); overflow-y: auto; position: fixed; padding-top: 18px; }
 dialog:focus { outline: none; }
 .dlg-close { position: absolute; right: 10px; top: 10px; color: var(--muted); }
 dialog h2 { padding-right: 40px; }

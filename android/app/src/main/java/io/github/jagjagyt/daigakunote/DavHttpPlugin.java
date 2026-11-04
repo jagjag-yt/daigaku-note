@@ -1,20 +1,23 @@
 package io.github.jagjagyt.daigakunote;
 
-import android.text.TextUtils;
 import android.util.Base64;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InterruptedIOException;
+import java.io.OutputStream;
 import java.util.Iterator;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.MediaType;
@@ -31,16 +34,24 @@ import okhttp3.ResponseBody;
  * Capacitor 標準の CapacitorHttp は HttpURLConnection を使っていて PROPFIND・MKCOL を送れないため、
  * どんなメソッドでも送れる OkHttp を使う。
  *
- * request({ id, url, method, headers, body(base64 か null), idleTimeout(ミリ秒) })
- *   → { status, headers, body(base64) }
- *   失敗: code が "TIMEOUT"(何も届かない時間が idleTimeout を超えた)・"CANCELED"(cancel された)・"NETWORK"
- * cancel({ id }) … 送っている途中の request を取り消す
+ * 大きな PDF でもメモリが足りなくならないように、本文は画面とのあいだでまとめて渡さず、
+ * キャッシュのフォルダ(cache/davhttp/)のファイルを通す。
+ *   writeChunk({ id, data(base64), append }) … 送る本文を少しずつファイルに書く(<id>.up)
+ *   request({ id, url, method, headers, bodyFile(true なら <id>.up を送る), idleTimeout(ミリ秒) })
+ *     → { status, headers, file(受け取った本文のファイルの場所 <id>.down), size }
+ *     失敗: code が "TIMEOUT"(何も届かない時間が idleTimeout を超えた)・"CANCELED"(cancel された)・"NETWORK"
+ *   remove({ id }) … 画面が読み終えた <id>.down を消す
+ *   cancel({ id }) … 送っている途中の request を取り消す
+ * リダイレクト(3xx)は追いかけずにそのまま返す。OkHttp は 301・302 で PUT や MKCOL を GET に変えて
+ * 追いかけるので、「送れたことになったのに届いていない」が起きるため。
  */
 @CapacitorPlugin(name = "DavHttp")
 public class DavHttpPlugin extends Plugin {
 
     private static final int DEFAULT_IDLE_MS = 60_000;
+    private static final Pattern ID = Pattern.compile("^[A-Za-z0-9_-]{1,64}$");
     private OkHttpClient client;
+    private File dir;
     private final Map<String, Call> calls = new ConcurrentHashMap<>();
 
     @Override
@@ -49,21 +60,63 @@ public class DavHttpPlugin extends Plugin {
             .connectTimeout(DEFAULT_IDLE_MS, TimeUnit.MILLISECONDS)
             .readTimeout(DEFAULT_IDLE_MS, TimeUnit.MILLISECONDS)
             .writeTimeout(DEFAULT_IDLE_MS, TimeUnit.MILLISECONDS)
+            .followRedirects(false)
+            .followSslRedirects(false)
             .build();
+        dir = new File(getContext().getCacheDir(), "davhttp");
+        // 前に起動したときの残り(途中で落ちたときなど)を消す
+        File[] old = dir.listFiles();
+        if (old != null) for (File f : old) f.delete();
+        dir.mkdirs();
+    }
+
+    private String idOf(PluginCall call) {
+        String id = call.getString("id", "");
+        if (!ID.matcher(id).matches()) {
+            call.reject("id が正しくありません", "NETWORK");
+            return null;
+        }
+        return id;
+    }
+
+    @PluginMethod
+    public void writeChunk(PluginCall call) {
+        String id = idOf(call);
+        if (id == null) return;
+        String data = call.getString("data", "");
+        boolean append = call.getBoolean("append", false);
+        try (OutputStream os = new FileOutputStream(new File(dir, id + ".up"), append)) {
+            os.write(Base64.decode(data, Base64.DEFAULT));
+            call.resolve();
+        } catch (IOException | IllegalArgumentException e) {
+            call.reject("送る本文を用意できませんでした: " + e.getMessage(), "NETWORK");
+        }
+    }
+
+    @PluginMethod
+    public void remove(PluginCall call) {
+        String id = idOf(call);
+        if (id == null) return;
+        new File(dir, id + ".up").delete();
+        new File(dir, id + ".down").delete();
+        call.resolve();
     }
 
     @PluginMethod
     public void request(final PluginCall call) {
-        final String url = call.getString("url");
+        final String id = idOf(call);
+        if (id == null) return;
+        final String url = call.getString("url", "");
         final String method = call.getString("method", "GET").toUpperCase(Locale.ROOT);
-        final String id = call.getString("id", "");
         final JSObject headers = call.getObject("headers", new JSObject());
-        final String bodyB64 = call.getString("body");
+        final boolean bodyFile = call.getBoolean("bodyFile", false);
         final int idle = call.getInt("idleTimeout", DEFAULT_IDLE_MS);
+        final File up = new File(dir, id + ".up");
+        final File down = new File(dir, id + ".down");
 
         final Request req;
         try {
-            Request.Builder rb = new Request.Builder().url(url == null ? "" : url);
+            Request.Builder rb = new Request.Builder().url(url);
             String contentType = null;
             Iterator<String> keys = headers.keys();
             while (keys.hasNext()) {
@@ -75,14 +128,15 @@ public class DavHttpPlugin extends Plugin {
             }
             RequestBody body = null;
             if (!method.equals("GET") && !method.equals("HEAD")) {
-                // PUT などは本文が必須。本文のない MKCOL・DELETE も長さ0の本文で送れる
-                byte[] bytes = bodyB64 == null || bodyB64.isEmpty() ? new byte[0] : Base64.decode(bodyB64, Base64.DEFAULT);
-                body = RequestBody.create(bytes, contentType == null ? null : MediaType.parse(contentType));
+                MediaType mt = contentType == null ? null : MediaType.parse(contentType);
+                // PUT などは本文が必須。本文のない MKCOL・DELETE も長さ0の本文で送る
+                body = bodyFile && up.exists() ? RequestBody.create(up, mt) : RequestBody.create(new byte[0], mt);
             }
             rb.method(method, body);
             req = rb.build();
         } catch (IllegalArgumentException e) {
             // URL やヘッダーの書き方がおかしい
+            up.delete();
             call.reject("送れない要求です: " + e.getMessage(), "NETWORK");
             return;
         }
@@ -96,41 +150,60 @@ public class DavHttpPlugin extends Plugin {
                 .writeTimeout(idle, TimeUnit.MILLISECONDS)
                 .build();
         final Call okCall = c.newCall(req);
-        if (!id.isEmpty()) calls.put(id, okCall);
+        calls.put(id, okCall);
         okCall.enqueue(
             new Callback() {
                 @Override
                 public void onFailure(Call cl, IOException e) {
-                    if (!id.isEmpty()) calls.remove(id);
-                    if (cl.isCanceled()) call.reject("取り消しました", "CANCELED");
-                    else if (e instanceof InterruptedIOException) call.reject("時間切れ", "TIMEOUT");
-                    else call.reject(e.getMessage() != null ? e.getMessage() : e.toString(), "NETWORK");
+                    calls.remove(id);
+                    up.delete();
+                    fail(call, cl, e);
                 }
 
                 @Override
                 public void onResponse(Call cl, Response res) {
-                    try (ResponseBody rbody = res.body()) {
-                        byte[] bytes = rbody == null ? new byte[0] : rbody.bytes();
+                    long size = 0;
+                    // 本文はメモリに読み込まず、ファイルに流し込む
+                    try (ResponseBody rbody = res.body(); OutputStream os = new FileOutputStream(down)) {
+                        if (rbody != null && !method.equals("HEAD")) {
+                            InputStream in = rbody.byteStream();
+                            byte[] buf = new byte[64 * 1024];
+                            int n;
+                            while ((n = in.read(buf)) != -1) {
+                                os.write(buf, 0, n);
+                                size += n;
+                            }
+                        }
                         JSObject h = new JSObject();
                         for (String name : res.headers().names()) {
-                            List<String> values = res.headers(name);
-                            h.put(name, TextUtils.join(", ", values));
+                            h.put(name, android.text.TextUtils.join(", ", res.headers(name)));
                         }
                         JSObject out = new JSObject();
                         out.put("status", res.code());
                         out.put("headers", h);
-                        out.put("body", Base64.encodeToString(bytes, Base64.NO_WRAP));
+                        out.put("file", down.getAbsolutePath());
+                        out.put("size", size);
                         call.resolve(out);
                     } catch (IOException e) {
-                        if (cl.isCanceled()) call.reject("取り消しました", "CANCELED");
-                        else if (e instanceof InterruptedIOException) call.reject("時間切れ", "TIMEOUT");
-                        else call.reject(e.getMessage() != null ? e.getMessage() : e.toString(), "NETWORK");
+                        down.delete();
+                        fail(call, cl, e);
+                    } catch (Throwable e) {
+                        // 思わぬ失敗でも、画面の側を待たせたままにしない
+                        down.delete();
+                        call.reject("受け取りに失敗しました: " + e, "NETWORK");
                     } finally {
-                        if (!id.isEmpty()) calls.remove(id);
+                        calls.remove(id);
+                        up.delete();
                     }
                 }
             }
         );
+    }
+
+    private static void fail(PluginCall call, Call cl, IOException e) {
+        if (cl.isCanceled()) call.reject("取り消しました", "CANCELED");
+        else if (e instanceof InterruptedIOException) call.reject("時間切れ", "TIMEOUT");
+        else call.reject(e.getMessage() != null ? e.getMessage() : e.toString(), "NETWORK");
     }
 
     @PluginMethod

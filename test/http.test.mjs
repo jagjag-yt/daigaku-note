@@ -29,34 +29,51 @@ async function load(capacitor) {
 }
 const b64 = (buf) => Buffer.from(buf).toString('base64');
 
-// Android のプラグインのふり。実際に送り、OkHttp と同じ形({ status, headers, body: base64 })で返す
+// Android のプラグインのふり。DavHttpPlugin.java と同じ約束で動く:
+//   writeChunk で本文をファイル(ここではメモリ)に書き足し、request で送り、受け取った本文はファイルの場所で返す。
+//   画面は convertFileSrc の URL を fetch して読む(ここでは data: の URL)。リダイレクトは追いかけない
 function fakeAndroid(log = []) {
   const ctrls = new Map();
-  return {
-    log,
+  const files = new Map(); // 場所 → Buffer
+  const cap = {
+    log, files,
     isNativePlatform: () => true,
     getPlatform: () => 'android',
+    convertFileSrc: (p) => `data:application/octet-stream;base64,${files.get(p).toString('base64')}`,
     Plugins: {
       DavHttp: {
+        async writeChunk({ id, data, append }) {
+          const up = `/cache/davhttp/${id}.up`;
+          files.set(up, Buffer.concat([append ? files.get(up) : Buffer.alloc(0), Buffer.from(data, 'base64')]));
+        },
         async request(o) {
           log.push(o);
           const ctl = new AbortController();
           ctrls.set(o.id, ctl);
+          const up = `/cache/davhttp/${o.id}.up`;
           try {
-            const res = await fetch(o.url, { method: o.method, headers: o.headers, body: o.body == null ? undefined : Buffer.from(o.body, 'base64'), signal: ctl.signal });
+            const body = o.method === 'GET' || o.method === 'HEAD' ? undefined : (o.bodyFile ? files.get(up) : Buffer.alloc(0));
+            o.sent = body ?? null;
+            const res = await fetch(o.url, { method: o.method, headers: o.headers, body, signal: ctl.signal, redirect: 'manual' });
             const headers = {};
             res.headers.forEach((v, k) => { headers[k] = v; });
-            return { status: res.status, headers, body: b64(await res.arrayBuffer()) };
+            const buf = Buffer.from(await res.arrayBuffer());
+            const down = `/cache/davhttp/${o.id}.down`;
+            files.set(down, buf);
+            return { status: res.status, headers, file: down, size: buf.length };
           } catch (e) {
             throw Object.assign(new Error(e.message), { code: ctl.signal.aborted ? 'CANCELED' : 'NETWORK' });
           } finally {
             ctrls.delete(o.id);
+            files.delete(up);
           }
         },
+        async remove({ id }) { files.delete(`/cache/davhttp/${id}.up`); files.delete(`/cache/davhttp/${id}.down`); },
         async cancel({ id }) { log.push({ cancel: id }); ctrls.get(id)?.abort(); },
       },
     },
   };
+  return cap;
 }
 
 test('ブラウザ版はそのまま fetch を使う', async () => {
@@ -88,12 +105,12 @@ test('Android: PROPFIND・MKCOL・PUT・GET がテスト用サーバーに届き
   res = await m.http(DAV + 'a/x.pdf', { headers: AUTH });
   assert.equal(res.status, 200);
   assert.deepEqual(new Uint8Array(await res.arrayBuffer()), bytes);
-  assert.equal(cap.log.at(-1).body, null); // GET は本文を送らない
+  assert.equal(cap.log.at(-1).sent, null); // GET は本文を送らない
 
   const xml = '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:getetag/></d:prop></d:propfind>';
   res = await m.http(DAV + 'a/', { method: 'PROPFIND', headers: { ...AUTH, Depth: '1', 'Content-Type': 'application/xml' }, body: xml });
   assert.equal(res.status, 207);
-  assert.equal(Buffer.from(cap.log.at(-1).body, 'base64').toString(), xml); // 文字の本文も UTF-8 のまま
+  assert.equal(cap.log.at(-1).sent.toString(), xml); // 文字の本文も UTF-8 のまま
   const text = await res.text();
   assert.match(text, /x\.pdf/);
   assert.match(res.headers.get('content-type') || '', /xml/);
@@ -102,6 +119,31 @@ test('Android: PROPFIND・MKCOL・PUT・GET がテスト用サーバーに届き
   assert.equal(res.status, 404);
   res = await m.http(DAV, { method: 'PROPFIND', headers: { Depth: '0' } });
   assert.equal(res.status, 401);
+});
+
+test('Android: 大きなファイルは少しずつ渡して送り、受け取りもファイルを通す。使ったファイルは残さない', async () => {
+  const cap = fakeAndroid();
+  const m = await load(cap);
+  const big = new Uint8Array(2_500_000);
+  for (let i = 0; i < big.length; i++) big[i] = (i * 31 + (i >> 8)) % 256;
+  let res = await m.http(DAV + 'big.pdf', { method: 'PUT', headers: { ...AUTH, 'Content-Type': 'application/pdf' }, body: new Blob([big]) });
+  assert.equal(res.status, 201);
+  assert.equal(cap.log.at(-1).bodyFile, true);
+  res = await m.http(DAV + 'big.pdf', { headers: AUTH });
+  assert.deepEqual(new Uint8Array(await res.arrayBuffer()), big);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(cap.files.size, 0);
+});
+
+test('Android: 本文の用意の途中で取り消すと、送らずに AbortError', async () => {
+  const cap = fakeAndroid();
+  const m = await load(cap);
+  const ctl = new AbortController();
+  const p = m.http(DAV + 'x', { method: 'PUT', headers: AUTH, body: new Uint8Array(3_000_000), signal: ctl.signal });
+  ctl.abort();
+  await assert.rejects(p, (e) => e.name === 'AbortError');
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(cap.log.filter((o) => o.url).length, 0); // 送っていない
 });
 
 test('Android: 日本語の本文も UTF-8 で送れる', async () => {
@@ -118,7 +160,7 @@ test('Android: つながらないときは TypeError、時間切れは AbortErro
   await assert.rejects(m.http('http://localhost:1/x', { headers: AUTH }), TypeError);
   const timeout = await load({
     isNativePlatform: () => true, getPlatform: () => 'android',
-    Plugins: { DavHttp: { request: async () => { throw Object.assign(new Error('時間切れ'), { code: 'TIMEOUT' }); }, cancel: async () => {} } },
+    Plugins: { DavHttp: { request: async () => { throw Object.assign(new Error('時間切れ'), { code: 'TIMEOUT' }); }, cancel: async () => {}, writeChunk: async () => {}, remove: async () => {} } },
   });
   await assert.rejects(timeout.http(DAV), (e) => e.name === 'AbortError');
 });
@@ -132,6 +174,8 @@ test('Android: signal で取り消すと AbortError になり、送っている�
       DavHttp: {
         request: (o) => { log.push(o); return new Promise((_, reject) => { release = () => reject(Object.assign(new Error('取り消し'), { code: 'CANCELED' })); }); },
         cancel: async ({ id }) => { log.push({ cancel: id }); release(); },
+        writeChunk: async () => {},
+        remove: async () => {},
       },
     },
   });
@@ -143,13 +187,13 @@ test('Android: signal で取り消すと AbortError になり、送っている�
   assert.equal(log[1].cancel, log[0].id);
   // 先に取り消してあれば送らない
   await assert.rejects(m.http(DAV, { signal: AbortSignal.abort() }), (e) => e.name === 'AbortError');
-  assert.equal(log.length, 2);
+  assert.equal(log.filter((o) => o.url).length, 1);
 });
 
 test('Android: 204 は本文なし、使えない見出しは捨てる', async () => {
   const m = await load({
     isNativePlatform: () => true, getPlatform: () => 'android',
-    Plugins: { DavHttp: { request: async () => ({ status: 204, headers: { ':status': '204', ETag: '"x"' }, body: '' }), cancel: async () => {} } },
+    Plugins: { DavHttp: { request: async () => ({ status: 204, headers: { ':status': '204', ETag: '"x"' }, file: '/x', size: 0 }), cancel: async () => {}, writeChunk: async () => {}, remove: async () => {} } },
   });
   const res = await m.http(DAV, { method: 'DELETE' });
   assert.equal(res.status, 204);
@@ -180,6 +224,28 @@ test('iOS: CapacitorHttp に base64 の本文で頼み、JSON に読み解かれ
   res = await m.http(DAV + 'x');
   assert.deepEqual(JSON.parse(await res.text()), { ops: [1, 2], t: 'あ' });
   assert.equal(log[1].data, undefined);
+});
+
+test('iOS: JSON を読み解けなかった応答・本文のない応答・日本語の時間切れ', async () => {
+  let reply;
+  const m = await load({
+    isNativePlatform: () => true, getPlatform: () => 'ios',
+    Plugins: { CapacitorHttp: { request: async () => { if (reply instanceof Error) throw reply; return reply; } } },
+  });
+  // Content-Type が JSON なのに読み解けない: CapacitorHttp はエラーの文言を data に入れてくる。status は生かす
+  reply = { status: 401, headers: { 'content-type': 'application/json' }, data: 'The data couldn’t be read because it isn’t in the correct format.' };
+  let res = await m.http(DAV);
+  assert.equal(res.status, 401);
+  // 文字列だけの JSON は文字のまま(base64 として読まない)
+  reply = { status: 200, headers: { 'Content-Type': 'application/json' }, data: 'abcd' };
+  assert.equal(await (await m.http(DAV)).text(), 'abcd');
+  reply = { status: 204, headers: { 'content-type': 'application/json' }, data: 'xx' };
+  res = await m.http(DAV, { method: 'DELETE' });
+  assert.equal(res.status, 204);
+  reply = Object.assign(new Error('要求がタイムアウトになりました。'), { code: 'NSURLErrorDomain' });
+  await assert.rejects(m.http(DAV), (e) => e.name === 'AbortError');
+  reply = Object.assign(new Error('インターネット接続がオフラインのようです。'), { code: 'NSURLErrorDomain' });
+  await assert.rejects(m.http(DAV), TypeError);
 });
 
 test('base64 の行き来で大きなバイナリも壊れない', async () => {

@@ -21,7 +21,13 @@ test('www/ に集めたファイルで動く(サービスワーカーの一覧�
     for (const f of fs.readdirSync(path.join(root, 'js'))) assert.ok(assets.includes(`js/${f}`), `sw.js の ASSETS に js/${f} がない`);
     // index.html が読み込むファイルもそろっている
     const html = fs.readFileSync(path.join(out, 'index.html'), 'utf8');
-    for (const [, ref] of html.matchAll(/(?:href|src)="([^"#:]+)"/g)) assert.ok(fs.existsSync(path.join(out, ref)), `index.html の ${ref} がない`);
+    for (const [, ref] of html.matchAll(/(?:href|src)="([^"#:]+)"/g)) {
+      const file = ref.split('?')[0];
+      assert.ok(fs.existsSync(path.join(out, file)), `index.html の ${file} がない`);
+    }
+    // マニフェストのアイコンも
+    const mf = JSON.parse(fs.readFileSync(path.join(out, 'manifest.webmanifest'), 'utf8'));
+    for (const ic of mf.icons || []) assert.ok(fs.existsSync(path.join(out, ic.src)), `manifest のアイコン ${ic.src} がない`);
   } finally {
     fs.rmSync(out, { recursive: true, force: true });
   }

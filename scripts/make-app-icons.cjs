@@ -1,5 +1,5 @@
-// Android のアイコン・起動画面を icons/icon.svg から作る(アイコンを変えたときに一度だけ動かす)
-//   node scripts/make-android-icons.cjs .
+// Android・iOS のアイコン・起動画面を icons/icon.svg から作る(アイコンを変えたときに一度だけ動かす)
+//   node scripts/make-app-icons.cjs .
 // playwright(Chromium)と python3 の Pillow を使う
 const { chromium } = require('playwright');
 const fs = require('fs'); const path = require('path');
@@ -33,6 +33,12 @@ const dens = { mdpi: 1, hdpi: 1.5, xhdpi: 2, xxhdpi: 3, xxxhdpi: 4 };
     if (!fs.existsSync(f)) continue;
     const [w, h] = execFileSync('python3', ['-c', `from PIL import Image; im=Image.open('${f}'); print(*im.size)`]).toString().trim().split(' ').map(Number);
     await render(legacy, w, h, f, '#f6f7f9', 0.3);
+  }
+  // iOS: 角は OS が丸めるので四角のまま・透明なし。起動画面は 2732×2732 の真ん中にアイコン
+  const ios = path.join(root, 'ios/App/App/Assets.xcassets');
+  await render(svg.replace('rx="96"', 'rx="0"'), 1024, 1024, path.join(ios, 'AppIcon.appiconset/AppIcon-512@2x.png'), '#2f5d9e');
+  for (const f of ['splash-2732x2732.png', 'splash-2732x2732-1.png', 'splash-2732x2732-2.png']) {
+    await render(legacy, 2732, 2732, path.join(ios, 'Splash.imageset', f), '#f6f7f9', 0.18);
   }
   await b.close();
 })();

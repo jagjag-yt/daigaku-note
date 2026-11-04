@@ -7,8 +7,10 @@ android {
         applicationId "io.github.jagjagyt.daigakunote"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // 作った時刻(2026年1月1日からの分)を版の番号にする。手元でも GitHub Actions でも、
+        // 新しく作った APK ほど大きい番号になり、前の版の上から入れ直せる(番号が下がると入れられない)
+        versionCode((int) (System.currentTimeMillis().intdiv(60000) - 29453760))
+        versionName "0.2"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,7 +18,21 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // デバッグ版の署名の鍵を固定する(GitHub Actions で作る APK を、前の版の上から入れ直せるように。
+    // 鍵が変わると入れ直しにアンインストールが要り、ノートが消える)。
+    // デバッグ専用の鍵なので公開してよい。ストアに出すリリース版の鍵は絶対にここに置かない
+    signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
     buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'

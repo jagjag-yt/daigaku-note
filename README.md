@@ -123,7 +123,8 @@ op の種類: `note.create / note.rename / note.delete / note.restore / page.add
 
 ```
 npm test                       # マージ・図形補正・同期のカーソル・GoodNotes の線の読み方・アプリ版の通信のテスト(Node)
-npm ci && npm run test:ui      # 画面の崩れのテスト(6つの画面の大きさ × Chromium・WebKit。docs/アプリ化.md)
+npm ci && npm run test:ui      # 画面の崩れのテスト(8つの画面の大きさ × Chromium・WebKit。docs/アプリ化.md)
+node test/native-e2e.cjs       # アプリ版(Android)の動きをブラウザで再現して確かめる(サーバーは上と同じ)
 node serve.mjs 8124 &          # アプリ
 node test/davserver.mjs 8125 & # テスト用 WebDAV サーバー
 npm i pdf-lib && URL=http://localhost:8124/ GN=見本.goodnotes node test/e2e.cjs /tmp   # ブラウザでの通し確認(Playwright)

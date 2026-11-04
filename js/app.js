@@ -192,8 +192,16 @@ function askName(heading, value) {
 // アプリ版だけの設定
 function bindNative() {
   if (!native.isNative) return;
-  // Android のファイル選択は拡張子(.goodnotes)を種類に直せず、選べなくなるので絞らない(中身で確かめる)
-  $('#gn-input').accept = '';
+  // Android のファイル選択は拡張子(.goodnotes)を種類に直せず、選べなくなるので絞らない(中身で確かめる)。
+  // iOS は絞らないと「写真を撮る」が出てしまう(カメラの許可を用意していないので落ちる)ので、そのまま
+  if (native.platform === 'android') $('#gn-input').accept = '';
+  // Android のアプリ版は、画面の端の幅(--safe-area-inset-*)を読み込みのあとや画面を回したときに入れてくる。
+  // 入ったら、幅に合わせた表示などを合わせ直す
+  let saTimer = 0;
+  new MutationObserver(() => {
+    clearTimeout(saTimer);
+    saTimer = setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
   // Android の「戻る」: 開いているものを内側から閉じる → ノートから本棚へ → 何もなければアプリを裏へ
   native.onBackButton(() => {
     if (popoverOpen()) { closePopover(); return true; }
@@ -201,24 +209,31 @@ function bindNative() {
     if (d) { if (d.requestClose) d.requestClose(); else d.close(); return true; }
     // ページ一覧は、画面に重なって出ているとき(狭い画面)だけ閉じる。横に並んでいるときはそのまま
     if (!$('#sidebar').hidden && $('#sb-scrim').getClientRects().length) { $('#pages-close').click(); return true; }
-    if (/^#\/note\//.test(location.hash)) { location.hash = '#/'; return true; }
+    if (/^#\/note\//.test(location.hash)) {
+      if (S.sel) { clearSelection(); return true; } // 投げ縄で選んでいるなら、まず選択を外す
+      location.hash = '#/';
+      return true;
+    }
+    if ($('#search').value) { $('#search').value = ''; runSearch(); return true; } // 検索の結果を出しているなら消す
     return false;
   });
 }
 
-// ブラウザではダウンロード、アプリでは共有シートで渡す。渡せたら true
+// ブラウザではダウンロード、アプリでは保存先を選ぶ画面(Android)・共有シート(iOS)で渡す。
+// 戻り値: 'saved' / 'cancelled'(選ぶ画面を閉じた) / 'failed'(エラーはここで知らせる)
 async function download(data, name, type) {
   const blob = data instanceof Blob ? data : new Blob([data], { type });
   try {
-    return await native.saveFile(blob, name);
+    return await native.saveFile(blob, name, blob.type || type);
   } catch (e) {
     toast('書き出せませんでした: ' + e.message, 6000);
-    return false;
+    return 'failed';
   }
 }
 
 const stamp = () => new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
-const safeName = (s) => (s || 'ノート').replace(/[\\/:*?"<>|]/g, '_');
+// ファイル名に使えない文字を置き換え、長すぎる名前は切る(多くの端末でファイル名は 255 バイトまで。日本語は1文字3バイト)
+const safeName = (s) => [...(s || 'ノート').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_')].slice(0, 60).join('').trim() || 'ノート';
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 function fillSelects() {
@@ -444,7 +459,7 @@ function bindLibrary() {
   };
   $('#sync-export').onclick = async () => {
     const json = await buildSyncFile(S.rec.device);
-    if (await download(JSON.stringify(json), `大学ノート同期-${S.rec.device}-${stamp()}.json`, 'application/json')) {
+    if ((await download(JSON.stringify(json), `大学ノート同期-${S.rec.device}-${stamp()}.json`, 'application/json')) === 'saved') {
       toast(`${json.ops.length}件の変更を書き出しました`);
     }
   };
@@ -902,8 +917,9 @@ async function exportCurrentPdf() {
   try {
     toast('PDFを作成しています…', 60000);
     const bytes = await exportPdf(S.note);
-    if (await download(new Blob([bytes], { type: 'application/pdf' }), `${safeName(S.note.title)}.pdf`)) toast('PDFを書き出しました');
-    else $('#toast').hidden = true;
+    const r = await download(new Blob([bytes], { type: 'application/pdf' }), `${safeName(S.note.title)}.pdf`);
+    if (r === 'saved') toast('PDFを書き出しました');
+    else if (r === 'cancelled') $('#toast').hidden = true; // 失敗なら download() のエラーを出したままにする
   } catch (e) {
     toast('PDFを書き出せませんでした: ' + e.message, 6000);
   }
@@ -1008,7 +1024,10 @@ function fitZoom() {
   const sc = $('#scroller');
   const pages = S.note ? pagesOf(S.note) : [];
   const maxW = Math.max(PAGE_A4.w, ...pages.map((p) => p.w));
-  const avail = (sc.clientWidth || window.innerWidth) - 32;
+  // 左右の余白(切り欠きを避ける幅を含む。#pages の padding)を除いた幅に合わせる
+  const ps = getComputedStyle($('#pages'));
+  const pad = (parseFloat(ps.paddingLeft) || 16) + (parseFloat(ps.paddingRight) || 16);
+  const avail = (sc.clientWidth || window.innerWidth) - pad;
   return clampZoom(Math.min(avail / maxW, 1.5));
 }
 const clampZoom = (z) => Math.max(0.3, Math.min(4, z));

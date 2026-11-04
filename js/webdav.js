@@ -480,7 +480,8 @@ export async function syncNow(manual = false) {
   } catch (e) {
     console.error(e);
     let msg = e.message;
-    if (e instanceof TypeError) msg = isNative ? 'サーバーに接続できません。URL とネット接続を確認してください' : 'サーバーに接続できません。URL・ネット接続・CORS の設定を確認してください';
+    if (e instanceof TypeError && isNative && /^http:/i.test(cfg.url)) msg = 'アプリ版は https:// で始まるサーバーにだけ接続できます';
+    else if (e instanceof TypeError) msg = isNative ? 'サーバーに接続できません。URL とネット接続を確認してください' : 'サーバーに接続できません。URL・ネット接続・CORS の設定を確認してください';
     else if (e.timeout) msg = 'サーバーからの応答がありません(時間切れ)。しばらくしてからもう一度同期します';
     else if (e.status === 401) msg = 'ユーザー名またはパスワードが違います';
     else if (e.status === 404 || e.status === 409) msg = 'フォルダのURLが見つかりません';

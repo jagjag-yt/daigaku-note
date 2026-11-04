@@ -137,18 +137,33 @@ export function retargetPopover(oldAnchor, newAnchor) {
   current.reposition();
 }
 
+// 画面のうち、切り欠き・ホームバーなどを除いた使える範囲(style.css の --sa-*)
+let probe = null;
+export function safeRect() {
+  if (!probe) {
+    probe = document.createElement('div');
+    probe.setAttribute('aria-hidden', 'true');
+    probe.style.cssText = 'position:fixed;top:var(--sa-top);right:var(--sa-right);bottom:var(--sa-bottom);left:var(--sa-left);visibility:hidden;pointer-events:none;';
+    document.body.appendChild(probe);
+  }
+  return probe.getBoundingClientRect();
+}
+
 function place(el, arrow, anchor, align) {
   const vw = window.innerWidth, vh = window.innerHeight, m = 8;
+  const sr = safeRect();
+  const minX = sr.left + m, maxX = sr.right - m, minY = sr.top + m, maxY = sr.bottom - m;
   el.style.maxHeight = '';
+  el.style.maxWidth = maxX - minX + 'px';
   const w = el.offsetWidth, h = el.offsetHeight;
   const r = anchor ? anchor.getBoundingClientRect() : { left: vw / 2, right: vw / 2, top: vh / 3, bottom: vh / 3, width: 0 };
   const cx = r.left + r.width / 2;
   let left = align === 'start' ? r.left : align === 'end' ? r.right - w : cx - w / 2;
-  left = Math.max(m, Math.min(vw - w - m, left));
+  left = Math.max(minX, Math.min(maxX - w, left));
   let top = r.bottom + 10;
   let below = true;
-  if (top + h > vh - m && r.top - 10 - h > m) { top = r.top - 10 - h; below = false; }
-  if (top + h > vh - m) el.style.maxHeight = vh - top - m + 'px';
+  if (top + h > maxY && r.top - 10 - h > minY) { top = r.top - 10 - h; below = false; }
+  if (top + h > maxY) el.style.maxHeight = maxY - top + 'px';
   el.style.left = left + 'px';
   el.style.top = top + 'px';
   el.classList.toggle('above', !below);

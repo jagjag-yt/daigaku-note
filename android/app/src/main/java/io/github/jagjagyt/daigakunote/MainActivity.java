@@ -9,6 +9,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         // このアプリ専用のプラグインは super.onCreate より前に登録する
         registerPlugin(DavHttpPlugin.class);
+        registerPlugin(SaveFilePlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

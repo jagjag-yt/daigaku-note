@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,7 +25,7 @@ jobs:
       - run: npm test
 
   ui:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write # 基準のスクショをブランチに足すため
     steps:
@@ -37,15 +37,17 @@ jobs:
       - run: npm ci
       - name: ブラウザ(Chromium・WebKit)を入れる
         run: npx playwright install --with-deps chromium webkit
-      # 基準のスクショは、文字の描かれ方がそろうようにこの環境で作る。
-      #   まだない画面 → この回は作るだけで合格にし、ブランチに足す(main 以外へのプッシュのときだけ)。次から比べる
+      # 基準のスクショは、文字の描かれ方がそろうようにこの環境(ubuntu-24.04 に固定)で作る。
+      #   まだない画面 → 1回目で作り、2回目で比べる。main 以外へのプッシュなら、作った基準をブランチに足す
       #   見た目をわざと変えたとき → コミットのメッセージに [update-screenshots] と書くと、違う画面を作り直す
-      - name: 画面の崩れのテスト
+      - name: 基準のスクショを作る(まだないもの)
         env:
           UPDATE: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' && contains(github.event.head_commit.message, '[update-screenshots]') && 'changed' || 'missing' }}
-        run: npx playwright test --update-snapshots=$UPDATE
+        run: npx playwright test --update-snapshots=$UPDATE --reporter=dot || true
+      - name: 画面の崩れのテスト
+        run: npx playwright test --update-snapshots=none
       - name: 作った基準のスクショをブランチに足す
-        if: github.event_name == 'push' && github.ref != 'refs/heads/main'
+        if: success() && github.event_name == 'push' && github.ref != 'refs/heads/main'
         run: |
           git add test/ui/__screenshots__
           if git diff --cached --quiet; then echo "足すものはありません"; exit 0; fi
@@ -53,6 +55,12 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "画面の崩れのテスト: 基準のスクショを更新"
           git push
+      - name: アプリ版(Android)の動きをブラウザで再現して確かめる
+        if: success() || failure()
+        run: |
+          node serve.mjs 8124 & node test/davserver.mjs 8125 &
+          sleep 1
+          node test/native-e2e.cjs
       - name: 結果(違いの画像つき)を残す
         if: failure()
         uses: actions/upload-artifact@v4
@@ -64,7 +72,7 @@ jobs:
           retention-days: 14
 
   android:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -75,6 +83,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
       - run: npm ci
       - name: 画面のファイルをアプリに入れる
         run: npm run build:web && npx cap sync android

@@ -3,7 +3,8 @@
 // WebKit(Safari・iPad と同じ仕組み)の両方を開き、
 //   1) 決まりごと(はみ出し・重なり・押しにくいボタンがないか)を確かめる
 //   2) スクショを撮って、基準の画像と比べる(test/ui/__screenshots__/)
-// 基準の画像は文字の描かれ方が環境で変わるので、GitHub Actions(.github/workflows/ui.yml)で作る。
+// 基準の画像は文字の描かれ方が環境で変わるので、GitHub Actions(.github/workflows/ci.yml)で作る。
+// 手元では npm run test:ui(決まりごとだけ。スクショは比べない)
 import { defineConfig } from '@playwright/test';
 
 const SIZES = {
@@ -13,6 +14,9 @@ const SIZES = {
   'ipad': { viewport: { width: 820, height: 1180 }, hasTouch: true },
   'ipad-land': { viewport: { width: 1180, height: 820 }, hasTouch: true },
   'pc': { viewport: { width: 1440, height: 900 }, hasTouch: false },
+  // 切り欠き・ホームバーのある端末(Android のアプリ版で入る画面の端の幅をまねる)
+  'phone-notch': { viewport: { width: 390, height: 844 }, hasTouch: true, safeArea: { top: 47, bottom: 34 } },
+  'phone-land-notch': { viewport: { width: 844, height: 390 }, hasTouch: true, safeArea: { left: 47, right: 47, bottom: 21 } },
 };
 const ENGINES = ['chromium', 'webkit'];
 
@@ -38,8 +42,9 @@ export default defineConfig({
     url: 'http://localhost:8130/',
     reuseExistingServer: !process.env.CI,
   },
-  projects: ENGINES.flatMap((browserName) => Object.entries(SIZES).map(([size, opts]) => ({
+  projects: ENGINES.flatMap((browserName) => Object.entries(SIZES).map(([size, { safeArea, ...opts }]) => ({
     name: `${browserName}-${size}`,
     use: { browserName, ...opts, deviceScaleFactor: 1 },
+    metadata: { safeArea },
   }))),
 });

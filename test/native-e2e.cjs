@@ -8,25 +8,48 @@ const { chromium } = require('playwright');
 const URL = process.env.URL || 'http://localhost:8124/';
 const DAV = process.env.DAV || 'http://localhost:8125/dav/';
 const log = (...a) => console.log('✓', ...a);
+// テスト用サーバーには前の実行のノートが残っていることがあるので、毎回ちがう名前にする
+const TITLE = 'アプリのノート' + Date.now().toString(36);
 const fail = (m) => { throw new Error(m); };
 
+// アプリの中身(プラグイン)のふり。約束は DavHttpPlugin.java・SaveFilePlugin.java・@capacitor/filesystem と同じ
 const fakeCapacitor = () => {
-  window.__native = { back: null, minimized: 0, written: [], shared: [], shareCancel: false };
+  window.__native = { back: null, minimized: 0, files: {}, saved: [], saveCancel: false, removed: 0 };
+  const up = {};
+  const join = (parts) => { const bin = parts.map((b) => atob(b)).join(''); return btoa(bin); };
   window.Capacitor = {
     isNativePlatform: () => true,
     getPlatform: () => 'android',
+    convertFileSrc: (p) => p,
     Plugins: {
-      DavHttp: { request: (o) => window.__nativeRequest(o), cancel: async () => {} },
+      DavHttp: {
+        writeChunk: async ({ id, data, append }) => { up[id] = append ? [...(up[id] || []), data] : [data]; },
+        request: async (o) => {
+          const body = o.bodyFile ? join(up[o.id] || []) : null;
+          delete up[o.id];
+          const r = await window.__nativeRequest({ ...o, body });
+          const bin = atob(r.body);
+          const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+          return { status: r.status, headers: r.headers, file: URL.createObjectURL(new Blob([bytes])), size: bytes.length };
+        },
+        remove: async () => { window.__native.removed++; },
+        cancel: async () => {},
+      },
       App: {
         addListener: async (ev, cb) => { if (ev === 'backButton') window.__native.back = cb; return { remove() {} }; },
         minimizeApp: async () => { window.__native.minimized++; },
       },
-      Filesystem: { writeFile: async (o) => { window.__native.written.push(o); return { uri: 'file:///cache/' + o.path }; } },
-      Share: {
-        share: async (o) => {
-          if (window.__native.shareCancel) throw new Error('Share canceled');
-          window.__native.shared.push(o);
-          return {};
+      Filesystem: {
+        rmdir: async ({ path }) => { for (const k of Object.keys(window.__native.files)) if (k.startsWith(path + '/')) delete window.__native.files[k]; },
+        writeFile: async (o) => { window.__native.files[o.path] = [o.data]; return { uri: 'file:///cache/' + o.path }; },
+        appendFile: async (o) => { window.__native.files[o.path].push(o.data); },
+      },
+      SaveFile: {
+        save: async (o) => {
+          if (window.__native.saveCancel) return { saved: false };
+          const path = o.path.replace('file:///cache/', '');
+          window.__native.saved.push({ ...o, data: join(window.__native.files[path]) });
+          return { saved: true };
         },
       },
     },
@@ -88,7 +111,7 @@ async function setDav(p) {
     // ノートを作って書く
     await page.click('#new-note');
     await page.click('#new-notebook');
-    await page.fill('#nn-title', 'アプリのノート');
+    await page.fill('#nn-title', TITLE);
     await page.click('#new-form button[type=submit]');
     await page.waitForSelector('#pages svg');
     const bb = await page.locator('.page').first().boundingBox();
@@ -106,25 +129,29 @@ async function setDav(p) {
     if (await page.locator('#sidebar').isVisible()) fail('戻るでページ一覧が閉じない');
     if (!(await page.locator('#editor').isVisible())) fail('ページ一覧を閉じたつもりがノートから出てしまった');
 
-    // PDF の書き出し: 端末に書いて共有シートへ
+    // PDF の書き出し: 端末のキャッシュに書いて、保存先を選ぶ画面へ
     await page.click('#more-btn');
     await page.click('#export-pdf');
-    await page.waitForFunction(() => window.__native.shared.length === 1, null, { timeout: 30000 });
-    const w = await page.evaluate(() => window.__native.written[0]);
-    const sh = await page.evaluate(() => window.__native.shared[0]);
-    if (!/^export\/アプリのノート\.pdf$/.test(w.path) || w.directory !== 'CACHE') fail('PDF の書き出し先がおかしい: ' + w.path);
-    if (!Buffer.from(w.data, 'base64').subarray(0, 5).equals(Buffer.from('%PDF-'))) fail('書き出した PDF が壊れている');
-    if (sh.files[0] !== 'file:///cache/' + w.path) fail('共有シートに渡したファイルが違う');
+    await page.waitForFunction(() => window.__native.saved.length === 1, null, { timeout: 30000 });
+    const sv = await page.evaluate(() => window.__native.saved[0]);
+    if (sv.name !== `${TITLE}.pdf` || sv.mime !== 'application/pdf' || sv.path !== `file:///cache/export/${TITLE}.pdf`) fail('PDF の書き出し先がおかしい: ' + JSON.stringify({ ...sv, data: undefined }));
+    if (!Buffer.from(sv.data, 'base64').subarray(0, 5).equals(Buffer.from('%PDF-'))) fail('書き出した PDF が壊れている');
     await page.waitForFunction(() => /PDFを書き出しました/.test(document.querySelector('#toast-msg').textContent));
-    // 共有シートを閉じただけなら、エラーを出さない
-    await page.evaluate(() => { window.__native.shareCancel = true; });
+    // 選ぶ画面を閉じただけなら、何も出さない
+    await page.evaluate(() => { window.__native.saveCancel = true; });
     await page.click('#more-btn');
     await page.click('#export-pdf');
-    await page.waitForFunction(() => window.__native.written.length === 2, null, { timeout: 30000 });
+    await page.waitForFunction(() => document.querySelector('#toast').hidden, null, { timeout: 30000 });
+    await page.evaluate(() => { window.__native.saveCancel = false; });
+    // 書き出しに失敗したら、エラーを出したままにする
+    await page.evaluate(() => { window.__saveOrig = window.Capacitor.Plugins.SaveFile.save; window.Capacitor.Plugins.SaveFile.save = async () => { throw new Error('テストの失敗'); }; });
+    await page.click('#more-btn');
+    await page.click('#export-pdf');
+    await page.waitForFunction(() => /書き出せませんでした/.test(document.querySelector('#toast-msg').textContent), null, { timeout: 30000 });
     await page.waitForTimeout(300);
-    if (/書き出せません/.test(await page.textContent('#toast-msg'))) fail('共有シートを閉じただけでエラーが出た');
-    await page.evaluate(() => { window.__native.shareCancel = false; });
-    log('PDF を共有シートで書き出せる(閉じただけならエラーなし)');
+    if (await page.locator('#toast').isHidden()) fail('書き出しの失敗が表示されない');
+    await page.evaluate(() => { window.Capacitor.Plugins.SaveFile.save = window.__saveOrig; });
+    log('PDF を保存先を選ぶ画面で書き出せる(閉じただけなら何も出さない・失敗は知らせる)');
 
     await page.evaluate(() => window.__native.back());
     await page.waitForSelector('#library:not([hidden])');
@@ -134,17 +161,22 @@ async function setDav(p) {
     log('A:', await setDav(page));
     for (const m of ['MKCOL', 'PUT', 'PROPFIND']) if (!A.sent.includes(m)) fail(`${m} を送っていない`);
 
-    // 同期ファイルの書き出しも共有シートで
+    // 同期ファイルの書き出しも同じく
     await page.click('#sync-btn');
     await page.click('#sync-export');
-    await page.waitForFunction(() => window.__native.shared.length === 2);
-    const sj = await page.evaluate(() => window.__native.written.at(-1));
+    await page.waitForFunction(() => window.__native.saved.length === 2);
+    const sj = await page.evaluate(() => window.__native.saved.at(-1));
     const json = JSON.parse(Buffer.from(sj.data, 'base64').toString('utf8'));
     if (!json.ops?.length) fail('同期ファイルが空');
-    log('同期ファイルを共有シートで書き出せる(', json.ops.length, '件)');
+    if ((await page.evaluate(() => Object.keys(window.__native.files).length)) !== 1) fail('前に書き出したファイルがキャッシュに残っている');
+    log('同期ファイルも書き出せる(', json.ops.length, '件)。前に書き出したファイルは消す');
     // 戻る: ダイアログを閉じる → 本棚ではアプリを裏に回す
     await page.evaluate(() => window.__native.back());
     if (await page.locator('#sync-dialog').isVisible()) fail('戻るでダイアログが閉じない');
+    await page.fill('#search', 'なにか');
+    await page.waitForSelector('#results:not([hidden])');
+    await page.evaluate(() => window.__native.back());
+    if ((await page.inputValue('#search')) !== '' || (await page.evaluate(() => window.__native.minimized))) fail('戻るで検索が消えない');
     await page.evaluate(() => window.__native.back());
     if ((await page.evaluate(() => window.__native.minimized)) !== 1) fail('本棚で戻るを押してもアプリが裏に回らない');
     log('戻る: ダイアログを閉じ、本棚ではアプリを裏に回す');
@@ -152,8 +184,8 @@ async function setDav(p) {
     // 別の端末(タブレット)で受け取る
     const B = await device(browser, { width: 800, height: 1280 }, errors, 'B');
     log('B:', await setDav(B.page));
-    await B.page.waitForSelector('.card:has-text("アプリのノート")');
-    await B.page.click('.card:has-text("アプリのノート") .cover');
+    await B.page.waitForSelector(`.card:has-text("${TITLE}")`);
+    await B.page.click(`.card:has-text("${TITLE}") .cover`);
     await B.page.waitForSelector('.page path, .page svg path');
     log('端末 B にノートと線が届いた');
 

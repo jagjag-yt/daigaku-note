@@ -2,13 +2,8 @@
   "appId": "io.github.jagjagyt.daigakunote",
   "appName": "大学ノート",
   "webDir": "www",
-  "android": {
-    "allowMixedContent": false,
-    "captureInput": false,
-    "webContentsDebuggingEnabled": false
-  },
   "plugins": {
     "CapacitorHttp": { "enabled": false },
-    "SystemBars": { "insetsHandling": "css", "initialViewportFitValueHint": "cover" }
+    "SystemBars": { "insetsHandling": "css", "initialViewportFitValueHint": "cover", "style": "LIGHT" }
   }
 }
