@@ -1,6 +1,7 @@
 #!/bin/bash
 # iOS のシミュレーター用にアプリを作り、iPhone と iPad のシミュレーターで起動して確かめる。
 # GitHub Actions の Mac(macos)で動かす。手元の Mac でも動く(Xcode が要る)。
+# 手元で使うと、選んだシミュレーターに入っている大学ノートのデータは消える(空の本棚で確かめるため入れ直す)。
 #
 # 確かめること(端末ごと):
 #   1. 画面のプログラムが動いた … WebView の IndexedDB にファイルができる(フォルダだけなら JS がなくてもできる)
@@ -30,12 +31,14 @@ if ! xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug 
 fi
 APP=build/ios/Build/Products/Debug-iphonesimulator/App.app
 test -d "$APP" || { echo "::error::App.app ができていません"; exit 1; }
-for bin in "$APP/App" "$APP/App.debug.dylib"; do
-  [ -f "$bin" ] || continue
+test -f "$APP/App" || { echo "::error::App.app に本体がありません"; exit 1; }
+# 本体・デバッグ用の本体・中のフレームワーク(Capacitor など)の実行ファイルを全部見る
+while IFS= read -r bin; do
+  file -b "$bin" | grep -q 'Mach-O' || continue   # 実行の印が付いたほかのファイルは飛ばす
   archs=$(lipo -archs "$bin")
   echo "$(basename "$bin"): $archs"
   [[ " $archs " == *" x86_64 "* && " $archs " == *" arm64 "* ]] || { echo "::error::$(basename "$bin") が Intel・Apple シリコンの両方向けになっていません"; exit 1; }
-done
+done < <(find "$APP" -type f -perm +111 ! -name '*.sh')
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$OUT/daigaku-note-simulator.zip" || { echo "::error::zip を作れません"; exit 1; }
 
 # 名前の決まった機種があればそれを、なければいちばん新しい iOS のその種類の機種を選ぶ
@@ -65,6 +68,8 @@ check_device() {
   udid=${line%%$'\t'*}; name=${line#*$'\t'}
   shot="$OUT/${name// /_}.png"
   echo "== $name"
+  # もともと起動していた端末(手元の Mac)は、終わっても止めない
+  if xcrun simctl list devices | grep -F "$udid" | grep -q '(Booted)'; then udid_keep=1; fi
   xcrun simctl boot "$udid" 2>/dev/null
   xcrun simctl bootstatus "$udid" -b > /dev/null || { echo "::error::$name が起動しません"; return 1; }
   # 前に入れたときのデータ(IndexedDB)が残っていると、1. が素通りになるので消してから入れる
@@ -104,12 +109,12 @@ check_device() {
 }
 
 for dev in "$IPHONE|iPhone" "$IPAD|iPad"; do
-  udid=""
-  echo "::group::$dev"
+  udid=""; udid_keep=0
+  echo "::group::${dev%%|*}"
   check_device "${dev%%|*}" "${dev#*|}" || fail=1
   echo "::endgroup::"
   # 使った端末を止める(失敗した端末も。手元の Mac のほかのシミュレーターには触らない)
-  [ -n "$udid" ] && xcrun simctl shutdown "$udid" > /dev/null 2>&1
+  [ -n "$udid" ] && [ "$udid_keep" = 0 ] && xcrun simctl shutdown "$udid" > /dev/null 2>&1
 done
 ls -la "$OUT"
 exit $fail
