@@ -14,8 +14,8 @@ import struct, sys, zlib
 SHELF = (0xF6, 0xF7, 0xF9)
 MIN_RATIO = 0.25
 ACCENT = (0x2F, 0x5D, 0x9E)
-MIN_ACCENT = 100  # 左半分のアクセント色の点の数(2 ピクセルおきに数える。CI の空の本棚で約 200〜600)
-MAX_ACCENT = 5000  # 起動画面(大きなアイコン)は 4 万を超えるので、多すぎるのも本棚ではない
+MIN_ACCENT = 100  # 左半分のアクセント色の点の数(2 ピクセルおきに数える。空の本棚で CI の iPad 約 200・iPhone 約 600)
+MAX_ACCENT = 5000  # 起動画面(大きなアイコン)は左半分でも約 2.2 万あるので、多すぎるのも本棚ではない
 
 
 def read_bmp(data):

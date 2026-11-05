@@ -32,13 +32,17 @@ fi
 APP=build/ios/Build/Products/Debug-iphonesimulator/App.app
 test -d "$APP" || { echo "::error::App.app ができていません"; exit 1; }
 test -f "$APP/App" || { echo "::error::App.app に本体がありません"; exit 1; }
-# 本体・デバッグ用の本体・中のフレームワーク(Capacitor など)の実行ファイルを全部見る
+# 本体・デバッグ用の本体・中のフレームワーク(Capacitor など)の Mach-O を全部見る(実行の印の有無に関係なく)
+files=$(find "$APP" -type f) || { echo "::error::App.app の中を調べられません"; exit 1; }
+checked=0
 while IFS= read -r bin; do
-  file -b "$bin" | grep -q 'Mach-O' || continue   # 実行の印が付いたほかのファイルは飛ばす
+  file -b "$bin" | grep -q 'Mach-O' || continue
   archs=$(lipo -archs "$bin")
-  echo "$(basename "$bin"): $archs"
-  [[ " $archs " == *" x86_64 "* && " $archs " == *" arm64 "* ]] || { echo "::error::$(basename "$bin") が Intel・Apple シリコンの両方向けになっていません"; exit 1; }
-done < <(find "$APP" -type f -perm +111 ! -name '*.sh')
+  echo "${bin#"$APP"/}: $archs"
+  [[ " $archs " == *" x86_64 "* && " $archs " == *" arm64 "* ]] || { echo "::error::${bin#"$APP"/} が Intel・Apple シリコンの両方向けになっていません"; exit 1; }
+  [ "$bin" = "$APP/App" ] && checked=1
+done <<< "$files"
+[ "$checked" = 1 ] || { echo "::error::App 本体のアーキテクチャを確かめられませんでした"; exit 1; }
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$OUT/daigaku-note-simulator.zip" || { echo "::error::zip を作れません"; exit 1; }
 
 # 名前の決まった機種があればそれを、なければいちばん新しい iOS のその種類の機種を選ぶ
@@ -110,7 +114,7 @@ check_device() {
 
 for dev in "$IPHONE|iPhone" "$IPAD|iPad"; do
   udid=""; udid_keep=0
-  echo "::group::${dev%%|*}"
+  echo "::group::${dev#*|}"   # 実際の機種名は中の「== 」の行に出る
   check_device "${dev%%|*}" "${dev#*|}" || fail=1
   echo "::endgroup::"
   # 使った端末を止める(失敗した端末も。手元の Mac のほかのシミュレーターには触らない)
