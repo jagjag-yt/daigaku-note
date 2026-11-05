@@ -36,8 +36,8 @@ test -f "$APP/App" || { echo "::error::App.app に本体がありません"; exi
 files=$(find "$APP" -type f) || { echo "::error::App.app の中を調べられません"; exit 1; }
 checked=0
 while IFS= read -r bin; do
-  file -b "$bin" | grep -q 'Mach-O' || continue
-  archs=$(lipo -archs "$bin")
+  case "$(file -b "$bin")" in *Mach-O*) ;; *) continue ;; esac
+  archs=$(lipo -archs "$bin") || { echo "::error::${bin#"$APP"/} のアーキテクチャを読めません"; exit 1; }
   echo "${bin#"$APP"/}: $archs"
   [[ " $archs " == *" x86_64 "* && " $archs " == *" arm64 "* ]] || { echo "::error::${bin#"$APP"/} が Intel・Apple シリコンの両方向けになっていません"; exit 1; }
   [ "$bin" = "$APP/App" ] && checked=1
