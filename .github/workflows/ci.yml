@@ -2,6 +2,7 @@
 #   test:    ふつうのテスト(npm test)
 #   ui:      画面の崩れのテスト(iPhone・Android・iPad・PC の大きさ × Chromium・WebKit)
 #   android: Android アプリ(APK)を作って、ダウンロードできるようにする
+#   ios:     iOS アプリをシミュレーター用に作り、iPhone・iPad のシミュレーターで起動して画面を撮る
 name: 確認
 on:
   push:
@@ -101,4 +102,32 @@ jobs:
         with:
           name: daigaku-note-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
+  # iOS: GitHub の Mac を借りて、シミュレーター用に作り、iPhone・iPad のシミュレーターで起動して画面を撮る
+  # (公開リポジトリなので Mac の時間も無料。非公開にするときは回数を絞る)
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: いちばん新しい Xcode を使う(Capacitor 8 は Xcode 26 以上が要る)
+        run: |
+          x=$(ls -d /Applications/Xcode_*.app | grep -v -i beta | sort -V | tail -1)
+          echo "使う Xcode: $x"
+          sudo xcode-select -s "$x"
+      - run: npm ci
+      - name: 画面のファイルをアプリに入れる
+        run: npm run build:web && npx cap sync ios
+      - name: 作って、シミュレーターで起動する
+        run: scripts/ios-sim.sh
+      - uses: actions/upload-artifact@v4
+        if: success() || failure()
+        with:
+          name: daigaku-note-ios-simulator
+          path: ios-out/
           retention-days: 30
