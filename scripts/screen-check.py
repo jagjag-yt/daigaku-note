@@ -1,6 +1,8 @@
 # シミュレーターのスクショに、大学ノートの本棚の画面が出ているかを確かめる(標準ライブラリだけ)。
 # 本棚の地の色(style.css の --shelf: #f6f7f9)が画面の一定の割合を占めていれば「出ている」とする。
 # 真っ白・起動画面(スプラッシュ)のまま・ホーム画面(アプリが終わった)では足りないので失敗になる。
+# さらに、画面のプログラムが描く「新規」のカード(＋の印と文字がアクセント色 #2f5d9e)があることも見る。
+# 本棚の地の色は HTML と CSS だけでも出るので、これがないと「プログラムが本棚を描いた」とは言えない。
 #
 # 使い方: python3 scripts/screen-check.py 画像.bmp|画像.png
 # 終了コード: 0 = 出ている / 1 = 出ていない / 2 = 画像を読めない(確かめられない)
@@ -8,6 +10,9 @@ import struct, sys, zlib
 
 SHELF = (0xF6, 0xF7, 0xF9)
 MIN_RATIO = 0.25
+ACCENT = (0x2F, 0x5D, 0x9E)
+MIN_ACCENT = 40  # アクセント色の点の数(2 ピクセルおきに数える)
+MAX_ACCENT = 5000  # 起動画面(大きなアイコン)は 4 万を超えるので、多すぎるのも本棚ではない
 
 
 def read_bmp(data):
@@ -15,6 +20,10 @@ def read_bmp(data):
     hsize, w, h, planes, bits, comp = struct.unpack_from('<IiiHHI', data, 14)
     if bits not in (24, 32) or comp not in (0, 3):
         raise ValueError(f'この形式の BMP は読めません({bits}bit, 圧縮 {comp})')
+    if comp == 3:  # 色の並びはビットマスクで決まる。BGR(A) の並びのときだけ読む
+        masks = struct.unpack_from('<III', data, 54)
+        if masks != (0x00FF0000, 0x0000FF00, 0x000000FF):
+            raise ValueError(f'この色の並びの BMP は読めません(マスク {[hex(m) for m in masks]})')
     bpp, top_down, h = bits // 8, h < 0, abs(h)
     stride = (w * bpp + 3) & ~3
     if len(data) < off + stride * h:
@@ -66,17 +75,21 @@ def main(path):
         elif data[:8] == b'\x89PNG\r\n\x1a\n': w, h, px = read_png(data)
         else: raise ValueError('BMP でも PNG でもありません')
         # 上下 10%(時計・ホームバー)を除き、4 ピクセルおきに見る
-        total = hit = 0
-        for y in range(h // 10, h - h // 10, 4):
-            for x in range(0, w, 4):
+        total = hit = accent = 0
+        for y in range(h // 10, h - h // 10, 2):
+            for x in range(0, w, 2):
+                c = px(x, y)
+                if all(abs(a - b) <= 12 for a, b in zip(c, ACCENT)): accent += 1
+                if x % 4 or (y - h // 10) % 4: continue
                 total += 1
-                hit += all(abs(a - b) <= 3 for a, b in zip(px(x, y), SHELF))
+                hit += all(abs(a - b) <= 3 for a, b in zip(c, SHELF))
     except Exception as e:  # 壊れた・知らない形式の画像
         print(f'{path}: 画像を読めませんでした: {e}')
         return 2
     ratio = hit / max(total, 1)
-    print(f'{path}: {w}x{h}、本棚の地の色の割合 {ratio:.0%}(必要 {MIN_RATIO:.0%} 以上)')
-    return 0 if ratio >= MIN_RATIO else 1
+    print(f'{path}: {w}x{h}、本棚の地の色の割合 {ratio:.0%}(必要 {MIN_RATIO:.0%} 以上)、'
+          f'アクセント色の点 {accent}(必要 {MIN_ACCENT}〜{MAX_ACCENT})')
+    return 0 if ratio >= MIN_RATIO and MIN_ACCENT <= accent <= MAX_ACCENT else 1
 
 
 if __name__ == '__main__':

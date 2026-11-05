@@ -3,9 +3,9 @@
 # GitHub Actions の Mac(macos)で動かす。手元の Mac でも動く(Xcode が要る)。
 #
 # 確かめること(端末ごと):
-#   1. 画面のプログラムが動いた … アプリのデータの場所に WebView の IndexedDB ができる(起動画面のままでは
-#      できない)。scripts/screen-check.py だけでは起動画面と本棚の地の色が同じで見分けられないため
-#   2. 本棚の画面が出ている … スクショの本棚の地の色の割合(真っ白・ホーム画面では足りない)
+#   1. 画面のプログラムが動いた … WebView の IndexedDB にファイルができる(フォルダだけなら JS がなくてもできる)
+#   2. プログラムが本棚を描いた … スクショに本棚の地の色が一定の割合あり、プログラムが描く「新規」のカードの
+#      アクセント色がある(scripts/screen-check.py。真っ白・起動画面・ホーム画面・HTML だけの画面では失敗)
 #   3. 落ちていない … 起動したプロセスが、画面が出たあとも生きている
 # 出力(ios-out/): daigaku-note-simulator.zip(Appetize.io などに上げられる .app)、<端末名>.png、
 #                  xcodebuild.log、落ちたときの診断レポート
@@ -31,9 +31,12 @@ fi
 APP=build/ios/Build/Products/Debug-iphonesimulator/App.app
 test -d "$APP" || { echo "::error::App.app ができていません"; exit 1; }
 for bin in "$APP/App" "$APP/App.debug.dylib"; do
-  [ -f "$bin" ] && echo "$(basename "$bin"): $(lipo -archs "$bin")"
+  [ -f "$bin" ] || continue
+  archs=$(lipo -archs "$bin")
+  echo "$(basename "$bin"): $archs"
+  [[ " $archs " == *" x86_64 "* && " $archs " == *" arm64 "* ]] || { echo "::error::$(basename "$bin") が Intel・Apple シリコンの両方向けになっていません"; exit 1; }
 done
-ditto -c -k --sequesterRsrc --keepParent "$APP" "$OUT/daigaku-note-simulator.zip"
+ditto -c -k --sequesterRsrc --keepParent "$APP" "$OUT/daigaku-note-simulator.zip" || { echo "::error::zip を作れません"; exit 1; }
 
 # 名前の決まった機種があればそれを、なければいちばん新しい iOS のその種類の機種を選ぶ
 pick() {
@@ -55,24 +58,28 @@ if best: print(best[1] + "\t" + best[2] + " (iOS %d.%d)" % best[0][1])
 
 fail=0
 check_device() {
-  local want=$1 kind=$2 line udid name shot pid data ok=0
+  local want=$1 kind=$2 line name shot pid data rc ok=0
   line=$(pick "$want" "$kind")
   [ -n "$line" ] || { echo "::error::$kind のシミュレーターが見つかりません"; return 1; }
+  # udid は呼ぶ側が端末を止めるのに使うので local にしない
   udid=${line%%$'\t'*}; name=${line#*$'\t'}
   shot="$OUT/${name// /_}.png"
-  echo "::group::$name"
+  echo "== $name"
   xcrun simctl boot "$udid" 2>/dev/null
   xcrun simctl bootstatus "$udid" -b > /dev/null || { echo "::error::$name が起動しません"; return 1; }
+  # 前に入れたときのデータ(IndexedDB)が残っていると、1. が素通りになるので消してから入れる
+  xcrun simctl uninstall "$udid" "$BUNDLE" 2>/dev/null
   xcrun simctl install "$udid" "$APP" || { echo "::error::$name に入れられません"; return 1; }
   # 出力は「io.github.jagjagyt.daigakunote: 12345」。シミュレーターのアプリは Mac のプロセスなので ps で見られる
   pid=$(xcrun simctl launch "$udid" "$BUNDLE" | awk -F': ' '{print $2}')
   [[ "$pid" =~ ^[0-9]+$ ]] || { echo "::error::$name で起動できません"; return 1; }
   data=$(xcrun simctl get_app_container "$udid" "$BUNDLE" data)
+  [ -n "$data" ] && [ -d "$data" ] || { echo "::error::$name のアプリのデータの場所が分かりません"; return 1; }
   # 画面が出るまで 3 秒ごとに見る(最大 90 秒。最初の起動は遅い)
   for _ in $(seq 1 30); do
     sleep 3
     ps -p "$pid" > /dev/null || break
-    find "$data/Library/WebKit" -path '*IndexedDB*' -type f 2>/dev/null | grep -q . || continue
+    [ -n "$(find "$data/Library/WebKit" -path '*IndexedDB*' -type f -print -quit 2>/dev/null)" ] || continue
     xcrun simctl io "$udid" screenshot --type=bmp "$OUT/shot.bmp" > /dev/null 2>&1 || continue
     python3 scripts/screen-check.py "$OUT/shot.bmp" > "$OUT/check.txt"; rc=$?
     [ $rc -eq 2 ] && { cat "$OUT/check.txt"; echo "::error::$name のスクショを確かめられません"; return 1; }
@@ -84,7 +91,8 @@ check_device() {
   sleep 3
   if ! ps -p "$pid" > /dev/null; then
     echo "::error::$name でアプリが終わってしまいました(落ちた・画面のファイルが読めない など)"
-    cp ~/Library/Logs/DiagnosticReports/App-*.ips "$OUT/" 2>/dev/null
+    # この回の診断レポートだけを残す
+    find ~/Library/Logs/DiagnosticReports -name 'App-*.ips' -newer "$OUT/xcodebuild.log" -exec cp {} "$OUT/" \; 2>/dev/null
     return 1
   fi
   if [ $ok -ne 1 ]; then
@@ -96,10 +104,12 @@ check_device() {
 }
 
 for dev in "$IPHONE|iPhone" "$IPAD|iPad"; do
+  udid=""
+  echo "::group::$dev"
   check_device "${dev%%|*}" "${dev#*|}" || fail=1
   echo "::endgroup::"
-  # 次の端末のためにすべて止める(失敗した端末も)
-  xcrun simctl shutdown all > /dev/null 2>&1
+  # 使った端末を止める(失敗した端末も。手元の Mac のほかのシミュレーターには触らない)
+  [ -n "$udid" ] && xcrun simctl shutdown "$udid" > /dev/null 2>&1
 done
 ls -la "$OUT"
 exit $fail
