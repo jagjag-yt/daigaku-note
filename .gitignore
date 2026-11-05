@@ -5,5 +5,5 @@ _site/
 test-results/
 playwright-report/
 test/ui/__screenshots__/
-build/
-ios-out/
+/build/
+/ios-out/

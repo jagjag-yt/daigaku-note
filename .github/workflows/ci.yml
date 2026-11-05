@@ -107,23 +107,29 @@ jobs:
   # iOS: GitHub の Mac を借りて、シミュレーター用に作り、iPhone・iPad のシミュレーターで起動して画面を撮る
   # (公開リポジトリなので Mac の時間も無料。非公開にするときは回数を絞る)
   ios:
+    # 同じリポジトリのブランチの PR では、push の回と同じものを作るので PR の回は飛ばす(Mac の待ち行列を減らす)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - name: いちばん新しい Xcode を使う(Capacitor 8 は Xcode 26 以上が要る)
+      - name: いちばん新しい正式版の Xcode を使う(Capacitor 8 は Xcode 26 以上が要る)
         run: |
-          x=$(ls -d /Applications/Xcode_*.app | grep -v -i beta | sort -V | tail -1)
+          x=$(ls -d /Applications/Xcode_*.app | grep -Eiv 'beta|release_candidate|_rc' | sort -V | tail -1)
           echo "使う Xcode: $x"
           sudo xcode-select -s "$x"
+          major=$(xcodebuild -version | awk 'NR==1{split($2,v,"."); print v[1]}')
+          if [ "$major" -lt 26 ]; then echo "::error::Xcode 26 以上が要ります(今は $major)"; exit 1; fi
       - run: npm ci
       - name: 画面のファイルをアプリに入れる
         run: npm run build:web && npx cap sync ios
-      - name: 作って、シミュレーターで起動する
+      - name: 作って、iPhone・iPad のシミュレーターで起動して確かめる
         run: scripts/ios-sim.sh
       - uses: actions/upload-artifact@v4
         if: success() || failure()
