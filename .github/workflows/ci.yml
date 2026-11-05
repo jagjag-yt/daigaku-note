@@ -128,7 +128,7 @@ jobs:
           if [ "$major" -lt 26 ]; then echo "::error::Xcode 26 以上が要ります(今は $major)"; exit 1; fi
       - run: npm ci
       - name: 画面のファイルをアプリに入れる
-        run: npm run build:web && npx cap sync ios && rm ios/App/App/public/index.html  # 一時: 失敗を見つけられるかの確認
+        run: npm run build:web && npx cap sync ios
       - name: 作って、iPhone・iPad のシミュレーターで起動して確かめる
         run: scripts/ios-sim.sh
       - uses: actions/upload-artifact@v4
