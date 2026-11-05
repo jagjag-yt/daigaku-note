@@ -41,20 +41,26 @@ for kind in "iPhone" "iPad"; do
   line=$(pick "$kind")
   if [ -z "$line" ]; then echo "::error::$kind のシミュレーターが見つかりません"; fail=1; continue; fi
   udid=${line%%$'\t'*}; name=${line#*$'\t'}
-  echo "== $name"
+  echo "::group::$name"
   xcrun simctl boot "$udid" 2>/dev/null || true
-  xcrun simctl bootstatus "$udid" -b
+  xcrun simctl bootstatus "$udid" -b > /dev/null
   xcrun simctl install "$udid" "$APP"
   xcrun simctl launch "$udid" "$BUNDLE"
   sleep 20   # 画面が出るまで(最初の起動は遅い)
   # 落ちていないか(起動したアプリが動き続けているか)
-  if ! xcrun simctl spawn "$udid" launchctl list | grep -q "$BUNDLE"; then
+  # (grep -q にパイプでつなぐと、pipefail で launchctl 側の SIGPIPE を失敗と取り違えるので、いったん受け取る)
+  running=$(xcrun simctl spawn "$udid" launchctl list)
+  if ! grep -q "$BUNDLE" <<<"$running"; then
     echo "::error::$name でアプリが落ちました"
     xcrun simctl spawn "$udid" log show --last 2m --style compact --predicate "process == \"App\"" | tail -n 80 || true
     fail=1
   fi
-  xcrun simctl io "$udid" screenshot "$OUT/${name// /_}.png"
+  shot="$OUT/${name// /_}.png"
+  xcrun simctl io "$udid" screenshot "$shot"
+  # 画面が真っ白のまま(画面のファイルが読めていない)でないか
+  if ! python3 scripts/png-blank.py "$shot"; then echo "::error::$name で画面が出ていません(真っ白)"; fail=1; fi
   xcrun simctl shutdown "$udid" || true
+  echo "::endgroup::"
 done
 ls -la "$OUT"
 exit $fail
