@@ -434,11 +434,13 @@ export function recognizeShape(flat) {
         return dev < 0.22 || dist(c[0], c[1], d[0], d[1]) * Math.sin(dev) < Math.min(6, minSide * 0.3);
       });
       if (x1 - x0 > 4 && y1 - y0 > 4 && axis) return { type: 'rect', pts: densify(rc, true, p) };
-      if (bow < 0.05) return { type: 'quad', pts: densify(corners, true, p) };
+      // 辺がまっすぐ(角が丸くても、多角形のほうが楕円よりずっとよく沿っていればよい)
+      if (bow < 0.05 || polyErr < ellErr * 0.3) return { type: 'quad', pts: densify(corners, true, p) };
     }
   }
   // 五角形・六角形など(角が 5〜8 個): 楕円よりはっきり沿っていれば、角を結んだ多角形にする
-  if (corners.length >= 5 && corners.length <= 8) {
+  // ジグザグ(取り消し線・W)を閉じた形と取り違えないよう、始点と終点がしっかり近いものだけ
+  if (corners.length >= 5 && corners.length <= 8 && chord < L * 0.08) {
     if (bow < 0.05 && polyErr < ellErr * 0.6 && polyErr < size * 0.04) return { type: 'polygon', pts: densify(corners, true, p) };
   }
   if (rx < 4 || ry < 4 || ellErr > size * 0.08) return null;

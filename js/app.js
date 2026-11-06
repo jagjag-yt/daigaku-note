@@ -1743,10 +1743,21 @@ function flushPen() {
   finishStroke(a);
 }
 
+// 線の大きさ(画面上の px、縦横の長いほう)。離したときの図形補正で、小さな字まで整えないために使う
+function strokeScreenSize(d) {
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (let i = 0; i < d.pts.length; i += 3) {
+    x0 = Math.min(x0, d.pts[i]); x1 = Math.max(x1, d.pts[i]);
+    y0 = Math.min(y0, d.pts[i + 1]); y1 = Math.max(y1, d.pts[i + 1]);
+  }
+  return Math.max(x1 - x0, y1 - y0) * S.zoom;
+}
+
 async function finishStroke(a) {
   const d = a.d;
-  // 図形補正がオンなら、ペンを離したときにも図形に整える(止めて整えたものはそのまま)
-  if (S.shapes && !a.shaped && d.pts.length) {
+  // 図形補正がオンなら、ペンを離したときにも図形に整える(止めて整えたものはそのまま)。
+  // 小さな線(画面上で 30px 未満。ふつうの大きさの字)は、止めたときだけ整える
+  if (S.shapes && !a.shaped && d.pts.length && strokeScreenSize(d) >= 30) {
     const shape = recognizeShape(d.pts);
     if (debugOn) a.dbgShape = '離した: ' + (shape ? shape.type : '図形でない');
     if (shape) { d.pts = shape.pts; d.shape = shape.type; }

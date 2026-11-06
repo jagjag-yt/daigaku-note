@@ -134,3 +134,34 @@ test('円は多角形にしない', () => {
     assert.ok(t === 'circle' || t === 'ellipse', `r${r} over ${ov}: ${t}`);
   }
 });
+
+test('角の少し丸い台形・ひし形・傾いた四角形は四角形(quad)のまま', () => {
+  // 角を Chaikin で2回丸める
+  const round = (cs, cut) => {
+    let r = cs;
+    for (let it = 0; it < 2; it++) {
+      const o = [];
+      for (let i = 0; i < r.length; i++) {
+        const a = r[i], b = r[(i + 1) % r.length];
+        o.push([a[0] + (b[0] - a[0]) * cut, a[1] + (b[1] - a[1]) * cut], [a[0] + (b[0] - a[0]) * (1 - cut), a[1] + (b[1] - a[1]) * (1 - cut)]);
+      }
+      r = o;
+    }
+    return r;
+  };
+  const shapes = { 台形: [[30, 0], [90, 0], [120, 80], [0, 80]], ひし形: [[50, 0], [100, 60], [50, 120], [0, 60]], 傾いた四角形: rot(SQ, 25), 平行四辺形: [[30, 0], [150, 0], [120, 80], [0, 80]] };
+  for (const [name, cs] of Object.entries(shapes)) assert.equal(shape(polygon(round(cs, 0.08), { start: 0.3, noise: 1, step: 1.5 })), 'quad', name);
+});
+
+test('ジグザグ(取り消し線)・W は多角形にしない', () => {
+  for (const n of [4, 8]) {
+    const z = [];
+    for (let i = 0; i <= n; i++) z.push([i % 2 ? 100 : 0, i * 10]);
+    const pts = [];
+    for (let i = 0; i < n; i++) { const a = z[i], b = z[i + 1]; for (let t = 0; t < 1; t += 0.05) pts.push(a[0] + (b[0] - a[0]) * t + rnd(), a[1] + (b[1] - a[1]) * t + rnd(), 0.5); }
+    assert.notEqual(shape(pts), 'polygon', 'zigzag open ' + n);
+  }
+  const w = [[0, 0], [20, 40], [40, 5], [60, 40], [80, 0]], wp = [];
+  for (let i = 0; i < 4; i++) { const a = w[i], b = w[i + 1]; for (let t = 0; t < 1; t += 0.05) wp.push(a[0] + (b[0] - a[0]) * t + rnd(), a[1] + (b[1] - a[1]) * t + rnd(), 0.5); }
+  assert.notEqual(shape(wp), 'polygon', 'W');
+});
