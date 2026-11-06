@@ -7,3 +7,4 @@ playwright-report/
 test/ui/__screenshots__/
 /build/
 /ios-out/
+/ios-ipa/

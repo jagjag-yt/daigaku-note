@@ -2,7 +2,7 @@
 #   test:    ふつうのテスト(npm test)
 #   ui:      画面の崩れのテスト(iPhone・Android・iPad・PC の大きさ × Chromium・WebKit)
 #   android: Android アプリ(APK)を作って、ダウンロードできるようにする
-#   ios:     iOS アプリをシミュレーター用に作り、iPhone・iPad のシミュレーターで起動して画面を撮る
+#   ios:     iOS アプリをシミュレーター用に作り、iPhone・iPad のシミュレーターで起動して画面を撮る。実機用の .ipa(署名なし)も作る
 name: 確認
 on:
   push:
@@ -136,4 +136,14 @@ jobs:
         with:
           name: daigaku-note-ios-simulator
           path: ios-out/
+          retention-days: 30
+      # 実機用(署名なし)。Windows の Sideloadly で自分の Apple ID で署名して入れる(docs/アプリ化.md)
+      - name: 実機用の .ipa(署名なし)を作る
+        if: success() || failure()
+        run: scripts/ios-ipa.sh
+      - uses: actions/upload-artifact@v4
+        if: success() || failure()
+        with:
+          name: daigaku-note-ios-ipa
+          path: ios-ipa/
           retention-days: 30
