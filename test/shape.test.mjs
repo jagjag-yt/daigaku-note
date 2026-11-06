@@ -150,7 +150,10 @@ test('角の少し丸い台形・ひし形・傾いた四角形は四角形(quad
     return r;
   };
   const shapes = { 台形: [[30, 0], [90, 0], [120, 80], [0, 80]], ひし形: [[50, 0], [100, 60], [50, 120], [0, 60]], 傾いた四角形: rot(SQ, 25), 平行四辺形: [[30, 0], [150, 0], [120, 80], [0, 80]] };
-  for (const [name, cs] of Object.entries(shapes)) assert.equal(shape(polygon(round(cs, 0.08), { start: 0.3, noise: 1, step: 1.5 })), 'quad', name);
+  // 書き始めは辺の途中と、角の少し手前・少し後(点の列の一周の境目を角がまたぐ)
+  for (const [name, cs] of Object.entries(shapes)) {
+    for (const start of [0.3, 0.98, 0.99, 0.01, 0.24, 0.26]) assert.equal(shape(polygon(round(cs, 0.08), { start, noise: 1, step: 1.5 })), 'quad', `${name} start ${start}`);
+  }
 });
 
 test('ジグザグ(取り消し線)・W は多角形にしない', () => {

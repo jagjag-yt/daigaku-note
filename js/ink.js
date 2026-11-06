@@ -233,7 +233,10 @@ function refineCorners(pts, corners, lim) {
   if (idx.some((i) => i < 0)) return corners;
   const lines = [];
   for (let e = 0; e < k; e++) {
-    const a = idx[e], b = e + 1 < k ? idx[e + 1] : idx[0] + n;
+    // 角の並びは点の列の一周の境目をまたぐことがある(書き始めが角の近くのとき)
+    const a = idx[e];
+    let b = idx[(e + 1) % k];
+    if (b <= a) b += n;
     const len = b - a;
     const seg = [];
     for (let j = a + Math.ceil(len * 0.2); j <= b - Math.ceil(len * 0.2); j++) seg.push(pts[j % n]);
