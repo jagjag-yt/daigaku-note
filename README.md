@@ -2,6 +2,7 @@
 
 GoodNotes の代わりを目指す、無料・オフライン・クロスプラットフォームの手書きノート。
 Web 技術(PWA)1本で Windows と iPad の両方で動く。ビルド不要、依存ライブラリは `vendor/` に同梱。
+同じ画面を Capacitor で包んだ Android / iOS アプリ版もある(Android を先に進めている。くわしくは [docs/アプリ化.md](docs/アプリ化.md))。
 
 ## できること
 
@@ -40,6 +41,11 @@ Node.js が入っていれば、`start-windows.bat` をダブルクリック(ま
 試すだけなら、Windows で `node serve.mjs` を動かし、同じ Wi-Fi の iPad から表示された
 `http://192.168.x.x:8123/` を開く。ただし https でないのでオフライン起動はできない。
 
+### Android(アプリ版)
+
+[docs/アプリ化.md](docs/アプリ化.md) を参照。Android Studio のエミュレーターで動かす手順と、
+Android Studio なしで APK を入れる方法(GitHub Actions が作る)を書いてある。
+
 ## 同期のしかた
 
 ### クラウド同期(WebDAV / Nextcloud)
@@ -49,10 +55,11 @@ Node.js が入っていれば、`start-windows.bat` をダブルクリック(ま
 
 - Nextcloud の URL の例:`https://<サーバー>/remote.php/dav/files/<ユーザー名>/`
 - パスワードは Nextcloud の「設定 → セキュリティ → アプリパスワード」で作ったものを使う
-- **CORS の許可が必要**:大学ノートはブラウザから直接 WebDAV に接続するので、サーバーが
+- **CORS の許可が必要(ブラウザ版だけ)**:大学ノートはブラウザから直接 WebDAV に接続するので、サーバーが
   `https://jagjag-yt.github.io` からの接続を許可していないと失敗する。Nextcloud なら
   「WebAppPassword」アプリを入れて、許可するオリジンに `https://jagjag-yt.github.io` を追加する。
-  ほかの WebDAV サーバーでも、CORS(`Access-Control-Allow-Origin` など)を返す設定が必要
+  ほかの WebDAV サーバーでも、CORS(`Access-Control-Allow-Origin` など)を返す設定が必要。
+  アプリ版(Android / iOS)は OS の通信機能で直接つなぐので、CORS の設定は要らない
 - サーバーには `daigaku-note/ops/<端末ID>/*.json`(各端末の変更)と `daigaku-note/files/*.pdf` を置く
 - 各端末は「ほかの端末の変更を何番まで読んだか」だけを覚えて、その続きだけを読む。変わっていない端末のフォルダは中を見ない
   (フォルダの ETag で判断。くわしくは `docs/設計.md`)
@@ -115,7 +122,9 @@ op の種類: `note.create / note.rename / note.delete / note.restore / page.add
 ## テスト
 
 ```
-npm test                       # マージ・図形補正・同期のカーソル・GoodNotes の線の読み方のテスト(Node)
+npm test                       # マージ・図形補正・同期のカーソル・GoodNotes の線の読み方・アプリ版の通信のテスト(Node)
+npm ci && npm run test:ui      # 画面の崩れのテスト(8つの画面の大きさ × Chromium・WebKit。docs/アプリ化.md)
+node test/native-e2e.cjs       # アプリ版(Android)の動きをブラウザで再現して確かめる(サーバーは上と同じ)
 node serve.mjs 8124 &          # アプリ
 node test/davserver.mjs 8125 & # テスト用 WebDAV サーバー
 npm i pdf-lib && URL=http://localhost:8124/ GN=見本.goodnotes node test/e2e.cjs /tmp   # ブラウザでの通し確認(Playwright)

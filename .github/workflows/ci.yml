@@ -1,0 +1,139 @@
+# プッシュ・プルリクエストのたびに動く確認。
+#   test:    ふつうのテスト(npm test)
+#   ui:      画面の崩れのテスト(iPhone・Android・iPad・PC の大きさ × Chromium・WebKit)
+#   android: Android アプリ(APK)を作って、ダウンロードできるようにする
+#   ios:     iOS アプリをシミュレーター用に作り、iPhone・iPad のシミュレーターで起動して画面を撮る
+name: 確認
+on:
+  push:
+    branches-ignore: [gh-pages]
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  # 基準のスクショを足したあとに起動する run(workflow_dispatch)が、元の push の run を取り消さないよう event も分ける
+  group: ci-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+
+  ui:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # 基準のスクショをブランチに足すため
+      actions: write # 足したコミットにも確認を走らせるため
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: ブラウザ(Chromium・WebKit)を入れる
+        run: npx playwright install --with-deps chromium webkit
+      # 基準のスクショは、文字の描かれ方がそろうようにこの環境(ubuntu-24.04 に固定)で作る。
+      #   まだない画面 → 1回目で作り、2回目で比べる。main 以外へのプッシュなら、作った基準をブランチに足す
+      #   見た目をわざと変えたとき → コミットのメッセージに [update-screenshots] と書くと、違う画面を作り直す
+      - name: 基準のスクショを作る(まだないもの)
+        env:
+          UPDATE: ${{ github.event_name == 'push' && github.ref != 'refs/heads/main' && contains(github.event.head_commit.message, '[update-screenshots]') && 'changed' || 'missing' }}
+        run: npx playwright test --update-snapshots=$UPDATE --reporter=dot || true
+      - name: 画面の崩れのテスト
+        run: npx playwright test --update-snapshots=none
+      - name: 作った基準のスクショをブランチに足す
+        if: success() && github.event_name == 'push' && github.ref != 'refs/heads/main'
+        run: |
+          # 基準は手元で作らない(.gitignore に入れてある)ので、ここだけ -f で足す
+          git add -f test/ui/__screenshots__
+          if git diff --cached --quiet; then echo "足すものはありません"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "画面の崩れのテスト: 基準のスクショを更新"
+          git push
+          # このトークンでのプッシュでは確認が自動で走らないので、足したコミットにも走らせる(PR のチェックが付くように)
+          gh workflow run ci.yml --ref "$GITHUB_REF_NAME" || echo "::warning::足したコミットの確認を走らせられませんでした(Actions の画面から手で走らせてください)"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: アプリ版(Android)の動きをブラウザで再現して確かめる
+        if: success() || failure()
+        run: |
+          node serve.mjs 8124 & node test/davserver.mjs 8125 &
+          timeout 30 bash -c 'until curl -sf -o /dev/null http://localhost:8124/ && curl -s -o /dev/null http://localhost:8125/; do sleep 1; done' || { echo "::error::テスト用のサーバーが起動しません"; exit 1; }
+          node test/native-e2e.cjs
+      - name: 結果(違いの画像つき)を残す
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci
+      - name: 画面のファイルをアプリに入れる
+        run: npm run build:web && npx cap sync android
+      - name: APK を作る
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daigaku-note-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
+  # iOS: GitHub の Mac を借りて、シミュレーター用に作り、iPhone・iPad のシミュレーターで起動して画面を撮る
+  # (公開リポジトリなので Mac の時間も無料。非公開にするときは回数を絞る)
+  ios:
+    # 同じリポジトリのブランチの PR では、push の回と同じものを作るので PR の回は飛ばす(Mac の待ち行列を減らす)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: いちばん新しい正式版の Xcode を使う(Capacitor 8 は Xcode 26 以上が要る)
+        run: |
+          x=$(ls -d /Applications/Xcode_*.app | grep -Eiv 'beta|release_candidate|_rc' | sort -V | tail -1)
+          echo "使う Xcode: $x"
+          sudo xcode-select -s "$x"
+          major=$(xcodebuild -version | awk 'NR==1{split($2,v,"."); print v[1]}')
+          if [ "$major" -lt 26 ]; then echo "::error::Xcode 26 以上が要ります(今は $major)"; exit 1; fi
+      - run: npm ci
+      - name: 画面のファイルをアプリに入れる
+        run: npm run build:web && npx cap sync ios
+      - name: 作って、iPhone・iPad のシミュレーターで起動して確かめる
+        run: scripts/ios-sim.sh
+      - uses: actions/upload-artifact@v4
+        if: success() || failure()
+        with:
+          name: daigaku-note-ios-simulator
+          path: ios-out/
+          retention-days: 30

@@ -9,7 +9,8 @@ import { importPdf, renderPdfPage, exportPdf } from './pdf.js';
 import { buildSyncFile, importSyncFile } from './sync.js';
 import * as search from './search.js';
 import * as dav from './webdav.js';
-import { icon, fillIcons, openPopover, closePopover, menu, retargetPopover } from './ui.js';
+import { icon, fillIcons, openPopover, closePopover, menu, retargetPopover, popoverOpen, safeRect } from './ui.js';
+import * as native from './native.js';
 
 const $ = (s) => document.querySelector(s);
 // 色と太さは道具ごとに3つずつ「よく使うもの」として並べる。選んでいるものをもう一度押すと入れ替えられる
@@ -89,7 +90,10 @@ async function init() {
   if (['pen', 'marker', 'eraser', 'lasso'].includes(prefs.tool)) S.tool = prefs.tool;
 
   navigator.storage?.persist?.().catch(() => {});
-  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+  // アプリ版は中身がアプリに入っているので、オフライン用のキャッシュ(サービスワーカー)は使わない。
+  // 使うと、アプリを更新しても前の版の画面がキャッシュから出てしまう
+  if (native.isNative) document.documentElement.classList.add('native', 'native-' + native.platform);
+  if (!native.isNative && 'serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
     // 新しい版が入ったら、書いている最中でなければ読み込み直して切り替える(書いた線は保存済み)
     const hadController = !!navigator.serviceWorker.controller;
@@ -105,6 +109,7 @@ async function init() {
   bindLibrary();
   buildToolbar();
   bindEditor();
+  bindNative();
   onImageReady(onImageLoaded);
   await dav.init({ recorder: S.rec, onRemoteChange: onRemoteChange, onStatus: setSyncStatus });
   search.init({ onProgress: (msg) => { const el = $('#search-status'); if (el) el.textContent = msg; } });
@@ -184,20 +189,59 @@ function askName(heading, value) {
   });
 }
 
-function download(data, name, type) {
+// アプリ版だけの設定
+function bindNative() {
+  if (!native.isNative) return;
+  // Android のファイル選択は拡張子(.goodnotes)を種類に直せず、選べなくなるので絞らない(中身で確かめる)。
+  // iOS は絞らないと「写真を撮る」が出てしまう(カメラの許可を用意していないので落ちる)ので、そのまま
+  if (native.platform === 'android') $('#gn-input').accept = '';
+  // Android のアプリ版は、画面の端の幅(--safe-area-inset-*)を読み込みのあとや画面を回したときに入れてくる。
+  // 入ったら、幅に合わせた表示などを合わせ直す
+  // (値が変わったときだけ。書いている最中なら、書き終わるまで待つ)
+  let saTimer = 0, saLast = '';
+  const saNow = () => { const r = safeRect(); return [r.top, r.left, innerWidth - r.right, innerHeight - r.bottom].map(Math.round).join(','); };
+  const saCheck = () => {
+    if (active || penPending) { saTimer = setTimeout(saCheck, 300); return; }
+    const now = saNow();
+    if (now !== saLast) { saLast = now; window.dispatchEvent(new Event('resize')); }
+  };
+  saLast = saNow();
+  new MutationObserver(() => {
+    clearTimeout(saTimer);
+    saTimer = setTimeout(saCheck, 50);
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+  // Android の「戻る」: 開いているものを内側から閉じる → ノートから本棚へ → 何もなければアプリを裏へ
+  native.onBackButton(() => {
+    if (popoverOpen()) { closePopover(); return true; }
+    const d = [...document.querySelectorAll('dialog[open]')].pop();
+    if (d) { if (d.requestClose) d.requestClose(); else d.close(); return true; }
+    // ページ一覧は、画面に重なって出ているとき(狭い画面)だけ閉じる。横に並んでいるときはそのまま
+    if (!$('#sidebar').hidden && $('#sb-scrim').getClientRects().length) { $('#pages-close').click(); return true; }
+    if (/^#\/note\//.test(location.hash)) {
+      if (S.sel) { clearSelection(); return true; } // 投げ縄で選んでいるなら、まず選択を外す
+      location.hash = '#/';
+      return true;
+    }
+    if ($('#search').value) { $('#search').value = ''; runSearch(); return true; } // 検索の結果を出しているなら消す
+    return false;
+  });
+}
+
+// ブラウザではダウンロード、アプリでは保存先を選ぶ画面(Android)・共有シート(iOS)で渡す。
+// 戻り値: 'saved' / 'cancelled'(選ぶ画面を閉じた) / 'failed'(エラーはここで知らせる)
+async function download(data, name, type) {
   const blob = data instanceof Blob ? data : new Blob([data], { type });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  try {
+    return await native.saveFile(blob, name, blob.type || type);
+  } catch (e) {
+    toast('書き出せませんでした: ' + e.message, 6000);
+    return 'failed';
+  }
 }
 
 const stamp = () => new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
-const safeName = (s) => (s || 'ノート').replace(/[\\/:*?"<>|]/g, '_');
+// ファイル名に使えない文字を置き換え、長すぎる名前は切る(多くの端末でファイル名は 255 バイトまで。日本語は1文字3バイト)
+const safeName = (s) => [...(s || 'ノート').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_')].slice(0, 60).join('').trim() || 'ノート';
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 function fillSelects() {
@@ -423,8 +467,9 @@ function bindLibrary() {
   };
   $('#sync-export').onclick = async () => {
     const json = await buildSyncFile(S.rec.device);
-    download(JSON.stringify(json), `大学ノート同期-${S.rec.device}-${stamp()}.json`, 'application/json');
-    toast(`${json.ops.length}件の変更を書き出しました`);
+    if ((await download(JSON.stringify(json), `大学ノート同期-${S.rec.device}-${stamp()}.json`, 'application/json')) === 'saved') {
+      toast(`${json.ops.length}件の変更を書き出しました`);
+    }
   };
   $('#sync-import').onclick = () => $('#sync-input').click();
   $('#sync-input').onchange = async (e) => {
@@ -574,7 +619,7 @@ function noteMenu(anchor, n) {
     } },
     { icon: 'export', label: '同期ファイルとして書き出す', attrs: { 'data-act': 'export' }, onClick: async () => {
       const json = await buildSyncFile(S.rec.device, n.id);
-      download(JSON.stringify(json), `${safeName(n.title)}.daigaku.json`, 'application/json');
+      if ((await download(JSON.stringify(json), `${safeName(n.title)}.daigaku.json`, 'application/json')) === 'saved') toast('書き出しました');
     } },
     '-',
     { el: covers },
@@ -880,8 +925,9 @@ async function exportCurrentPdf() {
   try {
     toast('PDFを作成しています…', 60000);
     const bytes = await exportPdf(S.note);
-    download(new Blob([bytes], { type: 'application/pdf' }), `${safeName(S.note.title)}.pdf`);
-    toast('PDFを書き出しました');
+    const r = await download(new Blob([bytes], { type: 'application/pdf' }), `${safeName(S.note.title)}.pdf`);
+    if (r === 'saved') toast('PDFを書き出しました');
+    else if (r === 'cancelled') $('#toast').hidden = true; // 失敗なら download() のエラーを出したままにする
   } catch (e) {
     toast('PDFを書き出せませんでした: ' + e.message, 6000);
   }
@@ -986,7 +1032,10 @@ function fitZoom() {
   const sc = $('#scroller');
   const pages = S.note ? pagesOf(S.note) : [];
   const maxW = Math.max(PAGE_A4.w, ...pages.map((p) => p.w));
-  const avail = (sc.clientWidth || window.innerWidth) - 32;
+  // 左右の余白(切り欠きを避ける幅を含む。#pages の padding)を除いた幅に合わせる
+  const ps = getComputedStyle($('#pages'));
+  const pad = (parseFloat(ps.paddingLeft) || 16) + (parseFloat(ps.paddingRight) || 16);
+  const avail = (sc.clientWidth || window.innerWidth) - pad;
   return clampZoom(Math.min(avail / maxW, 1.5));
 }
 const clampZoom = (z) => Math.max(0.3, Math.min(4, z));
@@ -1311,7 +1360,7 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v21\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v22\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 図形補正の様子(最後の数本): オン/オフ、最後に止めていた時間と揺れ、整えた結果
 const debugShapes = [];

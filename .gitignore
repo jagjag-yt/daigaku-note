@@ -1,2 +1,9 @@
 node_modules/
 *.log
+www/
+_site/
+test-results/
+playwright-report/
+test/ui/__screenshots__/
+/build/
+/ios-out/

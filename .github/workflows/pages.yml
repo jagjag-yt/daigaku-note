@@ -21,9 +21,7 @@ jobs:
       - name: テスト
         run: npm test
       - name: 公開するファイルだけ集める
-        run: |
-          mkdir _site
-          cp -r index.html style.css sw.js manifest.webmanifest js vendor icons _site/
+        run: node scripts/build-web.mjs _site
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
