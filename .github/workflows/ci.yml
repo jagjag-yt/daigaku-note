@@ -128,6 +128,7 @@ jobs:
           if [ "$major" -lt 26 ]; then echo "::error::Xcode 26 以上が要ります(今は $major)"; exit 1; fi
       - run: npm ci
       - name: 画面のファイルをアプリに入れる
+        id: sync
         run: npm run build:web && npx cap sync ios
       - name: 作って、iPhone・iPad のシミュレーターで起動して確かめる
         run: scripts/ios-sim.sh
@@ -139,10 +140,10 @@ jobs:
           retention-days: 30
       # 実機用(署名なし)。Windows の Sideloadly で自分の Apple ID で署名して入れる(docs/アプリ化.md)
       - name: 実機用の .ipa(署名なし)を作る
-        if: success() || failure()
+        if: (success() || failure()) && steps.sync.outcome == 'success'
         run: scripts/ios-ipa.sh
       - uses: actions/upload-artifact@v4
-        if: success() || failure()
+        if: (success() || failure()) && steps.sync.outcome == 'success'
         with:
           name: daigaku-note-ios-ipa
           path: ios-ipa/

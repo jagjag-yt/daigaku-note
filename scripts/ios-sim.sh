@@ -23,7 +23,7 @@ echo "== $(xcodebuild -version | tr '\n' ' ')"
 # 署名なし・Intel と Apple シリコンの両方の Mac 向け(Appetize.io などでも動くように)
 if ! xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Debug \
   -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-  -derivedDataPath build/ios ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO \
+  -derivedDataPath build/ios -clonedSourcePackagesDirPath build/spm ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO \
   build > "$OUT/xcodebuild.log" 2>&1; then
   grep -E 'error:|BUILD FAILED|The following build commands failed' "$OUT/xcodebuild.log" | head -n 40
   echo "::error::iOS アプリを作れませんでした(全部のログは Artifacts の xcodebuild.log)"
