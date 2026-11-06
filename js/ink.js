@@ -183,7 +183,7 @@ export function drawStroke(ctx, d, off = [0, 0], geo = geometry(d)) {
 }
 
 // ---------- 図形補正 ----------
-// 書き終わりにペンを止めると、直線・円/楕円・三角形・四角形に整える。
+// 書き終わり(ペンを止めたとき・離したとき)に、直線・円/楕円・三角形・四角形・多角形に整える。
 
 function perpDist(p, a, b) {
   const dx = b[0] - a[0], dy = b[1] - a[1];
@@ -223,6 +223,56 @@ function axisRect(pts, e) {
   const med = (v, f) => { if (!v.length) return f; v.sort((u, w) => u - w); return v[v.length >> 1]; };
   const [x0, x1, y0, y1] = side.map((v, i) => med(v, e[i]));
   return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+}
+
+// 角の位置を整える: 角と角のあいだの点(両端の 20% を除く)に直線を当てはめ、となりの直線との交点を角にする。
+// 手ぶれで角の点が数 pt ずれていても、辺の向きから正しい位置が求まる。交点が遠すぎるときは元の角のまま
+function refineCorners(pts, corners, lim) {
+  const n = pts.length, k = corners.length;
+  const idx = corners.map((c) => pts.indexOf(c));
+  if (idx.some((i) => i < 0)) return corners;
+  const lines = [];
+  for (let e = 0; e < k; e++) {
+    const a = idx[e], b = e + 1 < k ? idx[e + 1] : idx[0] + n;
+    const len = b - a;
+    const seg = [];
+    for (let j = a + Math.ceil(len * 0.2); j <= b - Math.ceil(len * 0.2); j++) seg.push(pts[j % n]);
+    if (seg.length < 2) return corners;
+    let mx = 0, my = 0;
+    for (const q of seg) { mx += q[0]; my += q[1]; }
+    mx /= seg.length; my /= seg.length;
+    let sxx = 0, syy = 0, sxy = 0;
+    for (const q of seg) { const dx = q[0] - mx, dy = q[1] - my; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; }
+    const th = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+    lines.push([mx, my, Math.cos(th), Math.sin(th)]);
+  }
+  return corners.map((c, e) => {
+    const L1 = lines[(e + k - 1) % k], L2 = lines[e];
+    const det = L1[2] * L2[3] - L1[3] * L2[2];
+    if (Math.abs(det) < 0.2) return c; // ほぼ平行
+    const t = ((L2[0] - L1[0]) * L2[3] - (L2[1] - L1[1]) * L2[2]) / det;
+    const q = [L1[0] + L1[2] * t, L1[1] + L1[3] * t];
+    return dist(q[0], q[1], c[0], c[1]) < lim ? q : c;
+  });
+}
+
+// 辺がどれだけまっすぐか: 角と角のあいだの点(両端の 20% を除く)が、角を結ぶ線からずれている量の平均を
+// 辺の長さで割ったもの。各辺のうち最大の値を返す。ふくらんだ円を多角形とみなさないために使う
+function bowOf(ring, corners) {
+  const m = ring.length, k = corners.length;
+  let worst = 0;
+  for (let e = 0; e < k; e++) {
+    const A = corners[e], B = corners[(e + 1) % k];
+    let ia = ring.indexOf(A), ib = ring.indexOf(B);
+    if (ia < 0 || ib < 0) continue;
+    if (ib <= ia) ib += m;
+    const len = ib - ia, el = dist(A[0], A[1], B[0], B[1]);
+    if (!el) continue;
+    let sum = 0, cnt = 0;
+    for (let j = ia + Math.ceil(len * 0.2); j <= ib - Math.ceil(len * 0.2); j++) { sum += perpDist(ring[j % m], A, B); cnt++; }
+    if (cnt) worst = Math.max(worst, sum / cnt / el);
+  }
+  return worst;
 }
 
 function douglasPeucker(pts, eps) {
@@ -312,6 +362,28 @@ export function recognizeShape(flat) {
     if (!corners.some((m) => dist(m[0], m[1], c[0], c[1]) < Math.min(L * 0.06, minSide * 0.3))) corners.push(c);
   }
   dropStraight(corners);
+  // 平行な辺があると、ダグラス・ポーカーは辺の途中の点を角に選ぶことがある。
+  // 各角を、両どなりの角を結ぶ線からいちばん離れた点(本当の角)に動かし直す
+  if (corners.length >= 3 && corners.length <= 8) {
+    const ring = closedPts.slice(0, -1), m = ring.length;
+    for (let it = 0; it < 3; it++) {
+      let moved = false;
+      for (let e = 0; e < corners.length; e++) {
+        const k = corners.length, A = corners[(e + k - 1) % k], B = corners[(e + 1) % k];
+        let ia = ring.indexOf(A), ib = ring.indexOf(B);
+        if (ia < 0 || ib < 0) continue;
+        if (ib <= ia) ib += m;
+        let best = corners[e], bd = perpDist(best, A, B);
+        for (let j = ia + 1; j < ib; j++) {
+          const q = ring[j % m], dq = perpDist(q, A, B);
+          if (dq > bd) { bd = dq; best = q; }
+        }
+        if (best !== corners[e]) { corners[e] = best; moved = true; }
+      }
+      if (!moved) break;
+    }
+    dropStraight(corners);
+  }
 
   // 円・楕円の候補(外接する長方形から)
   const cx = (bx0 + bx1) / 2, cy = (by0 + by1) / 2;
@@ -324,17 +396,27 @@ export function recognizeShape(flat) {
   }
   ellErr /= n;
 
-  // 多角形からのずれの平均(pt)
-  const polyErr = corners.length === 3 || corners.length === 4 ? polyErrOf(pts, corners) : Infinity;
+  // 辺のまっすぐさ(角を整える前に測る。整えたあとの角は点の列の中にないため)
+  const bow = corners.length >= 3 && corners.length <= 8 ? bowOf(closedPts.slice(0, -1), corners) : 1;
+  // 角の位置を辺の向きから整える
+  const fixed = corners.length >= 3 && corners.length <= 8 ? refineCorners(closedPts.slice(0, -1), corners, size * 0.15) : corners;
+  // 多角形からのずれの平均(pt)。整えた角と元の角の、よく沿うほうを使う
+  let polyErr = Infinity;
+  if (corners.length >= 3 && corners.length <= 8) {
+    const e0 = polyErrOf(pts, corners), e1 = polyErrOf(pts, fixed);
+    if (e1 < e0) corners.splice(0, corners.length, ...fixed);
+    polyErr = Math.min(e0, e1);
+  }
+  const polyErr34 = corners.length === 3 || corners.length === 4 ? polyErr : Infinity;
   // 角の丸い四角形は、角がうまく見つからない(丸みの途中が角になる)ことがある。
   // 見つかった角の多角形より、外接する長方形のほうがよく沿い、楕円よりはっきり沿っていれば長方形にする
   // (台形・平行四辺形・五角形は、外接する長方形からのずれが大きいので当たらない)
   {
     const rc = axisRect(pts, [bx0, bx1, by0, by1]);
     const rErr = polyErrOf(pts, rc);
-    if (rErr < polyErr && rErr < ellErr * 0.6 && rErr < size * 0.02) return { type: 'rect', pts: densify(rc, true, p) };
+    if (rErr < polyErr34 && rErr < ellErr * 0.6 && rErr < size * 0.02) return { type: 'rect', pts: densify(rc, true, p) };
   }
-  if (polyErr < Infinity) {
+  if (polyErr34 < Infinity) {
     if (polyErr <= ellErr && polyErr < size * 0.06) {
       if (corners.length === 3) return { type: 'triangle', pts: densify(corners, true, p) };
       // 辺がほぼ水平・垂直なら、きれいな長方形にする。
@@ -352,8 +434,12 @@ export function recognizeShape(flat) {
         return dev < 0.22 || dist(c[0], c[1], d[0], d[1]) * Math.sin(dev) < Math.min(6, minSide * 0.3);
       });
       if (x1 - x0 > 4 && y1 - y0 > 4 && axis) return { type: 'rect', pts: densify(rc, true, p) };
-      return { type: 'quad', pts: densify(corners, true, p) };
+      if (bow < 0.05) return { type: 'quad', pts: densify(corners, true, p) };
     }
+  }
+  // 五角形・六角形など(角が 5〜8 個): 楕円よりはっきり沿っていれば、角を結んだ多角形にする
+  if (corners.length >= 5 && corners.length <= 8) {
+    if (bow < 0.05 && polyErr < ellErr * 0.6 && polyErr < size * 0.04) return { type: 'polygon', pts: densify(corners, true, p) };
   }
   if (rx < 4 || ry < 4 || ellErr > size * 0.08) return null;
   if (rx / ry > 0.85 && rx / ry < 1.18) rx = ry = (rx + ry) / 2;

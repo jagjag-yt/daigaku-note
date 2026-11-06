@@ -948,7 +948,7 @@ function bindEditor() {
     S.shapes = !S.shapes;
     savePrefs();
     refreshToolbar();
-    toast(S.shapes ? '図形補正をオンにしました(書き終わりでペンを止めると図形に整えます)' : '図形補正をオフにしました');
+    toast(S.shapes ? '図形補正をオンにしました(書き終えると、直線・円・三角形・四角形などに整えます)' : '図形補正をオフにしました');
   };
   $('#undo').onclick = undo;
   $('#redo').onclick = redo;
@@ -1360,7 +1360,7 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v22\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v23\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 図形補正の様子(最後の数本): オン/オフ、最後に止めていた時間と揺れ、整えた結果
 const debugShapes = [];
@@ -1745,6 +1745,12 @@ function flushPen() {
 
 async function finishStroke(a) {
   const d = a.d;
+  // 図形補正がオンなら、ペンを離したときにも図形に整える(止めて整えたものはそのまま)
+  if (S.shapes && !a.shaped && d.pts.length) {
+    const shape = recognizeShape(d.pts);
+    if (debugOn) a.dbgShape = '離した: ' + (shape ? shape.type : '図形でない');
+    if (shape) { d.pts = shape.pts; d.shape = shape.type; }
+  }
   if (debugOn && d.pts.length) debugShape(a);
   if (!d.pts.length) return paintLive(a.v, '');
   pushUndo({ undo: [['stroke.del', { ids: [d.id] }]], redo: [['stroke.undel', { ids: [d.id] }]], pages: [a.v.pg.id] });

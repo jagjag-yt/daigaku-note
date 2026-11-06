@@ -87,10 +87,6 @@ test('図形でないものは整えない', () => {
   const arc = [];
   for (let i = 0; i <= 40; i++) { const a = (i / 40) * Math.PI; arc.push(100 + Math.cos(a) * 50, 100 + Math.sin(a) * 50, 0.5); }
   assert.equal(shape(arc), null);
-  // 星形(5つの角)
-  const star = [];
-  for (let i = 0; i < 5; i++) { const a = (i * 4 * Math.PI) / 5; star.push([Math.cos(a) * 60, Math.sin(a) * 60]); }
-  assert.equal(shape(polygon(star)), null);
   // 点・短い線
   assert.equal(shape([0, 0, 0.5, 1, 1, 0.5, 2, 1, 0.5]), null);
 });
@@ -114,4 +110,27 @@ test('台形・平行四辺形・五角形は長方形にしない', () => {
   for (const k of [20, 30, 40]) assert.equal(shape(polygon([[k, 0], [120 - k, 0], [120, 80], [0, 80]], { start: 0.2 })), 'quad', '台形 ' + k);
   for (const k of [20, 30]) assert.equal(shape(polygon([[k, 0], [120 + k, 0], [120, 80], [0, 80]], { start: 0.2 })), 'quad', '平行四辺形 ' + k);
   assert.notEqual(shape(polygon([[50, 0], [100, 40], [100, 100], [0, 100], [0, 40]], { start: 0.1 })), 'rect', '家の形');
+});
+
+test('五角形・六角形・星形は多角形になる', () => {
+  const reg = (k, r, rot = 0) => Array.from({ length: k }, (_, i) => [Math.cos(rot + (i * 2 * Math.PI) / k) * r, Math.sin(rot + (i * 2 * Math.PI) / k) * r]);
+  for (const r of [30, 60, 150]) {
+    for (const start of [0, 0.13, 0.5]) {
+      assert.equal(shape(polygon(reg(5, r, -Math.PI / 2), { start, noise: r * 0.02 })), 'polygon', `五角形 r${r} start ${start}`);
+      assert.equal(shape(polygon(reg(6, r), { start, noise: r * 0.02 })), 'polygon', `六角形 r${r} start ${start}`);
+    }
+  }
+  // 家の形(五角形)
+  assert.equal(shape(polygon([[50, 0], [100, 40], [100, 100], [0, 100], [0, 40]], { start: 0.1 })), 'polygon');
+  // 星形(5つの角、線が交わる)
+  const star = [];
+  for (let i = 0; i < 5; i++) { const a = (i * 4 * Math.PI) / 5; star.push([Math.cos(a) * 60, Math.sin(a) * 60]); }
+  assert.equal(shape(polygon(star)), 'polygon');
+});
+
+test('円は多角形にしない', () => {
+  for (const r of [12, 25, 60, 150]) for (const ov of [0, 0.05, 0.15]) {
+    const t = shape(ellipse(r, r * 1.04, { noise: r * 0.06, over: ov }));
+    assert.ok(t === 'circle' || t === 'ellipse', `r${r} over ${ov}: ${t}`);
+  }
 });
