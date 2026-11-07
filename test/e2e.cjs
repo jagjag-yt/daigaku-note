@@ -105,6 +105,10 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
   const pent = [];
   for (let i = 0; i <= 5; i++) { const a = -Math.PI / 2 + (i * 2 * Math.PI) / 5; pent.push([X(0.85) + Math.cos(a) * 50, Y(0.6) + Math.sin(a) * 50]); }
   await draw(page, pent, { steps: 8 });
+  // 曲線(半円): すぐ離すと弧に整う
+  const half = [];
+  for (let i = 0; i <= 20; i++) { const a = Math.PI + (i / 20) * Math.PI; half.push([X(0.3) + Math.cos(a) * 60, Y(0.85) + Math.sin(a) * 60]); }
+  await draw(page, half, { steps: 4 });
   // 四角形(辺の途中から書き始める)
   await draw(page, [[X(0.52), Y(0.352)], [X(0.6), Y(0.352)], [X(0.601), Y(0.55)], [X(0.452), Y(0.548)], [X(0.45), Y(0.352)], [X(0.52), Y(0.353)]], { hold: 900, steps: 6, jitter: 1.5 });
   await page.waitForTimeout(200);
@@ -113,6 +117,7 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
   if (!shapes.includes('rect')) throw new Error('四角の補正に失敗 ' + shapes);
   if (!shapes.includes('triangle')) throw new Error('すぐ離した三角の補正に失敗 ' + shapes);
   if (!shapes.includes('polygon')) throw new Error('すぐ離した五角形の補正に失敗 ' + shapes);
+  if (!shapes.includes('arc')) throw new Error('すぐ離した半円の補正に失敗 ' + shapes);
   log('図形補正: 既定オフ、オンにすると', shapes.join(', '));
   // 書いている途中で止まっただけ(L字): 一度直線に整っても、続けて書けば元の線に戻って続きが足される
   await draw(page, [[X(0.7), Y(0.7)], [X(0.85), Y(0.7)]], { hold: 800, steps: 12, jitter: 1.5 });

@@ -948,7 +948,7 @@ function bindEditor() {
     S.shapes = !S.shapes;
     savePrefs();
     refreshToolbar();
-    toast(S.shapes ? '図形補正をオンにしました(書き終えると、直線・円・三角形・四角形などに整えます)' : '図形補正をオフにしました');
+    toast(S.shapes ? '図形補正をオンにしました(書き終えると、直線・弧・円・三角形・四角形などに整えます)' : '図形補正をオフにしました');
   };
   $('#undo').onclick = undo;
   $('#redo').onclick = redo;
@@ -1360,7 +1360,7 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v23\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v24\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 図形補正の様子(最後の数本): オン/オフ、最後に止めていた時間と揺れ、整えた結果
 const debugShapes = [];

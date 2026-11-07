@@ -278,6 +278,84 @@ function bowOf(ring, corners) {
   return worst;
 }
 
+// 開いた線を円の一部(弧)に当てはめる → {type:'arc', pts} または null
+function fitArc(pts, L, chord, p) {
+  const n = pts.length;
+  // 代数的な円の当てはめ(Kåsa 法)で中心と半径の見当をつけ、ガウス・ニュートン法で数回直す
+  let mx = 0, my = 0;
+  for (const [x, y] of pts) { mx += x; my += y; }
+  mx /= n; my /= n;
+  let suu = 0, svv = 0, suv = 0, suuu = 0, svvv = 0, suvv = 0, svuu = 0;
+  for (const [x, y] of pts) {
+    const u = x - mx, v = y - my;
+    suu += u * u; svv += v * v; suv += u * v;
+    suuu += u * u * u; svvv += v * v * v; suvv += u * v * v; svuu += v * u * u;
+  }
+  const det = suu * svv - suv * suv;
+  if (Math.abs(det) < 1e-9) return null;
+  const b1 = (suuu + suvv) / 2, b2 = (svvv + svuu) / 2;
+  let cx = mx + (b1 * svv - b2 * suv) / det, cy = my + (b2 * suu - b1 * suv) / det;
+  let R = 0;
+  for (const [x, y] of pts) R += dist(x, y, cx, cy);
+  R /= n;
+  for (let it = 0; it < 5; it++) {
+    // 残差 r_i = |q_i - c| - R を小さくする(J = [-(dx)/d, -(dy)/d, -1])
+    let a11 = 0, a12 = 0, a13 = 0, a22 = 0, a23 = 0, a33 = 0, g1 = 0, g2 = 0, g3 = 0;
+    for (const [x, y] of pts) {
+      const d = dist(x, y, cx, cy) || 1e-9, j1 = -(x - cx) / d, j2 = -(y - cy) / d, r = d - R;
+      a11 += j1 * j1; a12 += j1 * j2; a13 -= j1; a22 += j2 * j2; a23 -= j2; a33 += 1;
+      g1 += j1 * r; g2 += j2 * r; g3 -= r;
+    }
+    // 3x3 の連立方程式 A·δ = -g をクラメルの公式で解く
+    const D = a11 * (a22 * a33 - a23 * a23) - a12 * (a12 * a33 - a23 * a13) + a13 * (a12 * a23 - a22 * a13);
+    if (Math.abs(D) < 1e-12) break;
+    const h1 = -g1, h2 = -g2, h3 = -g3;
+    const d1 = h1 * (a22 * a33 - a23 * a23) - a12 * (h2 * a33 - a23 * h3) + a13 * (h2 * a23 - a22 * h3);
+    const d2 = a11 * (h2 * a33 - a23 * h3) - h1 * (a12 * a33 - a23 * a13) + a13 * (a12 * h3 - h2 * a13);
+    const d3 = a11 * (a22 * h3 - h2 * a23) - a12 * (a12 * h3 - h2 * a13) + h1 * (a12 * a23 - a22 * a13);
+    cx += d1 / D; cy += d2 / D; R += d3 / D;
+  }
+  if (!(R > 0) || !isFinite(cx) || !isFinite(cy)) return null;
+  // ほとんどまっすぐな線(半径が線の長さよりずっと大きい)は弧にしない
+  if (R > L * 3) return null;
+  // 円からのずれ
+  let sum = 0, mxr = 0;
+  for (const [x, y] of pts) { const e = Math.abs(dist(x, y, cx, cy) - R); sum += e; mxr = Math.max(mxr, e); }
+  const mean = sum / n;
+  if (mean > Math.max(0.8, chord * 0.025) || mxr > Math.max(2.5, chord * 0.08)) return null;
+  // 中心のまわりを一方向に回っていること(行ったり来たりしない)
+  let prev = Math.atan2(pts[0][1] - cy, pts[0][0] - cx), sweep = 0, back = 0;
+  const a0 = prev;
+  for (let i = 1; i < n; i++) {
+    const a = Math.atan2(pts[i][1] - cy, pts[i][0] - cx);
+    let da = a - prev;
+    if (da > Math.PI) da -= 2 * Math.PI;
+    if (da < -Math.PI) da += 2 * Math.PI;
+    sweep += da;
+    prev = a;
+  }
+  // 戻り(進む向きと逆の動き)の合計
+  prev = a0;
+  for (let i = 1; i < n; i++) {
+    const a = Math.atan2(pts[i][1] - cy, pts[i][0] - cx);
+    let da = a - prev;
+    if (da > Math.PI) da -= 2 * Math.PI;
+    if (da < -Math.PI) da += 2 * Math.PI;
+    if (da * sweep < 0) back -= Math.abs(da);
+    prev = a;
+  }
+  const abs = Math.abs(sweep);
+  if (abs < 0.35 || abs > 5.8 || -back > abs * 0.1) return null; // 約20°〜330°
+  // 書き始めの点から、半径 R の弧を書き終わりの角度まで
+  const out = [];
+  const k = Math.max(8, Math.ceil((abs * R) / 3));
+  for (let i = 0; i <= k; i++) {
+    const a = a0 + (sweep * i) / k;
+    out.push(cx + Math.cos(a) * R, cy + Math.sin(a) * R, p);
+  }
+  return { type: 'arc', pts: out };
+}
+
 function douglasPeucker(pts, eps) {
   if (pts.length < 3) return pts;
   let maxD = 0, idx = 0;
@@ -325,8 +403,10 @@ export function recognizeShape(flat) {
     return { type: 'line', pts: densify([first, last], false, p) };
   }
 
+  // 開いた曲線: 円の一部(弧)によく沿っていれば弧にする
+  if (chord > L * 0.22) return fitArc(pts, L, chord, p);
+
   // 閉じた図形(始点と終点が近い)
-  if (chord > L * 0.22) return null;
   // 書き終わりが始点を通り過ぎていたら、始点にいちばん近づいたところで切る
   {
     let bi = n - 1, bd = chord;
