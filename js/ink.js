@@ -362,7 +362,7 @@ function fitArc(pts, L, chord, p) {
     const a = a0 + (sweep * i) / k;
     out.push(cx + Math.cos(a) * R, cy + Math.sin(a) * R, p);
   }
-  return { type: 'arc', pts: out };
+  return { type: 'arc', pts: out, err: mean };
 }
 
 // 開いた線を折れ線(まっすぐな線を2〜5本)に当てはめる → {type:'polyline', pts} または null
@@ -400,7 +400,7 @@ function fitPolyline(pts, L, p) {
     }
   }
   if (sum / n > Math.max(1, L * 0.012)) return null;
-  return { type: 'polyline', pts: densify(cs, false, p) };
+  return { type: 'polyline', pts: densify(cs, false, p), err: sum / n };
 }
 
 function douglasPeucker(pts, eps) {
@@ -451,7 +451,12 @@ export function recognizeShape(flat) {
   }
 
   // 開いた線: 円の一部(弧)、または折れ線(まっすぐな線を2〜5本つないだ形)によく沿っていれば整える
-  if (chord > L * 0.22) return fitArc(pts, L, chord, p) || fitPolyline(pts, L, p);
+  // 両方当てはまるときは、ずれのずっと小さいほう(大きな線の中の小さな「く」を弧で飲み込まない)
+  if (chord > L * 0.22) {
+    const a = fitArc(pts, L, chord, p), b = fitPolyline(pts, L, p);
+    const best = a && b ? (b.err < a.err * 0.6 ? b : a) : a || b;
+    return best ? { type: best.type, pts: best.pts } : null;
+  }
 
   // 閉じた図形(始点と終点が近い)
   // 書き終わりが始点を通り過ぎていたら、始点にいちばん近づいたところで切る
