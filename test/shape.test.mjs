@@ -83,10 +83,6 @@ test('図形でないものは整えない', () => {
   const sp = [];
   for (let i = 0; i <= 120; i++) { const a = i / 10; sp.push(100 + Math.cos(a) * a * 6, 100 + Math.sin(a) * a * 6, 0.5); }
   assert.equal(shape(sp), null);
-  // 半円(開いた弧)
-  const arc = [];
-  for (let i = 0; i <= 40; i++) { const a = (i / 40) * Math.PI; arc.push(100 + Math.cos(a) * 50, 100 + Math.sin(a) * 50, 0.5); }
-  assert.equal(shape(arc), null);
   // 点・短い線
   assert.equal(shape([0, 0, 0.5, 1, 1, 0.5, 2, 1, 0.5]), null);
 });
@@ -167,4 +163,80 @@ test('ジグザグ(取り消し線)・W は多角形にしない', () => {
   const w = [[0, 0], [20, 40], [40, 5], [60, 40], [80, 0]], wp = [];
   for (let i = 0; i < 4; i++) { const a = w[i], b = w[i + 1]; for (let t = 0; t < 1; t += 0.05) wp.push(a[0] + (b[0] - a[0]) * t + rnd(), a[1] + (b[1] - a[1]) * t + rnd(), 0.5); }
   assert.notEqual(shape(wp), 'polygon', 'W');
+});
+
+const arc = (r, a0, a1, { noise = 1, k = 60 } = {}) => {
+  const out = [];
+  for (let i = 0; i <= k; i++) { const a = a0 + ((a1 - a0) * i) / k; out.push(100 + Math.cos(a) * r + rnd() * noise, 100 + Math.sin(a) * r + rnd() * noise, 0.5); }
+  return out;
+};
+
+test('曲線(円の一部)は弧になる', () => {
+  for (const r of [25, 60, 200]) {
+    for (const [a0, a1] of [[0, Math.PI / 2], [0, Math.PI], [1, 1 + 1.5 * Math.PI], [3, 3 - 2]]) {
+      const res = recognizeShape(arc(r, a0, a1, { noise: Math.max(0.6, r * 0.015) }));
+      assert.equal(res?.type, 'arc', `r${r} ${a0}→${a1}`);
+      // 端は書いたところの近く
+      assert.ok(Math.hypot(res.pts[0] - (100 + Math.cos(a0) * r), res.pts[1] - (100 + Math.sin(a0) * r)) < 3);
+    }
+  }
+});
+
+test('S字・波線・ほぼ直線は弧にしない', () => {
+  const s = [];
+  for (let i = 0; i <= 80; i++) { const t = i / 80; s.push(t * 150, Math.sin(t * Math.PI * 2) * 30, 0.5); }
+  assert.notEqual(shape(s), 'arc', 'S字');
+  const w = [];
+  for (let i = 0; i <= 120; i++) w.push(i * 2, Math.sin(i / 6) * 8, 0.5);
+  assert.notEqual(shape(w), 'arc', '波線');
+  const l = [];
+  for (let i = 0; i <= 60; i++) l.push(i * 3, 10 + Math.sin(i / 5) * 1.2 + rnd(), 0.5);
+  assert.equal(shape(l), 'line', 'ほぼ直線');
+});
+
+const pathPts = (cs, { noise = 1, step = 2 } = {}) => {
+  const out = [];
+  for (let i = 0; i < cs.length - 1; i++) {
+    const a = cs[i], b = cs[i + 1], l = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    for (let t = 0; t < l; t += step) out.push(a[0] + ((b[0] - a[0]) * t) / l + rnd() * noise, a[1] + ((b[1] - a[1]) * t) / l + rnd() * noise, 0.5);
+  }
+  const e = cs[cs.length - 1];
+  out.push(e[0], e[1], 0.5);
+  return out;
+};
+
+test('折れ線(くの字・Z・稲妻)は折れ線になる', () => {
+  assert.equal(shape(pathPts([[60, 0], [20, 50], [60, 100]])), 'polyline', 'く');
+  assert.equal(shape(pathPts([[0, 0], [100, 0], [0, 80], [100, 80]])), 'polyline', 'Z');
+  assert.equal(shape(pathPts([[30, 0], [10, 25], [25, 35], [0, 120]])), 'polyline', '稲妻');
+  assert.equal(shape(pathPts([[0, 0], [100, 0], [100, 60]])), 'polyline', 'L');
+});
+
+test('曲線や波線は折れ線にしない', () => {
+  const s = [];
+  for (let i = 0; i <= 80; i++) { const t = i / 80; s.push(t * 150, Math.sin(t * Math.PI * 2) * 30, 0.5); }
+  assert.notEqual(shape(s), 'polyline', 'S字');
+  const u = [];
+  for (let i = 0; i <= 60; i++) { const x = -1 + i / 30; u.push(x * 50, x * x * 80, 0.5); }
+  assert.notEqual(shape(u), 'polyline', '放物線');
+});
+
+test('書き終わりでペンを止めて揺れていても、小さな弧は弧になる', () => {
+  for (const [r, sw] of [[15, Math.PI / 2], [15, Math.PI], [30, Math.PI / 3], [30, Math.PI / 2]]) {
+    for (let k = 0; k < 10; k++) {
+      const pts = arc(r, 0, sw, { noise: 0.3, k: Math.ceil(r * sw / 1.5) });
+      const ex = pts[pts.length - 3], ey = pts[pts.length - 2];
+      for (let t = 0; t < 500; t += 25) pts.push(ex + Math.sin(t / 40 + k) * 1.5, ey + Math.cos(t / 55 + k) * 1.5, 0.5);
+      assert.equal(shape(pts), 'arc', `r${r} ${sw.toFixed(2)} #${k}`);
+    }
+  }
+});
+
+test('大きな線の中の小さな角(く+長い斜線、1か所だけ曲がった線)は弧にせず折れ線にする', () => {
+  for (let k = 0; k < 10; k++) {
+    assert.equal(shape(pathPts([[60, 0], [20, 35], [50, 55], [0, 160]], { noise: 0.8 })), 'polyline', 'く+長い斜線 #' + k);
+    // 内角 140° で1か所だけ曲がる
+    const a = (40 * Math.PI) / 180;
+    assert.equal(shape(pathPts([[0, 0], [100, 0], [100 + Math.cos(a) * 100, Math.sin(a) * 100]], { noise: 0.8 })), 'polyline', '内角140° #' + k);
+  }
 });
