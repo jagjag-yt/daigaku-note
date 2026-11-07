@@ -193,3 +193,30 @@ test('S字・波線・ほぼ直線は弧にしない', () => {
   for (let i = 0; i <= 60; i++) l.push(i * 3, 10 + Math.sin(i / 5) * 1.2 + rnd(), 0.5);
   assert.equal(shape(l), 'line', 'ほぼ直線');
 });
+
+const pathPts = (cs, { noise = 1, step = 2 } = {}) => {
+  const out = [];
+  for (let i = 0; i < cs.length - 1; i++) {
+    const a = cs[i], b = cs[i + 1], l = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    for (let t = 0; t < l; t += step) out.push(a[0] + ((b[0] - a[0]) * t) / l + rnd() * noise, a[1] + ((b[1] - a[1]) * t) / l + rnd() * noise, 0.5);
+  }
+  const e = cs[cs.length - 1];
+  out.push(e[0], e[1], 0.5);
+  return out;
+};
+
+test('折れ線(くの字・Z・稲妻)は折れ線になる', () => {
+  assert.equal(shape(pathPts([[60, 0], [20, 50], [60, 100]])), 'polyline', 'く');
+  assert.equal(shape(pathPts([[0, 0], [100, 0], [0, 80], [100, 80]])), 'polyline', 'Z');
+  assert.equal(shape(pathPts([[30, 0], [10, 25], [25, 35], [0, 120]])), 'polyline', '稲妻');
+  assert.equal(shape(pathPts([[0, 0], [100, 0], [100, 60]])), 'polyline', 'L');
+});
+
+test('曲線や波線は折れ線にしない', () => {
+  const s = [];
+  for (let i = 0; i <= 80; i++) { const t = i / 80; s.push(t * 150, Math.sin(t * Math.PI * 2) * 30, 0.5); }
+  assert.notEqual(shape(s), 'polyline', 'S字');
+  const u = [];
+  for (let i = 0; i <= 60; i++) { const x = -1 + i / 30; u.push(x * 50, x * x * 80, 0.5); }
+  assert.notEqual(shape(u), 'polyline', '放物線');
+});

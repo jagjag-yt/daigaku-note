@@ -948,7 +948,7 @@ function bindEditor() {
     S.shapes = !S.shapes;
     savePrefs();
     refreshToolbar();
-    toast(S.shapes ? '図形補正をオンにしました(書き終えると、直線・弧・円・三角形・四角形などに整えます)' : '図形補正をオフにしました');
+    toast(S.shapes ? '図形補正をオンにしました(書き終えると、直線・折れ線・弧・円・三角形・四角形などに整えます)' : '図形補正をオフにしました');
   };
   $('#undo').onclick = undo;
   $('#redo').onclick = redo;

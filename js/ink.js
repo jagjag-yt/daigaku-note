@@ -356,6 +356,44 @@ function fitArc(pts, L, chord, p) {
   return { type: 'arc', pts: out };
 }
 
+// 開いた線を折れ線(まっすぐな線を2〜5本)に当てはめる → {type:'polyline', pts} または null
+function fitPolyline(pts, L, p) {
+  const n = pts.length;
+  const simp = douglasPeucker(pts, Math.max(2, L * 0.04));
+  if (simp.length < 3 || simp.length > 6) return null;
+  const cs = [...simp];
+  // 角を、両どなりの角を結ぶ線からいちばん離れた点に動かす(端の点は動かさない)
+  for (let it = 0; it < 3; it++) {
+    let moved = false;
+    for (let e = 1; e < cs.length - 1; e++) {
+      const ia = pts.indexOf(cs[e - 1]), ib = pts.indexOf(cs[e + 1]);
+      let best = cs[e], bd = perpDist(best, cs[e - 1], cs[e + 1]);
+      for (let j = ia + 1; j < ib; j++) { const dq = perpDist(pts[j], cs[e - 1], cs[e + 1]); if (dq > bd) { bd = dq; best = pts[j]; } }
+      if (best !== cs[e]) { cs[e] = best; moved = true; }
+    }
+    if (!moved) break;
+  }
+  // 各辺: 短すぎない、まっすぐ、角でしっかり曲がっている
+  let sum = 0;
+  for (let e = 0; e < cs.length - 1; e++) {
+    const A = cs[e], B = cs[e + 1], el = dist(A[0], A[1], B[0], B[1]);
+    if (el < Math.max(6, L * 0.06)) return null;
+    const ia = pts.indexOf(A), ib = pts.indexOf(B);
+    let s2 = 0, c2 = 0;
+    for (let j = ia; j <= ib; j++) { const dq = perpDist(pts[j], A, B); sum += dq; if (j > ia + (ib - ia) * 0.2 && j < ib - (ib - ia) * 0.2) { s2 += dq; c2++; } }
+    if (c2 && s2 / c2 / el > 0.04) return null; // ふくらんでいる(曲線)
+    if (e > 0) {
+      const P = cs[e - 1];
+      const a1 = Math.atan2(A[1] - P[1], A[0] - P[0]), a2 = Math.atan2(B[1] - A[1], B[0] - A[0]);
+      let turn = Math.abs(a2 - a1);
+      if (turn > Math.PI) turn = 2 * Math.PI - turn;
+      if (turn < 0.35) return null; // 角でほとんど曲がっていない
+    }
+  }
+  if (sum / n > Math.max(1, L * 0.012)) return null;
+  return { type: 'polyline', pts: densify(cs, false, p) };
+}
+
 function douglasPeucker(pts, eps) {
   if (pts.length < 3) return pts;
   let maxD = 0, idx = 0;
@@ -403,8 +441,8 @@ export function recognizeShape(flat) {
     return { type: 'line', pts: densify([first, last], false, p) };
   }
 
-  // 開いた曲線: 円の一部(弧)によく沿っていれば弧にする
-  if (chord > L * 0.22) return fitArc(pts, L, chord, p);
+  // 開いた線: 円の一部(弧)、または折れ線(まっすぐな線を2〜5本つないだ形)によく沿っていれば整える
+  if (chord > L * 0.22) return fitArc(pts, L, chord, p) || fitPolyline(pts, L, p);
 
   // 閉じた図形(始点と終点が近い)
   // 書き終わりが始点を通り過ぎていたら、始点にいちばん近づいたところで切る
