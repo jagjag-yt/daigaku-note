@@ -220,3 +220,14 @@ test('曲線や波線は折れ線にしない', () => {
   for (let i = 0; i <= 60; i++) { const x = -1 + i / 30; u.push(x * 50, x * x * 80, 0.5); }
   assert.notEqual(shape(u), 'polyline', '放物線');
 });
+
+test('書き終わりでペンを止めて揺れていても、小さな弧は弧になる', () => {
+  for (const [r, sw] of [[15, Math.PI / 2], [15, Math.PI], [30, Math.PI / 3], [30, Math.PI / 2]]) {
+    for (let k = 0; k < 10; k++) {
+      const pts = arc(r, 0, sw, { noise: 0.3, k: Math.ceil(r * sw / 1.5) });
+      const ex = pts[pts.length - 3], ey = pts[pts.length - 2];
+      for (let t = 0; t < 500; t += 25) pts.push(ex + Math.sin(t / 40 + k) * 1.5, ey + Math.cos(t / 55 + k) * 1.5, 0.5);
+      assert.equal(shape(pts), 'arc', `r${r} ${sw.toFixed(2)} #${k}`);
+    }
+  }
+});

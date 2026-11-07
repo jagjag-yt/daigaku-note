@@ -323,11 +323,19 @@ function fitArc(pts, L, chord, p) {
   for (const [x, y] of pts) { const e = Math.abs(dist(x, y, cx, cy) - R); sum += e; mxr = Math.max(mxr, e); }
   const mean = sum / n;
   if (mean > Math.max(0.8, chord * 0.025) || mxr > Math.max(2.5, chord * 0.08)) return null;
-  // 中心のまわりを一方向に回っていること(行ったり来たりしない)
-  let prev = Math.atan2(pts[0][1] - cy, pts[0][0] - cx), sweep = 0, back = 0;
+  // 中心のまわりを一方向に回っていること(行ったり来たりしない)。
+  // 書き始め・書き終わりでペンを止めていると、その場の揺れが行ったり来たりに見えるので、
+  // 端から 4pt 以内に固まっている点は除いて調べる(端の点そのものは残す)
+  let s0 = 0, s1 = n - 1;
+  while (s0 < n - 1 && dist(pts[s0 + 1][0], pts[s0 + 1][1], pts[0][0], pts[0][1]) < 4) s0++;
+  while (s1 > s0 && dist(pts[s1 - 1][0], pts[s1 - 1][1], pts[n - 1][0], pts[n - 1][1]) < 4) s1--;
+  const core = [pts[0], ...pts.slice(s0 + 1, s1), pts[n - 1]];
+  const m = core.length;
+  if (m < 4) return null;
+  let prev = Math.atan2(core[0][1] - cy, core[0][0] - cx), sweep = 0, back = 0;
   const a0 = prev;
-  for (let i = 1; i < n; i++) {
-    const a = Math.atan2(pts[i][1] - cy, pts[i][0] - cx);
+  for (let i = 1; i < m; i++) {
+    const a = Math.atan2(core[i][1] - cy, core[i][0] - cx);
     let da = a - prev;
     if (da > Math.PI) da -= 2 * Math.PI;
     if (da < -Math.PI) da += 2 * Math.PI;
@@ -336,8 +344,8 @@ function fitArc(pts, L, chord, p) {
   }
   // 戻り(進む向きと逆の動き)の合計
   prev = a0;
-  for (let i = 1; i < n; i++) {
-    const a = Math.atan2(pts[i][1] - cy, pts[i][0] - cx);
+  for (let i = 1; i < m; i++) {
+    const a = Math.atan2(core[i][1] - cy, core[i][0] - cx);
     let da = a - prev;
     if (da > Math.PI) da -= 2 * Math.PI;
     if (da < -Math.PI) da += 2 * Math.PI;
@@ -345,7 +353,8 @@ function fitArc(pts, L, chord, p) {
     prev = a;
   }
   const abs = Math.abs(sweep);
-  if (abs < 0.35 || abs > 5.8 || -back > abs * 0.1) return null; // 約20°〜330°
+  // 浅い弧(約30°以下)は先に直線になり、約290°より大きい弧は閉じた形として調べられる
+  if (abs < 0.35 || abs > 5.8 || -back > abs * 0.1) return null;
   // 書き始めの点から、半径 R の弧を書き終わりの角度まで
   const out = [];
   const k = Math.max(8, Math.ceil((abs * R) / 3));
