@@ -6,7 +6,7 @@
   "description": "大学ノート: 無料・オフライン・クロスプラットフォームの手書きノート(PWA / Android / iOS)",
   "scripts": {
     "start": "node serve.mjs 8123",
-    "test": "node --test test/model.test.mjs test/shape.test.mjs test/webdav.test.mjs test/goodnotes.test.mjs test/http.test.mjs test/build.test.mjs",
+    "test": "node --test test/model.test.mjs test/shape.test.mjs test/webdav.test.mjs test/goodnotes.test.mjs test/http.test.mjs test/build.test.mjs test/server.test.mjs test/server-sync.test.mjs",
     "build:web": "node scripts/build-web.mjs",
     "test:ui": "playwright test --ignore-snapshots",
     "cap:sync": "node scripts/build-web.mjs && cap sync",

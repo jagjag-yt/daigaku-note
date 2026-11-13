@@ -105,6 +105,7 @@ GoodNotes の形式は公開されていないため、実物を調べて分か�
   - `js/app.js` 画面と入力
   - `sw.js` オフライン用 Service Worker
 - 設計の考え方と GoodNotes の調査からの反映: `docs/設計.md`
+- メールのログインだけで同期できる同期サーバー(Cloudflare Workers): `server/`(手順は `server/README.md`)
 
 ### 同期ファイルの形式(v1)
 
@@ -122,7 +123,7 @@ op の種類: `note.create / note.rename / note.delete / note.restore / page.add
 ## テスト
 
 ```
-npm test                       # マージ・図形補正・同期のカーソル・GoodNotes の線の読み方・アプリ版の通信のテスト(Node)
+npm test                       # マージ・図形補正・同期のカーソル・GoodNotes の線の読み方・アプリ版の通信・同期サーバーのテスト(Node)
 npm ci && npm run test:ui      # 画面の崩れのテスト(8つの画面の大きさ × Chromium・WebKit。docs/アプリ化.md)
 node test/native-e2e.cjs       # アプリ版(Android)の動きをブラウザで再現して確かめる(サーバーは上と同じ)
 node serve.mjs 8124 &          # アプリ
