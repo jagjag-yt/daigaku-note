@@ -35,8 +35,9 @@ WebDAV の URL・ユーザー名・アプリパスワードを手で入れなく
 
 - `Authorization: Bearer <token>`
 - `Authorization: Basic base64(<ユーザー名>:<token>)` … パスワードに鍵を入れる。ユーザー名は見ない(何でもよい)。
-  今のアプリはこちらで送るので、同期の設定に URL `https://note-api.quiz-make.com/dav/`・ユーザー名(何でもよい)・パスワード(鍵)を入れれば、そのまま同期できる。
-  アプリは「URL とユーザー名」ごとに同期の進み具合を覚えるので、ユーザー名には利用者ごとに違うもの(`userId` など)を入れるとよい。
+  アプリの同期の仕組み(`js/webdav.js`)はこちらで送る。アプリの「大学ノートアカウントで同期」(`js/account.js`)は、
+  ログインで受け取った `dav`・`userId`・`token` を、WebDAV の URL・ユーザー名・パスワードとして設定する。
+  (アプリは「URL とユーザー名」ごとに同期の進み具合を覚えるので、ユーザー名を利用者ごとに違う `userId` にしている)
 
 ### 同期の置き場(`/dav/`)
 
@@ -134,10 +135,17 @@ npx wrangler dev --var SECRET_PEPPER:testpepper --var RESEND_API_KEY:dummy --var
 `DEV_ECHO_OTP=1` のときは、メールを送らずに番号を応答(`devCode`)に入れる。手元から呼んだときだけ効き、
 Cloudflare を通った要求(本番)では設定しても効かない。
 
+アプリをこのサーバーにつなぐには、ブラウザの開発者ツールで
+`localStorage.setItem('daigaku-note.api', 'http://localhost:8787')` を実行してから開き直す(`npm start` の http://localhost:8123 は CORS で許可してある)。
+元に戻すには `localStorage.removeItem('daigaku-note.api')`。
+
+wrangler なしで試すなら `node test/worker-server.mjs 8131`(D1・R2 はメモリ上の代わり。番号は応答の `devCode` に入る)。
+
 テストは、リポジトリの直下で `npm test`(D1 は Node に入っている SQLite で、R2 はメモリで代わりをする。wrangler は要らない)。
 
 - `test/server.test.mjs` … ログイン・端末・CORS・WebDAV のまね・容量・退会
-- `test/server-sync.test.mjs` … 本物の `js/webdav.js` を2台ぶん動かし、このサーバーを通して変更と PDF を送り合う
+- `test/server-sync.test.mjs` … 本物の `js/webdav.js`・`js/account.js` を2台ぶん動かし、このサーバーを通して変更と PDF を送り合う
+- `test/ui/account.spec.js`(`npm run test:ui`)… 画面でログインし、2台で同期・端末を外す・ログアウト・アカウントの削除
 
 ## 無料プランの上限で気をつけること
 

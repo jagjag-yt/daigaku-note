@@ -45,6 +45,9 @@ async function layoutProblems(page, { touch, safeArea = {} }) {
     };
     const shown = (el) => {
       if (el.closest('[hidden]')) return false;
+      // たたんだ <details> の中身(Chromium では箱の大きさが残るので、見た目どおり「見えない」とする)
+      const det = el.closest('details:not([open])');
+      if (det && !el.closest('summary')) return false;
       const r = el.getBoundingClientRect();
       if (r.width < 1 || r.height < 1) return false;
       for (let e = el; e; e = e.parentElement) {
@@ -187,6 +190,15 @@ test('同期のダイアログ', async ({ page }) => {
   await expect(page.locator('#sync-dialog')).toBeVisible();
   await page.evaluate(() => document.activeElement?.blur());
   await check(page, 'sync-dialog');
+});
+
+test('同期のダイアログ(自分のサーバーの欄を開く)', async ({ page }) => {
+  await page.locator('#sync-btn').click();
+  await expect(page.locator('#sync-dialog')).toBeVisible();
+  await page.locator('#dav-details summary').click();
+  await expect(page.locator('#dav-url')).toBeVisible();
+  await page.evaluate(() => document.activeElement?.blur());
+  await check(page, 'sync-dialog-webdav');
 });
 
 test('本棚(ノートあり・長い名前)', async ({ page }) => {

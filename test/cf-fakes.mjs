@@ -129,7 +129,7 @@ export function fakeEnv(extra = {}) {
  * Worker を本物の HTTP で受けるサーバーを立てる。戻り値の url に fetch すればよい。
  * log には届いた要求(method と path)が順に入る。
  */
-export async function startWorker(worker, env) {
+export async function startWorker(worker, env, port = 0) {
   const log = [];
   const server = http.createServer(async (req, res) => {
     try {
@@ -157,7 +157,7 @@ export async function startWorker(worker, env) {
       res.end(String(e));
     }
   });
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  await new Promise((r) => server.listen(port, '127.0.0.1', r));
   return { url: `http://127.0.0.1:${server.address().port}`, log, close: () => new Promise((r) => server.close(r)) };
 }
 

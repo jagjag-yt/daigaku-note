@@ -69,7 +69,8 @@ const otpBurstSeconds = (env) => Number(env.OTP_BURST_SECONDS ?? 60);
 const ALLOWED_ORIGINS = new Set([
   'https://jagjag-yt.github.io', // 公開しているアプリ(GitHub Pages)
   'http://localhost:8123', // npm start
-  'http://localhost:8124', // 画面のテスト(test/e2e.cjs など)
+  'http://localhost:8124', // 通しの確認(test/e2e.cjs など)
+  'http://localhost:8130', // 画面のテスト(npm run test:ui。test/ui/account.spec.js)
   'capacitor://localhost', // iOS のアプリ
   'https://localhost', // Android のアプリ
 ]);

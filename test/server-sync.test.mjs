@@ -238,3 +238,66 @@ test('PDF が大きすぎる(413)なら変更だけ送る。容量がいっぱ�
     await s2.close();
   }
 });
+
+test('大学ノートアカウント(js/account.js)でログインした端末: 変更のあとの待ちは約20秒、閉じるときはすぐ送る、ログイン切れ・容量の知らせ', async () => {
+  const storage = new Map([['daigaku-note.api', srv.url]]);
+  globalThis.localStorage = { getItem: (k) => storage.get(k) ?? null };
+  const account = await import('../js/account.js');
+  try {
+    assert.equal(account.apiBase(), srv.url);
+    const email = 'app@example.com';
+    await account.sendCode(email);
+    const r = await account.verify(email, mail.lastCode(email));
+    assert.equal(r.dav, srv.url + '/dav/');
+    await assert.rejects(account.verify(email, '000000'), (e) => e.status === 400 && /番号/.test(e.message));
+
+    const A = await device('acct1111');
+    // アプリのログインの画面と同じ設定(ユーザー名は利用者の ID)
+    await A.dav.configure({ url: r.dav, user: r.userId, pass: r.token, auto: true, account: { email: r.email, deviceId: r.deviceId } });
+    assert.equal(A.dav._test.debounce(), 20_000);
+    await A.write('m', 'note.create', { title: 'アカウントのノート' });
+    A.dav.schedule(); // 書いたあと: 20秒待つ
+    assert.equal(env.DB.q('SELECT COUNT(*) AS n FROM op_files WHERE device = ?', 'acct1111')[0].n, 0);
+    await A.dav.flush(); // ノートを閉じた・画面を離れた: すぐ送る
+    assert.equal(env.DB.q('SELECT COUNT(*) AS n FROM op_files WHERE device = ?', 'acct1111')[0].n, 1);
+    ok(A.status());
+    const n = srv.log.length;
+    await A.dav.flush(); // 待っているものがなければ何もしない
+    assert.equal(srv.log.length, n);
+
+    // WebDAV で同期している端末は今までどおり(4秒、flush は何もしない)
+    const W = await device('webdav11');
+    await W.connect(await login('webdav-user@example.com'));
+    assert.equal(W.dav._test.debounce(), 4000);
+
+    // 端末の一覧・ほかの端末を外す
+    const r2 = await account.verify(email, await (async () => { await account.sendCode(email); return mail.lastCode(email); })());
+    const list = await account.devices(r2.token);
+    assert.equal(list.length, 2);
+    assert.deepEqual(list.filter((d) => d.current).map((d) => d.id), [r2.deviceId]);
+    assert.equal((await account.me(r2.token)).email, email);
+
+    // 容量いっぱい: 「容量の上限(1GB)」と出る
+    env.QUOTA_BYTES = '1';
+    await A.write('m', 'note.rename', { title: 'いっぱい' });
+    assert.match(await A.sync(), /容量の上限\(1GB\)に達したため、この端末の変更を送れませんでした/);
+    delete env.QUOTA_BYTES;
+
+    // 外されたら「ログインが切れました」と出し、authExpired() が true になる(ログインし直すまで)
+    await account.revoke(r2.token, r.deviceId);
+    assert.match(await A.sync(), /ログインが切れました。もう一度ログインしてください/);
+    assert.equal(A.dav.authExpired(), true);
+    await A.dav.configure({ url: r2.dav, user: r2.userId, pass: r2.token, auto: false, account: { email, deviceId: r2.deviceId } });
+    assert.equal(A.dav.authExpired(), false);
+    ok(await A.sync());
+
+    // ログアウト・アカウントの削除
+    await account.logout(r2.token);
+    await assert.rejects(account.me(r2.token), (e) => e.status === 401);
+    const r3 = await account.verify(email, await (async () => { await account.sendCode(email); return mail.lastCode(email); })());
+    await account.deleteAccount(r3.token);
+    await assert.rejects(account.me(r3.token), (e) => e.status === 401);
+  } finally {
+    delete globalThis.localStorage;
+  }
+});

@@ -272,6 +272,8 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
   // クラウド同期(WebDAV): 端末Aから送り、端末Bで受け取り、Bの変更をAへ
   const setDav = async (p) => {
     await p.click('#sync-btn');
+    // 自分のサーバー(WebDAV)の欄はたたんであるので開く
+    if ((await p.locator('#dav-details').getAttribute('open')) === null) await p.click('#dav-details summary');
     await p.fill('#dav-url', DAV);
     await p.fill('#dav-user', 'test');
     await p.fill('#dav-pass', 'pass');

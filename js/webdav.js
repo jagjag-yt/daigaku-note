@@ -12,6 +12,10 @@
 // さらに、端末のフォルダの ETag(中身が変わると変わる目印)を覚えておき、変わっていないフォルダは中を見ない。
 // ETag を返さないサーバーや、ETag の付け方があやしいサーバーのために、起動後の最初・手動・5分ごとの同期では全部のフォルダを見る。
 // 全部見たときに「ETag は同じなのに新しいファイルがあった」なら、そのサーバーでは ETag を使わない。
+//
+// 大学ノートアカウント(js/account.js・server/)で同期するときも、同期サーバーの /dav/ を WebDAV としてこのまま使う
+// (cfg.account がある)。違いは、変更のあとの待ちを長くすること(flush() で画面を離れるとき・ノートを閉じるときにすぐ送る)と、
+// ログイン切れ(401)・容量の上限(507)の知らせ方だけ。
 
 import * as db from './db.js';
 import { fileRefs, fileExt } from './model.js';
@@ -22,11 +26,19 @@ let cfg = {};
 let st = { key: '', sentC: 0, cur: {}, tags: {}, sentFiles: [] };
 let recorder = null, onRemoteChange = () => {}, onStatus = () => {};
 let timer = 0, running = false, again = false, againManual = false, dirsReady = '', lastFull = 0, gapSince = 0;
+let dirty = false, expired = false;
 const FULL_EVERY = 5 * 60_000; // 全部の端末のフォルダを見る間隔
 const GAP_WAIT = 2 * 60_000; // 自分の op の番号の抜けが埋まるのを待つ長さ
 
 export const config = () => ({ ...cfg });
 const enabled = () => !!(cfg.url && cfg.user);
+// 大学ノートアカウント(js/account.js)で同期しているか。cfg.account = { email, deviceId }
+const accountMode = () => !!cfg.account;
+// アカウントの鍵がサーバーに断られたか(外された・退会した・長く使わなかった)。設定し直すまで true
+export const authExpired = () => expired;
+// 変更してから送るまで待つ長さ。アカウントでは書いている途中に何度も送らないよう長めにする
+// (サーバーの書き込みの回数を抑えるため。画面を離れるとき・ノートを閉じるときは flush() ですぐ送る)
+const debounce = () => (accountMode() ? 20_000 : 4000);
 
 export async function init(opts) {
   recorder = opts.recorder;
@@ -37,7 +49,10 @@ export async function init(opts) {
   if (saved && saved.key === stateKey()) st = migrate(saved);
   onStatus(enabled() ? 'クラウド同期: 準備中' : '');
   setInterval(() => { if (enabled() && cfg.auto !== false && document.visibilityState === 'visible') syncNow(); }, 60_000);
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') schedule(500); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') schedule(500);
+    else flush(); // アカウントでは、画面を離れるときに待っている変更をすぐ送る
+  });
   window.addEventListener('online', () => schedule(500));
   if (enabled() && cfg.auto !== false) schedule(1000);
 }
@@ -116,17 +131,29 @@ export async function configure(next) {
     if (nextSt !== st) { gapSince = 0; lastFull = 0; }
     cfg = nextCfg;
     st = nextSt;
+    expired = false;
+    dirty = false;
     again = againManual = false; // 設定のあとはアプリが手動の同期を始める
   } finally {
     running = false;
   }
 }
 
-// 変更のあと少し待ってから同期する
-export function schedule(ms = 4000) {
+// 変更のあと少し待ってから同期する(ms を省くと、変更のあとの待ち: アカウントは約20秒、WebDAV は4秒)
+export function schedule(ms) {
   if (!enabled() || cfg.auto === false) return;
+  if (ms === undefined) { ms = debounce(); dirty = true; }
   clearTimeout(timer);
-  timer = setTimeout(() => syncNow(), ms);
+  timer = setTimeout(() => { dirty = false; syncNow(); }, ms);
+}
+
+// 変更のあとの待ちの途中なら、待たずにすぐ送る(アカウントのときだけ。画面を離れるとき・ノートを閉じるとき)。
+// WebDAV は待ちが短いので今までどおり
+export function flush() {
+  if (!dirty || !accountMode() || !enabled() || cfg.auto === false) return Promise.resolve();
+  clearTimeout(timer);
+  dirty = false;
+  return syncNow();
 }
 
 function base() {
@@ -469,7 +496,9 @@ export async function syncNow(manual = false) {
       if (manual) { st.lost = 0; await db.setMeta('davState', st); } // 手動の同期で知らせたら消す
     }
     if (gapSince) note += '。保存の終わっていない変更があるので、送るのを少し待っています';
-    if (sendErr) note += `。この端末の変更を送れませんでした(${sendErr.timeout ? '時間切れ' : sendErr instanceof TypeError ? 'サーバーに断られたか、接続が切れました' : sendErr.message})。次の同期でもう一度送ります`;
+    if (sendErr && sendErr.status === 507 && accountMode()) {
+      note += '。容量の上限(1GB)に達したため、この端末の変更を送れませんでした。変更はこの端末に保存されています';
+    } else if (sendErr) note += `。この端末の変更を送れませんでした(${sendErr.timeout ? '時間切れ' : sendErr instanceof TypeError ? 'サーバーに断られたか、接続が切れました' : sendErr.message})。次の同期でもう一度送ります`;
     if (st.tooBig && st.tooBig.length) {
       note += `。PDF・画像のうち ${st.tooBig.length} 個はサーバーに送れませんでした(大きさの上限を超えた可能性があります)`;
       note += '。手動で同期すると、もう一度送ってみます';
@@ -483,6 +512,8 @@ export async function syncNow(manual = false) {
     if (e instanceof TypeError && isNative && /^http:/i.test(cfg.url)) msg = 'アプリ版は https:// で始まるサーバーにだけ接続できます';
     else if (e instanceof TypeError) msg = isNative ? 'サーバーに接続できません。URL とネット接続を確認してください' : 'サーバーに接続できません。URL・ネット接続・CORS の設定を確認してください';
     else if (e.timeout) msg = 'サーバーからの応答がありません(時間切れ)。しばらくしてからもう一度同期します';
+    else if (e.status === 401 && accountMode()) { msg = 'ログインが切れました。もう一度ログインしてください'; expired = true; }
+    else if (e.status === 507 && accountMode()) msg = '容量の上限(1GB)に達しました';
     else if (e.status === 401) msg = 'ユーザー名またはパスワードが違います';
     else if (e.status === 404 || e.status === 409) msg = 'フォルダのURLが見つかりません';
     onStatus('クラウド同期に失敗しました: ' + msg);
@@ -498,4 +529,4 @@ export async function syncNow(manual = false) {
 }
 
 // テスト用
-export const _test = { migrate, endOf, rangeOf, unsent, planSend };
+export const _test = { migrate, endOf, rangeOf, unsent, planSend, debounce };
