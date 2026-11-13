@@ -11,7 +11,7 @@
 //   /dav/daigaku-note/                                    フォルダ(いつもある)
 //   /dav/daigaku-note/ops/                                フォルダ(いつもある)
 //   /dav/daigaku-note/ops/<端末ID>/                       フォルダ(MKCOL か、中へ PUT したときにできる)
-//   /dav/daigaku-note/ops/<端末ID>/<開始>-<終了>.json     変更のファイル → D1 の op_files に1行
+//   /dav/daigaku-note/ops/<端末ID>/<開始>-<終了>.json     変更のファイル → R2 の u/<利用者ID>/ops/<端末ID>/<名前>(目録は D1 の op_files に1行)
 //   /dav/daigaku-note/files/                              フォルダ(いつもある)
 //   /dav/daigaku-note/files/<sha256>.<拡張子>             PDF・画像 → R2 の u/<利用者ID>/files/<名前>(大きさは D1 の blobs)
 // ほかの形の住所は、読むときは 404、書くときは 403 で断る。消す(DELETE)・動かす(MOVE)は受けない(追記だけの置き場)。
@@ -19,20 +19,21 @@
 // ETag:
 //   ops/<端末ID>/ … op_logs.ver(そのフォルダに書くたびに増える)。アプリはこれが前と同じフォルダの中を見ない
 //   上のフォルダ … users.ver(利用者のどこかに書くたびに増える。Nextcloud と同じく、中が変わると上も変わる)
-//   変更のファイル … 書いたときのフォルダの ver
+//   変更のファイル … R2 が付けた ETag(D1 の目録にも写しておき、一覧ではそれを返す)
 //   PDF・画像 … 名前(中身の SHA-256)と大きさ
 // どれにも利用者 ID の一部を入れ、退会して作り直したときに、前の利用者の ETag と同じにならないようにする。
 
-import { allowRate, fail, newId, nowIso, readLimited, xmlEscape } from './lib.js';
+import { allowRate, fail, newId, nowIso, xmlEscape } from './lib.js';
 
 /** 1人が使える量(変更のファイル + PDF・画像)。超える書き込みは 507(容量不足)で断る。 */
 export const QUOTA_BYTES = 1024 * 1024 * 1024;
 
 /**
- * 変更のファイル1つの上限。D1 は1行 2MB までなので、それより少し下で断る(413)。
- * アプリは約500KBずつに分けて送る。送り直し(大きくなりうる)が断られても、アプリはふつうに送り直す。
+ * 変更のファイル1つの上限(超えたら 413)。中身は R2 に置くので D1 の1行の上限(2MB)には縛られない。
+ * アプリはふだん約500KBずつに分けて送る。大きくなるのは以前の版の取り残しの送り直し(GoodNotes の取り込み1冊ぶんなど)で、
+ * 断られてもアプリはふつうに分けて送り直すが、なるべく通るように余裕を持たせる。
  */
-export const MAX_OP_BYTES = 1900 * 1000;
+export const MAX_OP_BYTES = 20 * 1024 * 1024;
 
 /**
  * PDF・画像1つの上限。Cloudflare の無料プランは要求の本文が 100MB まで(それを超えると Workers に届く前に断られる)。
@@ -45,7 +46,7 @@ const MAX_OP_DIRS = 200;
 
 /**
  * 1人が1時間に書き込める回数(PUT とフォルダ作り)。D1 の書き込みの無料枠(1日10万行)を1人で使い切れないように。
- * アプリは書いてから4秒ほど待ってまとめて送るので、ふだんは1時間に数十〜数百回。
+ * アプリはアカウントで同期するとき、書いてから20秒ほど待ってまとめて送るので、ふだんは1時間に数十〜百数十回。
  */
 const WRITES_PER_HOUR = 1200;
 
@@ -58,6 +59,7 @@ const pad = (n) => String(n).padStart(9, '0');
 
 const quota = (env) => Number(env.QUOTA_BYTES) || QUOTA_BYTES;
 const maxFile = (env) => Number(env.MAX_FILE_BYTES) || MAX_FILE_BYTES;
+const maxOp = (env) => Number(env.MAX_OP_BYTES) || MAX_OP_BYTES;
 
 /**
  * 住所を読み解く。/dav の外なら null。
@@ -105,12 +107,12 @@ const COLLECTIONS = new Set(['root', 'app', 'ops', 'files']);
 const HREF = { root: '/dav/', app: '/dav/daigaku-note/', ops: '/dav/daigaku-note/ops/', files: '/dav/daigaku-note/files/' };
 const opdirHref = (device) => `${HREF.ops}${encodeURIComponent(device)}/`;
 const blobKey = (user, name) => `u/${user.user_id}/files/${name}`;
+const opKey = (user, path) => `u/${user.user_id}/ops/${path.device}/${path.name}`;
 
 // ETag(説明はこのファイルの始め)
 const uidTag = (user) => String(user.user_id).slice(2, 10);
 const rootTag = (user) => `"${uidTag(user)}-r${user.ver}"`;
 const dirTag = (user, ver) => `"${uidTag(user)}-d${ver}"`;
-const opTag = (user, ver) => `"${uidTag(user)}-o${ver}"`;
 const blobTag = (stem, bytes) => `"${stem}-${bytes}"`;
 
 const noBody = (status, headers = {}) => new Response(null, { status, headers });
@@ -191,7 +193,7 @@ async function propfind(request, env, user, path) {
     case 'opdir': {
       const [dir, files] = await db.batch([
         db.prepare('SELECT ver FROM op_logs WHERE user_id = ? AND device = ?').bind(user.user_id, path.device),
-        db.prepare('SELECT from_n, to_n, bytes, ver FROM op_files WHERE user_id = ? AND device = ? ORDER BY to_n, from_n')
+        db.prepare('SELECT from_n, to_n, bytes, etag FROM op_files WHERE user_id = ? AND device = ? ORDER BY to_n, from_n')
           .bind(user.user_id, path.device),
       ]);
       const d = dir.results[0];
@@ -200,16 +202,16 @@ async function propfind(request, env, user, path) {
       const out = [entry(href, { dir: true, etag: dirTag(user, d.ver) })];
       if (deep) {
         for (const f of files.results) {
-          out.push(entry(`${href}${pad(f.from_n)}-${pad(f.to_n)}.json`, { etag: opTag(user, f.ver), length: f.bytes }));
+          out.push(entry(`${href}${pad(f.from_n)}-${pad(f.to_n)}.json`, { etag: f.etag, length: f.bytes }));
         }
       }
       return multistatus(out);
     }
     case 'opfile': {
-      const f = await db.prepare('SELECT bytes, ver FROM op_files WHERE user_id = ? AND device = ? AND from_n = ? AND to_n = ?')
+      const f = await db.prepare('SELECT bytes, etag FROM op_files WHERE user_id = ? AND device = ? AND from_n = ? AND to_n = ?')
         .bind(user.user_id, path.device, path.from, path.to).first();
       if (!f) return noBody(404);
-      return multistatus([entry(`${opdirHref(path.device)}${path.name}`, { etag: opTag(user, f.ver), length: f.bytes })]);
+      return multistatus([entry(`${opdirHref(path.device)}${path.name}`, { etag: f.etag, length: f.bytes })]);
     }
     case 'file': {
       const f = await db.prepare('SELECT bytes FROM blobs WHERE user_id = ? AND name = ?').bind(user.user_id, path.name).first();
@@ -226,12 +228,11 @@ async function propfind(request, env, user, path) {
 async function read(request, env, user, path) {
   const head = request.method === 'HEAD';
   if (path.kind === 'opfile') {
-    const cols = head ? 'bytes, ver' : 'bytes, ver, body';
-    const f = await env.DB.prepare(`SELECT ${cols} FROM op_files WHERE user_id = ? AND device = ? AND from_n = ? AND to_n = ?`)
-      .bind(user.user_id, path.device, path.from, path.to).first();
-    if (!f) return noBody(404);
-    const headers = { 'content-type': 'application/json; charset=utf-8', etag: opTag(user, f.ver) };
-    return head ? noBody(200, { ...headers, 'content-length': String(f.bytes) }) : new Response(f.body, { status: 200, headers });
+    // 中身は R2 から(D1 の目録は引かない。目録に載るのは R2 に置き終えてからなので、一覧で見えたものは必ず読める)
+    const obj = head ? await env.FILES.head(opKey(user, path)) : await env.FILES.get(opKey(user, path));
+    if (!obj) return noBody(404);
+    const headers = { 'content-type': 'application/json; charset=utf-8', 'content-length': String(obj.size), etag: obj.httpEtag };
+    return new Response(head ? null : obj.body, { status: 200, headers });
   }
   if (path.kind === 'file') {
     // あるかどうかは R2 で決める(中身の置き場が正)。D1 の blobs は容量の計算用
@@ -277,54 +278,71 @@ async function put(request, env, user, path) {
 const tooBig = (what) => fail(413, `${what}が大きすぎます。`);
 const quotaFull = (env) => fail(507, `保存できる量(${Math.round(quota(env) / 1024 / 1024)}MB)を超えます。`);
 
+/** 本文の長さ(Content-Length)。ないか、おかしければ null(長さの分からない本文は R2 に流し込めない) */
+function contentLength(request) {
+  const header = request.headers.get('content-length');
+  const len = header === null ? NaN : Number(header);
+  return Number.isSafeInteger(len) && len >= 0 ? len : null;
+}
+const needLength = () => fail(411, '本文の長さ(Content-Length)が必要です。');
+
 /**
- * 変更のファイルを D1 に置く。
- *
- * 容量の確保・フォルダの ver を増やす・ファイルの行を書く、を1つの batch(まとめて成功か、まとめて失敗)で行う。
- * 容量を超えるときは users の UPDATE が0行になり、その合言葉(write_id)が入らないので、続く2つの INSERT も何もしない。
- * (「読む → 判定 → 書く」に分けると、同時に来た書き込みが古い使用量を読んで上限をすり抜ける)
+ * 変更のファイルを置く。中身は R2、目録(大きさ・ETag)は D1。
+ *   1. D1: 容量を確保する(上限を超えるなら 507。1つの命令で「読む → 判定 → 足す」をするので、同時に来てもすり抜けない)
+ *   2. R2: 中身を流し込む(Workers のメモリに全部は載せない)。失敗したら確保した分を戻す
+ *   3. D1: 目録の行を書き、フォルダの ver を増やす(1つの batch)。失敗したら確保した分を戻す
+ * 目録に載せるのを R2 に置き終えてからにするので、ほかの端末が一覧で見つけたファイルは必ず読める
+ * (先に載せると、置き終わる前に読みに来た端末が 404 を受けて、その回の同期が失敗する)。
+ * 3 が失敗したときは R2 に中身だけ残るが、目録にないので誰にも見えず、アプリが同じ名前で送り直したときに上書きされる。
  */
 async function putOpFile(request, env, user, path) {
-  const declared = Number(request.headers.get('content-length'));
-  if (declared > MAX_OP_BYTES) return tooBig('変更のファイル');
-  const buf = await readLimited(request, MAX_OP_BYTES);
-  if (!buf) return tooBig('変更のファイル');
-  let body;
-  try {
-    body = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(buf);
-  } catch {
-    return fail(400, '変更のファイルは UTF-8 の文字にしてください。');
-  }
-  const bytes = buf.byteLength;
+  const len = contentLength(request);
+  if (len === null) return needLength();
+  if (len > maxOp(env)) return tooBig('変更のファイル');
   const db = env.DB;
   const uid = user.user_id;
-  const nonce = newId('w');
-  const now = nowIso();
   const old = 'COALESCE((SELECT bytes FROM op_files WHERE user_id = ?1 AND device = ?2 AND from_n = ?3 AND to_n = ?4), 0)';
-  const [prev, reserved, , , dir] = await db.batch([
+  const [prev, reserved] = await db.batch([
     db.prepare('SELECT bytes FROM op_files WHERE user_id = ? AND device = ? AND from_n = ? AND to_n = ?').bind(uid, path.device, path.from, path.to),
     db.prepare(
-      `UPDATE users SET bytes_used = bytes_used + ?5 - ${old}, ver = ver + 1, write_id = ?6 ` +
-        `WHERE id = ?1 AND bytes_used + ?5 - ${old} <= ?7 ` +
+      `UPDATE users SET bytes_used = bytes_used + ?5 - ${old} ` +
+        `WHERE id = ?1 AND bytes_used + ?5 - ${old} <= ?6 ` +
         // 新しい端末のフォルダを作ることになるなら、フォルダの数の上限も見る
-        'AND (EXISTS (SELECT 1 FROM op_logs WHERE user_id = ?1 AND device = ?2) OR (SELECT COUNT(*) FROM op_logs WHERE user_id = ?1) < ?8)',
-    ).bind(uid, path.device, path.from, path.to, bytes, nonce, quota(env), MAX_OP_DIRS),
-    db.prepare(
-      'INSERT INTO op_logs (user_id, device, ver, latest_end, created_at) ' +
-        'SELECT ?1, ?2, 1, ?3, ?4 WHERE (SELECT write_id FROM users WHERE id = ?1) = ?5 ' +
-        'ON CONFLICT (user_id, device) DO UPDATE SET ver = op_logs.ver + 1, latest_end = max(op_logs.latest_end, excluded.latest_end)',
-    ).bind(uid, path.device, path.to, now, nonce),
-    db.prepare(
-      'INSERT INTO op_files (user_id, device, from_n, to_n, bytes, ver, created_at, body) ' +
-        'SELECT ?1, ?2, ?3, ?4, ?5, (SELECT ver FROM op_logs WHERE user_id = ?1 AND device = ?2), ?6, ?7 ' +
-        'WHERE (SELECT write_id FROM users WHERE id = ?1) = ?8 ' +
-        'ON CONFLICT (user_id, device, from_n, to_n) DO UPDATE SET ' +
-        'bytes = excluded.bytes, ver = excluded.ver, created_at = excluded.created_at, body = excluded.body',
-    ).bind(uid, path.device, path.from, path.to, bytes, now, body, nonce),
-    db.prepare('SELECT ver FROM op_logs WHERE user_id = ? AND device = ?').bind(uid, path.device),
+        'AND (EXISTS (SELECT 1 FROM op_logs WHERE user_id = ?1 AND device = ?2) OR (SELECT COUNT(*) FROM op_logs WHERE user_id = ?1) < ?7)',
+    ).bind(uid, path.device, path.from, path.to, len, quota(env), MAX_OP_DIRS),
   ]);
   if (!reserved.meta.changes) return quotaFull(env);
-  return noBody(prev.results.length ? 204 : 201, { etag: opTag(user, dir.results[0].ver) });
+  const before = prev.results[0]?.bytes ?? null;
+  const refund = () => db.prepare('UPDATE users SET bytes_used = bytes_used - ?2 + ?3 WHERE id = ?1').bind(uid, len, before ?? 0).run()
+    .catch((e) => console.log('refund failed', String(e)));
+
+  let stored;
+  try {
+    stored = await env.FILES.put(opKey(user, path), request.body ?? new Uint8Array(0), { httpMetadata: { contentType: 'application/json; charset=utf-8' } });
+  } catch (err) {
+    console.log('r2 put failed', String(err));
+    await refund();
+    return fail(500, '変更のファイルを保存できませんでした。');
+  }
+  const now = nowIso();
+  try {
+    await db.batch([
+      db.prepare('UPDATE users SET ver = ver + 1 WHERE id = ?').bind(uid),
+      db.prepare(
+        'INSERT INTO op_logs (user_id, device, ver, latest_end, created_at) VALUES (?1, ?2, 1, ?3, ?4) ' +
+          'ON CONFLICT (user_id, device) DO UPDATE SET ver = op_logs.ver + 1, latest_end = max(op_logs.latest_end, excluded.latest_end)',
+      ).bind(uid, path.device, path.to, now),
+      db.prepare(
+        'INSERT INTO op_files (user_id, device, from_n, to_n, bytes, etag, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ' +
+          'ON CONFLICT (user_id, device, from_n, to_n) DO UPDATE SET bytes = excluded.bytes, etag = excluded.etag, created_at = excluded.created_at',
+      ).bind(uid, path.device, path.from, path.to, stored.size, stored.httpEtag, now),
+    ]);
+  } catch (err) {
+    console.log('op index failed', String(err));
+    await refund();
+    return fail(500, '変更のファイルを保存できませんでした。');
+  }
+  return noBody(before === null ? 201 : 204, { etag: stored.httpEtag });
 }
 
 /**
@@ -334,10 +352,9 @@ async function putOpFile(request, env, user, path) {
  * R2 に置けなかったら、確保した分を戻す。
  */
 async function putBlob(request, env, user, path) {
-  const header = request.headers.get('content-length');
-  const len = header === null ? NaN : Number(header);
   // 長さが分からない本文は R2 に流し込めない(ブラウザ・アプリの送り方なら必ず付く)
-  if (!Number.isSafeInteger(len) || len < 0) return fail(411, '本文の長さ(Content-Length)が必要です。');
+  const len = contentLength(request);
+  if (len === null) return needLength();
   if (len > maxFile(env)) return tooBig('ファイル');
   const db = env.DB;
   const uid = user.user_id;

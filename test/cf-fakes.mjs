@@ -4,6 +4,7 @@
 //   startWorker … Worker の fetch を本物の HTTP で受ける小さなサーバー(本文の長さなど、通信の形も本物と同じにするため)
 import http from 'node:http';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 
 // node:sqlite はまだ「試験中」の機能で、読み込むと警告が出る。テストの出力を汚さないよう、この警告だけ消す
 const emitWarning = process.emitWarning;
@@ -79,7 +80,8 @@ async function toBytes(value) {
 
 export function fakeR2() {
   const objects = new Map(); // key → { bytes, httpMetadata, uploaded }
-  const meta = (key, o) => ({ key, size: o.bytes.byteLength, uploaded: o.uploaded, httpMetadata: o.httpMetadata, httpEtag: `"${o.bytes.byteLength}"` });
+  // ETag は本物と同じく中身の MD5(同じ中身なら同じ、違えば違う)
+  const meta = (key, o) => ({ key, size: o.bytes.byteLength, uploaded: o.uploaded, httpMetadata: o.httpMetadata, httpEtag: `"${createHash('md5').update(o.bytes).digest('hex')}"` });
   return {
     objects,
     failPut: false, // true にすると put が失敗する(戻しのテスト用)

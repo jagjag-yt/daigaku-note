@@ -295,6 +295,12 @@ test('WebDAV: MKCOL・PROPFIND・PUT・GET・HEAD が js/webdav.js の期待ど�
   assert.ok(dir.items['/dav/daigaku-note/ops/dev1/000000001-000000003.json']);
   assert.match(dir.text, /<d:getcontentlength>\d+<\/d:getcontentlength>/);
 
+  // 中身は R2、D1 には目録(大きさ・ETag)だけ
+  const uid = env.DB.q("SELECT id FROM users WHERE email = 'dav@example.com'")[0].id;
+  const obj = env.FILES.objects.get(`u/${uid}/ops/dev1/000000001-000000003.json`);
+  assert.equal(Buffer.from(obj.bytes).toString(), body);
+  assert.deepEqual(env.DB.q('SELECT bytes FROM op_files WHERE user_id = ?', uid), [{ bytes: Buffer.byteLength(body) }]);
+  assert.equal(dir.items['/dav/daigaku-note/ops/dev1/000000001-000000003.json'], put.headers.get('etag'));
   const get = await req('GET', name);
   assert.equal(get.status, 200);
   assert.equal(await get.text(), body);
@@ -368,7 +374,7 @@ test('WebDAV: ほかの利用者の置き場は見えない。.. や %2e%2e で�
 });
 
 test('WebDAV: 大きさの上限(413)と容量の上限(507)', async () => {
-  const qEnv = fakeEnv({ QUOTA_BYTES: '10000', MAX_FILE_BYTES: '6000' });
+  const qEnv = fakeEnv({ QUOTA_BYTES: '10000', MAX_FILE_BYTES: '6000', MAX_OP_BYTES: '7000' });
   const s2 = await startWorker(worker, qEnv);
   const c = captureMail();
   try {
@@ -377,8 +383,8 @@ test('WebDAV: 大きさの上限(413)と容量の上限(507)', async () => {
     const v = await (await p('/otp/verify', { method: 'POST', body: JSON.stringify({ email: 'q@example.com', code: c.lastCode() }) })).json();
     const auth = { authorization: basic(v.token), origin: ORIGIN };
     const put = (path, body) => p('/dav/daigaku-note/' + path, { method: 'PUT', body, headers: auth });
-    // 変更のファイルは 1.9MB まで
-    const big = await put('ops/d/000000001-000000001.json', 'x'.repeat(1_900_001));
+    // 変更のファイルは MAX_OP_BYTES まで(本番は 20MB)
+    const big = await put('ops/d/000000001-000000001.json', 'x'.repeat(7001));
     assert.equal(big.status, 413);
     assert.equal(big.headers.get('access-control-allow-origin'), ORIGIN); // ブラウザでも 413 が見える
     // ファイルは MAX_FILE_BYTES まで(アプリは 413 なら変更だけ送る)
@@ -400,22 +406,27 @@ test('WebDAV: 大きさの上限(413)と容量の上限(507)', async () => {
     const me = await (await p('/me', { headers: auth })).json();
     assert.deepEqual(me.usage, { bytes: 9000, quota: 10000 });
     // R2 に置けなかったら、確保した分を戻す
+    // (変更のファイルも同じ。目録の行もできず、フォルダの ETag も変わらない)
+    const verBefore = qEnv.DB.q('SELECT ver FROM op_logs')[0].ver;
     qEnv.FILES.failPut = true;
     assert.equal((await put(`files/${'a'.repeat(64)}.png`, new Uint8Array(500))).status, 500);
+    assert.equal((await put('ops/d/000000002-000000002.json', 'w'.repeat(500))).status, 500);
+    assert.equal((await put('ops/d/000000001-000000001.json', 'w'.repeat(500))).status, 500);
     qEnv.FILES.failPut = false;
     assert.equal(qEnv.DB.q("SELECT bytes_used FROM users WHERE email = 'q@example.com'")[0].bytes_used, 9000);
     assert.equal(qEnv.DB.q('SELECT COUNT(*) AS n FROM blobs')[0].n, 2);
-    // 長さの分からない本文(chunked)は 411
-    const chunked = await new Promise((resolve, reject) => {
+    assert.deepEqual(qEnv.DB.q('SELECT from_n, bytes FROM op_files'), [{ from_n: 1, bytes: 3000 }]);
+    assert.equal(qEnv.DB.q('SELECT ver FROM op_logs')[0].ver, verBefore);
+    // 長さの分からない本文(chunked)は 411(R2 に流し込めないため)
+    const chunked = (path) => new Promise((resolve, reject) => {
       const u = new URL(s2.url);
-      const r = http.request({ host: u.hostname, port: u.port, path: `/dav/daigaku-note/files/${'9'.repeat(64)}.png`, method: 'PUT', headers: { authorization: auth.authorization, 'transfer-encoding': 'chunked' } }, (res) => { res.resume(); resolve(res.statusCode); });
+      const r = http.request({ host: u.hostname, port: u.port, path, method: 'PUT', headers: { authorization: auth.authorization, 'transfer-encoding': 'chunked' } }, (res) => { res.resume(); resolve(res.statusCode); });
       r.on('error', reject);
       r.write('abc');
       r.end();
     });
-    assert.equal(chunked, 411);
-    // UTF-8 でない変更のファイルは断る
-    assert.equal((await put('ops/d/000000003-000000003.json', new Uint8Array([0xff, 0xfe, 0x00]))).status, 400);
+    assert.equal(await chunked(`/dav/daigaku-note/files/${'9'.repeat(64)}.png`), 411);
+    assert.equal(await chunked('/dav/daigaku-note/ops/d/000000005-000000005.json'), 411);
   } finally {
     c.restore();
     await s2.close();

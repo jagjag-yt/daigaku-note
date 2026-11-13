@@ -5,8 +5,8 @@
 --
 -- 方針:
 --   ・アプリから見ると、このサーバーは WebDAV の「ただのファイル置き場」(js/webdav.js がそのまま使える)。
---     変更のファイル(ops/<端末>/<開始>-<終了>.json)はこのデータベースに1ファイル1行で持つ。
---     PDF・画像は R2 に置き、ここには大きさだけを持つ(容量の計算のため)。
+--   ・中身(変更のファイル・PDF・画像)はすべて R2 に置く。ここには目録(名前・大きさ・ETag)だけを持つ。
+--     D1 は無料プランだと1つのデータベースが 500MB までなので、中身を入れると数十人で埋まるため。
 --   ・メールアドレスは、探すために必要なので平文で持つ。それ以外の個人情報は持たない。
 --   ・秘密(6桁の数字・端末の鍵)はハッシュだけを持つ。
 
@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
   last_seen_at TEXT NOT NULL,
   bytes_used   INTEGER NOT NULL DEFAULT 0, -- 使っている量(変更のファイル + PDF・画像)。上限を超える書き込みは断る
   ver          INTEGER NOT NULL DEFAULT 0, -- 書き込みのたびに1つ増やす。上のフォルダ(ops/ など)の ETag に使う
-  write_id     TEXT                        -- 書き込みの合言葉。容量の確保と書き込みを1つの batch で行うため(src/dav.js)
+  write_id     TEXT                        -- 書き込みの合言葉。容量の確保と blobs の行の書き込みを1つの batch で行うため(src/dav.js)
 );
 
 -- ログイン用の6桁の数字。使い捨て。数字そのものは持たず、ハッシュだけ。5回間違えたら使えなくなる。
@@ -59,18 +59,16 @@ CREATE TABLE IF NOT EXISTS op_logs (
   FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 );
 
--- 変更のファイル(daigaku-note/ops/<端末ID>/<開始番号>-<終了番号>.json)。1ファイル1行。
--- 中身(body)は D1 の1行 2MB の上限より下(1.9MB まで)。アプリは約500KBずつに分けて送る。
--- body は最後の列にする(大きさを足し合わせるときに、中身のページまで読まないように)。
+-- 変更のファイル(daigaku-note/ops/<端末ID>/<開始番号>-<終了番号>.json)の目録。1ファイル1行。
+-- 中身は R2 の u/<利用者>/ops/<端末ID>/<名前>。R2 に置き終えてからこの行を書く(一覧に見えたものは必ず読める)。
 CREATE TABLE IF NOT EXISTS op_files (
   user_id     TEXT NOT NULL,
   device      TEXT NOT NULL,
   from_n      INTEGER NOT NULL,
   to_n        INTEGER NOT NULL,
-  bytes       INTEGER NOT NULL,           -- 中身のバイト数(UTF-8)
-  ver         INTEGER NOT NULL,           -- 書いたときのフォルダの ver。このファイルの ETag
+  bytes       INTEGER NOT NULL,           -- 中身のバイト数
+  etag        TEXT NOT NULL,              -- R2 が付けた ETag(一覧の getetag に返す)
   created_at  TEXT NOT NULL,
-  body        TEXT NOT NULL,
   PRIMARY KEY (user_id, device, from_n, to_n),
   FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 );
