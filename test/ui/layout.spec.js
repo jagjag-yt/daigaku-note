@@ -257,6 +257,8 @@ test('ログイン・アカウント作成(ログインしようとしたらア�
   await page.evaluate(() => {
     document.querySelector('#acct-sent-to').textContent = 'student@example.com';
     document.querySelector('#acct-expires').textContent = '10:10';
+    // 番号は毎回変わるので、マスに見える数字も決まった数字にそろえる
+    [...document.querySelector('#acct-code-form .code-cells').children].forEach((c, i) => { c.textContent = String(i + 1); });
     document.activeElement?.blur();
   });
   await check(page, 'auth-no-account');
