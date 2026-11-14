@@ -30,6 +30,8 @@ const P = {
   file: '<path d="M7 3.5h7l4.5 4.5v12.5H7z"/><path d="M14 3.5V8h4.5"/>',
   import: '<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5"/><path d="M5 13v5.5A1.5 1.5 0 006.5 20h11a1.5 1.5 0 001.5-1.5V13"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7"/>',
+  user: '<circle cx="12" cy="8.5" r="3.8"/><path d="M4.5 20c.9-3.6 3.9-5.8 7.5-5.8s6.6 2.2 7.5 5.8"/>',
+  mail: '<rect x="3.5" y="5.5" width="17" height="13" rx="2"/><path d="M4 7l8 6 8-6"/>',
   notebook: '<rect x="5.5" y="3.5" width="13" height="17" rx="1.5"/><path d="M9 3.5v17M3.5 7.5h3.5M3.5 12h3.5M3.5 16.5h3.5"/>',
 };
 
