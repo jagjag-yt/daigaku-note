@@ -138,7 +138,8 @@ function route() {
     return;
   }
   accountUI.hideAuth();
-  if (/^#\/(login|signup)\b/.test(location.hash)) { location.hash = '#/'; return; } // ログイン済みなら本棚へ
+  // ログイン済みなら本棚へ(履歴に足さずに置き換える。足すと、戻るでログインのページの住所に戻り、また本棚へ…と抜けられないため)
+  if (/^#\/(login|signup)\b/.test(location.hash)) history.replaceState(null, '', '#/');
   const m = location.hash.match(/^#\/note\/(\w+)(?:\/p\/(\w+))?/);
   if (m) openNote(m[1], m[2]);
   else showLibrary();
@@ -499,7 +500,7 @@ function bindLibrary() {
     }
   };
   $('#sync-btn').onclick = () => openSync();
-  accountUI.init({ askConfirm, toast, showDialog, coarse, setSyncStatus, openSync, route, countNotes });
+  accountUI.init({ askConfirm, toast, showDialog, coarse, setSyncStatus, route, countNotes, penBusy: () => !!(active || penPending) });
   $('#sync-close').onclick = () => $('#sync-dialog').close();
   $('#sync-export').onclick = async () => {
     const json = await buildSyncFile(S.rec.device);
@@ -1029,6 +1030,7 @@ async function openNote(id, pageId) {
     const note = emptyNote(id);
     for (const op of ops) applyOp(note, op);
     if (!note.titleS || note.deleted) { location.hash = '#/'; return; }
+    if (!accountUI.loggedIn()) return; // 読み込んでいるあいだにログインが切れた(ログインのページを出したまま)
     S.note = note;
     S.undo = [];
     S.redo = [];

@@ -257,6 +257,8 @@ async function handleOtpVerify(request, env) {
   // ログインなのにアカウントがない: 鍵は出さず、番号も使用済みにしない(このままアカウントを作れるように)
   const existing = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
   if (purpose === 'login' && !existing) {
+    // この回の試行は数えない(間違えたあとに正しい番号を入れた人が、同じ番号でアカウントを作れなくならないように)
+    await env.DB.prepare('UPDATE otp_requests SET attempts = attempts - 1 WHERE id = ? AND attempts > 0').bind(row.id).run();
     return json({ ok: false, reason: 'no_account', message: 'このメールアドレスのアカウントはありません。' }, 404);
   }
   // 使用済みにする。同時に正しい番号が2回届いても、鍵を出すのは1回だけ

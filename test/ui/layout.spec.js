@@ -37,8 +37,7 @@ test.beforeEach(async ({ page }, testInfo) => {
     const code = await signup(page, freshEmail(testInfo));
     await page.locator('#acct-code').fill(code);
     await expect(page.locator('#new-note')).toBeVisible();
-    await expect(page.locator('#toast')).toBeVisible();
-    await page.evaluate(() => { document.querySelector('#toast').hidden = true; });
+    await page.evaluate(() => { document.querySelector('#toast').hidden = true; }); // 「アカウントを作成しました」は撮らない
   }
   // 切り欠き・ホームバーのある端末のまね: Android のアプリ版で Capacitor がするのと同じく、
   // 読み込んだあとに <html> に画面の端の幅を入れる

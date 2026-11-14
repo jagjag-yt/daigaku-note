@@ -197,6 +197,15 @@ test('ログインとアカウント作成: purpose で文面と扱いが変わ�
   assert.equal(bad.status, 400);
   assert.equal(bad.data.reason, undefined);
 
+  // 4回間違えたあとに正しい番号を入れても、同じ番号でアカウントを作れる(アカウントがないと知らせた回は数えない)
+  await api('/otp/send', { method: 'POST', body: { email: 'new3@example.com', purpose: 'login' } });
+  const c3 = mail.lastCode('new3@example.com');
+  const w3 = c3 === '000000' ? '111111' : '000000';
+  for (let i = 0; i < 4; i++) assert.equal((await api('/otp/verify', { method: 'POST', body: { email: 'new3@example.com', code: w3, purpose: 'login' } })).status, 400);
+  assert.equal((await api('/otp/verify', { method: 'POST', body: { email: 'new3@example.com', code: c3, purpose: 'login' } })).status, 404);
+  const made3 = await api('/otp/verify', { method: 'POST', body: { email: 'new3@example.com', code: c3, purpose: 'signup' } });
+  assert.equal(made3.status, 200, JSON.stringify(made3.data));
+
   // アカウント作成の文面。すでにあるアドレスなら、そのままログインして existing: true
   await api('/otp/send', { method: 'POST', body: { email: 'known@example.com', purpose: 'signup' } });
   assert.match(lastMail('known@example.com').subject, /アカウント作成の確認番号/);

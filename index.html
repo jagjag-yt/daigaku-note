@@ -27,7 +27,7 @@
           <label class="field">メールアドレス<input id="auth-login-email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com" aria-describedby="auth-login-msg"></label>
           <p class="acct-msg" id="auth-login-msg" role="alert"></p>
           <button type="submit" class="primary acct-wide">ログイン番号を送る</button>
-          <p class="auth-switch">アカウントをお持ちでない方は <a href="#/signup" id="auth-to-signup">アカウントを作成</a></p>
+          <p class="auth-switch">アカウントをお持ちでない方は、<a href="#/signup" id="auth-to-signup">アカウントを作成</a></p>
         </form>
 
         <!-- アカウント作成 -->
@@ -42,7 +42,7 @@
           <label class="field">メールアドレス<input id="auth-signup-email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com" aria-describedby="auth-signup-msg"></label>
           <p class="acct-msg" id="auth-signup-msg" role="alert"></p>
           <button type="submit" class="primary acct-wide">確認番号を送る</button>
-          <p class="auth-switch">すでにアカウントをお持ちの方は <a href="#/login" id="auth-to-login">ログイン</a></p>
+          <p class="auth-switch">すでにアカウントをお持ちの方は、<a href="#/login" id="auth-to-login">ログイン</a></p>
         </form>
 
         <!-- 6桁の番号(ログイン・アカウント作成の共通) -->
@@ -56,8 +56,8 @@
           </div>
           <p class="acct-msg" id="acct-code-msg" role="alert"></p>
           <div id="acct-noacct" class="acct-noacct" hidden>
-            <p>このメールアドレスのアカウントはまだありません。このままアカウントを作成できます。</p>
-            <button type="button" id="acct-noacct-create" class="primary acct-wide">このアドレスでアカウントを作成</button>
+            <p id="acct-noacct-text" role="status">このメールアドレスのアカウントはまだありません。このままアカウントを作成できます。</p>
+            <button type="button" id="acct-noacct-create" class="primary acct-wide" aria-describedby="acct-noacct-text">このアドレスでアカウントを作成</button>
           </div>
           <button type="submit" id="acct-verify" class="primary acct-wide">ログイン</button>
           <div class="acct-links">

@@ -49,7 +49,6 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 :where(button.on) { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
 [hidden] { display: none !important; }
 .invisible { visibility: hidden; }
-.native .web-only { display: none; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 button.danger { color: var(--danger); }
 button.primary.danger-fill { background: var(--danger); border-color: var(--danger); color: #fff; }
@@ -404,11 +403,6 @@ dialog .acct-card p { margin: 6px 0 0; }
 .acct-danger[open] summary::before { content: '▾'; }
 .acct-danger summary::-webkit-details-marker { display: none; }
 .acct-danger p { margin: 4px 0 10px; }
-#dav-details { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 6px; }
-#dav-details summary { min-height: 36px; display: flex; align-items: center; font-size: 15px; font-weight: 600; cursor: pointer; }
-#dav-details summary::before { content: '▸'; margin-right: 6px; color: var(--muted); }
-#dav-details[open] summary::before { content: '▾'; }
-#dav-details summary::-webkit-details-marker { display: none; }
 /* ポップオーバー */
 .pop {
   position: fixed; z-index: 20; min-width: 200px; max-width: calc(100vw - 16px);

@@ -27,7 +27,7 @@ async function call(path, { method = 'GET', body, token } = {}) {
   try {
     res = await http(apiBase() + path, { method, headers, body: body === undefined ? null : JSON.stringify(body), signal: ctl.signal, idleTimeout: 30_000 });
   } catch (e) {
-    const err = new Error(e.name === 'AbortError' ? 'サーバーからの応答がありません(時間切れ)。しばらくしてからお試しください' : 'サーバーに接続できません。ネット接続を確かめてください');
+    const err = new Error(e.name === 'AbortError' ? 'サーバーからの応答がありません(時間切れ)。しばらくしてからお試しください。' : 'サーバーに接続できません。ネット接続を確かめてください。');
     err.status = 0;
     throw err;
   } finally {

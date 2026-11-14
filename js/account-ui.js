@@ -24,7 +24,7 @@ const LAST_KEY = 'daigaku-note.last-account'; // この端末で最後にログ�
 const CODE_MINUTES = 10; // サーバーの番号の有効期限(server/src/index.js の OTP_MINUTES)
 const RESEND_SECONDS = 60; // 同じアドレスへ続けて送れない長さ(server/src/index.js の otpBurstSeconds)
 
-// app.js から受け取る道具: { askConfirm, toast, showDialog, coarse, setSyncStatus, openSync, route, countNotes }
+// app.js から受け取る道具: { askConfirm, toast, showDialog, coarse, setSyncStatus, route, countNotes, penBusy }
 let h = {};
 let purpose = 'login'; // 今出しているページ: 'login' | 'signup'
 let pending = null; // 番号を送った先: { email, sentAt, purpose }
@@ -141,8 +141,16 @@ export function refresh() {
   btn.setAttribute('aria-label', label);
   if (ok) $('#acct-summary-who').textContent = acc.email;
 
-  // 本棚・ノートを出しているときにログインが切れた: ログインのページへ(書きかけの線は route() が保存する)
-  if (!ok && (!$('#library').hidden || !$('#editor').hidden)) h.route?.();
+  // 本棚・ノートを出しているときにログインが切れた: ログインのページへ。
+  // ペンで書いている最中なら、書き終わるまで待つ(途中で画面を替えると、書いている線が消えてしまうため。待ったあとの線は route() が保存する)
+  if (!ok) kickToAuth();
+}
+let kickTimer = 0;
+function kickToAuth() {
+  clearTimeout(kickTimer);
+  if (loggedIn() || ($('#library').hidden && $('#editor').hidden)) return;
+  if (h.penBusy?.()) { kickTimer = setTimeout(kickToAuth, 500); return; }
+  h.route?.();
 }
 
 // ---------- ログイン・アカウント作成のページ ----------
@@ -156,14 +164,19 @@ export function showAuth(hash) {
   if (changed) editing = false;
   $('#auth').hidden = false;
   document.title = purpose === 'signup' ? 'アカウントを作成 - 大学ノート' : 'ログイン - 大学ノート';
-  render({ focus: was });
-  if (!was || changed) focusInput();
+  // 初めて出したとき・ページを替えたときは見出しに移す(隠れた本棚のボタンなどに残ったままだと、読み上げで迷子になるため。
+  // 見出しならスマホでもキーボードは出ない)。パソコンでは、続けてメールアドレスの欄へ
+  const fresh = !was || changed;
+  render({ focus: fresh });
+  if (fresh) focusInput();
   showLocalNotice();
 }
 /** ログインしたら隠す */
 export function hideAuth() {
+  if ($('#auth').hidden) return;
   $('#auth').hidden = true;
   clearTimeout(resendTimer);
+  if ($('#auth').contains(document.activeElement)) document.activeElement.blur(); // 隠れた入力欄に残さない
 }
 
 // iPad・スマホでは、勝手にキーボードを出さない
@@ -206,7 +219,8 @@ async function showLocalNotice() {
   let n = 0;
   try { n = await h.countNotes(); } catch { /* 数えられなくても、お知らせを出さないだけ */ }
   const parts = [];
-  if (cfg.url && !cfg.account) parts.push('自分のサーバー(WebDAV)での同期は終わりました。ログインすると、大学ノートアカウントで同期します。');
+  if (!navigator.onLine) parts.push('オフラインのため、今はログインできません。ネットにつながってからログインしてください。');
+  if (cfg.url && !cfg.account) parts.push('自分のサーバー(WebDAV)での同期は、この版から使えなくなりました。ログインすると、この端末のノートを大学ノートアカウントで同期します。');
   if (n > 0) parts.push(`この端末にあるノート(${n}冊)は消えません。ログインすると、アカウントに同期されます。`);
   el.textContent = parts.join('');
   el.hidden = !parts.length;
@@ -318,29 +332,12 @@ async function verify(how) {
   await finishLogin(r, asPurpose);
 }
 
-// 鍵を受け取ったあと: 別のアカウントのノートが端末にあれば確かめてから、同期の設定を入れて本棚へ
+// 鍵を受け取ったあと: 同期の設定を入れて本棚へ
 async function finishLogin(r, asked) {
   const cfg = dav.config();
-  const prev = cfg.account ? { userId: cfg.user, email: cfg.account.email } : loadLast();
-  if (prev && prev.userId !== r.userId) {
-    let n = 0;
-    try { n = await h.countNotes(); } catch { /* 数えられないときは確かめる */ n = -1; }
-    if (n !== 0) {
-      const yes = await h.askConfirm({
-        heading: '別のアカウントでログインしますか?',
-        message: `この端末には、${prev.email} で使っていたときのノート${n > 0 ? `(${n}冊)` : ''}があります。${r.email} でログインすると、それらのノートも ${r.email} のアカウントに同期されます。`,
-        ok: 'ログインする',
-      });
-      if (!yes) {
-        // 受け取った鍵はサーバーで消しておく(失敗しても、使われない鍵は180日で消える)
-        account.logout(r.token).catch(() => {});
-        savePending(null);
-        editing = true;
-        render({ focus: true });
-        $(`#auth-${purpose}-email`).value = '';
-        return;
-      }
-    }
+  // 以前の版で自分のサーバー(WebDAV)と同期していた: 切り替える前に、まだ取り込んでいないほかの端末の変更を一度取りに行く
+  if (cfg.url && !cfg.account) {
+    await run($('#acct-code-msg'), () => dav.syncNow(true));
   }
   const ok = await run($('#acct-code-msg'), async () => {
     // 同期先は、サーバーが返した /dav/ の住所(ログインしたサーバーと同じ場所のときだけ使う)
@@ -367,10 +364,24 @@ async function finishLogin(r, asked) {
     6000,
   );
   refresh();
-  // ログインのページから来たなら本棚へ。ノートの住所で開いていたなら、そのノートへ
-  if (/^#\/note\//.test(location.hash) || location.hash === '#/') h.route();
-  else location.hash = '#/';
+  // ログインのページから来たなら本棚へ(履歴に足さずに置き換える)。ノートの住所で開いていたなら、そのノートへ
+  if (!/^#\/note\//.test(location.hash)) history.replaceState(null, '', '#/');
+  h.route();
   dav.syncNow(true);
+}
+
+async function confirmOtherAccount(email) {
+  const cfg = dav.config();
+  const prev = cfg.account ? { email: cfg.account.email } : loadLast();
+  if (!prev || prev.email === email) return true;
+  let n = -1;
+  try { n = await h.countNotes(); } catch { /* 数えられないときは確かめる */ }
+  if (n === 0) return true;
+  return h.askConfirm({
+    heading: '別のアカウントでログインしますか?',
+    message: `この端末には、${prev.email} で使っていたときのノート${n > 0 ? `(${n}冊)` : ''}があります。${email} でログインすると、それらのノートも ${email} のアカウントに同期されます。`,
+    ok: '続ける',
+  });
 }
 
 // ---------- アカウントの画面(ログイン中) ----------
@@ -484,11 +495,13 @@ export function init(helpers) {
   $('#account-dialog').addEventListener('cancel', (e) => { if (busy) e.preventDefault(); }); // 通信の途中は Esc で閉じない
   // 通信の途中は、ページを切り替えない(ログイン ⇔ アカウント作成)
   for (const a of document.querySelectorAll('#auth a')) a.addEventListener('click', (e) => { if (busy) e.preventDefault(); });
+  // ネットにつながった・切れたら、ページの下のお知らせを合わせる
+  for (const ev of ['online', 'offline']) window.addEventListener(ev, () => { if (!$('#auth').hidden) showLocalNotice(); });
 
   for (const how of ['login', 'signup']) {
     const input = $(`#auth-${how}-email`);
     input.oninput = () => msg($(`#auth-${how}-msg`), '');
-    $(`#auth-${how}-form`).onsubmit = (e) => {
+    $(`#auth-${how}-form`).onsubmit = async (e) => {
       e.preventDefault();
       if (busy) return;
       const email = normalizeEmail(input.value);
@@ -504,6 +517,8 @@ export function init(helpers) {
         if (!h.coarse()) $('#acct-code').focus();
         return;
       }
+      // この端末に、前に別のアドレスで使っていたときのノートがあれば、そのノートも新しいアカウントに同期されることを先に確かめる
+      if (!(await confirmOtherAccount(email))) return;
       sendCode(email, el, how);
     };
   }

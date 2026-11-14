@@ -104,6 +104,8 @@ test('ログインしないと使えない。ログインとアカウント作�
   await expect(a.locator('#library')).toBeVisible();
   await expect(a.locator('#toast-msg')).toContainText('アカウントを作成しました');
   await expect(a).toHaveURL(/#\/$/);
+  // 住所は置き換えるので、履歴にログインのページは増えない
+  expect(await a.evaluate(() => history.length)).toBeLessThan(6);
   // ログイン済みでログインのページの住所を開くと本棚へ
   await a.goto('./#/signup');
   await expect(a.locator('#library')).toBeVisible();
@@ -152,6 +154,14 @@ test('2台で同期し、端末を外すとログインのページに戻る。�
   await expect(b.locator('#auth-login-msg')).toHaveText('ログインが切れました。もう一度ログインしてください。');
   await expect(b.locator('#auth-login-email')).toHaveValue(email);
   await expect(b.locator('#auth-local')).toContainText('この端末にあるノート(1冊)は消えません');
+  // 読み込み直しても、ログインのページのまま(断られた鍵では同期しない)
+  const verifies = [];
+  b.on('request', (r) => { if (r.url().startsWith(`${API}/dav/`)) verifies.push(r.url()); });
+  await b.reload();
+  await expect(b.locator('#auth-login-form')).toBeVisible();
+  await expect(b.locator('#library')).toBeHidden();
+  await b.waitForTimeout(1500);
+  expect(verifies).toEqual([]);
   // ログインし直すと、ノートはそのまま
   await login(b, email);
   await expect(b.locator('#notes .card', { hasText: '生理学' })).toBeVisible();
@@ -169,13 +179,23 @@ test('2台で同期し、端末を外すとログインのページに戻る。�
   await expect(a.locator('#auth-local')).toContainText('この端末にあるノート(1冊)は消えません');
 
   // 別のアカウントでログインするときは、前のアカウントのノートも同期されることを確かめる
+  // (番号を送る前に確かめる。やめたら番号は送らない)
   const other = freshEmail('other', testInfo);
-  const code = await sendCode(a, 'signup', other);
-  await a.locator('#acct-code').fill(code);
+  await a.locator('#auth-to-signup').click();
+  await a.locator('#auth-signup-email').fill(other);
+  await a.locator('#auth-signup-form button[type=submit]').click();
   await expect(a.locator('#confirm-dialog')).toContainText(`${email} で使っていたときのノート(1冊)`);
   await a.locator('#confirm-cancel').click();
   await expect(a.locator('#auth-signup-form')).toBeVisible();
-  await expect(a.locator('#library')).toBeHidden();
+  await expect(a.locator('#acct-code-form')).toBeHidden();
+  // 続けると番号を送り、そのアカウントでログインする
+  const sent = a.waitForResponse((r) => r.url() === `${API}/otp/send`);
+  await a.locator('#auth-signup-form button[type=submit]').click();
+  await a.locator('#confirm-ok').click();
+  const { devCode } = await (await sent).json();
+  await a.locator('#acct-code').fill(devCode);
+  await expect(a.locator('#notes .card', { hasText: '生理学' })).toBeVisible();
+  await expect(a.locator('#account-btn .acct-avatar')).toHaveText('O');
 });
 
 test('番号の入力の間違い・全角の入力・読み込み直したときの続き', async ({ browser }, testInfo) => {
