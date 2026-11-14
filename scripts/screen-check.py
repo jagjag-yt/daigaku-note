@@ -1,11 +1,10 @@
-# シミュレーターのスクショに、大学ノートの本棚の画面が出ているかを確かめる(標準ライブラリだけ)。
-# 本棚の地の色(style.css の --shelf: #f6f7f9)が画面の一定の割合を占めていれば「出ている」とする。
-# 真っ白・ホーム画面(アプリが終わった)では地の色が足りず、起動画面(スプラッシュ)は大きなアイコンのアクセント色が
-# 多すぎるので、どちらも失敗になる。
-# さらに、画面のプログラムが描く「新規」のカード(＋の印と文字がアクセント色 #2f5d9e)があることも見る。
-# 本棚の地の色は HTML と CSS だけでも出るので、これがないと「プログラムが本棚を描いた」とは言えない。
-# 右上の同期ボタン(これもアクセント色)を数えないよう、「新規」のある左半分だけを数える。
-# 前提: ios-sim.sh が入れ直してから撮るので本棚は空。ノートがあると表紙の青(#2f5d9e)で上限を超える。
+# シミュレーターのスクショに、大学ノートのアカウント作成のページが出ているかを確かめる(標準ライブラリだけ)。
+# ログインしないと使えないので、入れ直したばかりのアプリはアカウント作成のページを出す。
+# 次の3つがそろっていれば「出ている」とする。
+# - 地の色(style.css の --shelf: #f6f7f9)が画面の一定の割合を占める。真っ白・ホーム画面(アプリが終わった)はここで落ちる。
+# - 白いカード(--panel: #ffffff)が一定の割合を占める。起動画面(スプラッシュ)は地の色にアイコンだけで白がほとんどない。
+#   カード(#auth)は最初は隠してあり、画面のプログラムが出すので、これがあれば「プログラムがページを描いた」と言える。
+# - アクセント色(#2f5d9e)の「番号を送る」のボタンと名前がある。
 #
 # 使い方: python3 scripts/screen-check.py 画像.bmp|画像.png
 # 終了コード: 0 = 出ている / 1 = 出ていない / 2 = 画像を読めない(確かめられない)
@@ -13,9 +12,10 @@ import struct, sys, zlib
 
 SHELF = (0xF6, 0xF7, 0xF9)
 MIN_RATIO = 0.25
+PANEL = (0xFF, 0xFF, 0xFF)
+MIN_PANEL = 0.05  # 白いカードの割合(iPad で約 11%・iPhone で約 40%。起動画面は 1% ほど)
 ACCENT = (0x2F, 0x5D, 0x9E)
-MIN_ACCENT = 100  # 左半分のアクセント色の点の数(2 ピクセルおきに数える。空の本棚で CI の iPad 約 200・iPhone 約 600)
-MAX_ACCENT = 5000  # 起動画面(大きなアイコン)は左半分でも約 2.2 万あるので、多すぎるのも本棚ではない
+MIN_ACCENT = 100  # アクセント色の点の数(2 ピクセルおきに数える)
 
 
 def read_bmp(data):
@@ -77,23 +77,23 @@ def main(path):
         if data[:2] == b'BM': w, h, px = read_bmp(data)
         elif data[:8] == b'\x89PNG\r\n\x1a\n': w, h, px = read_png(data)
         else: raise ValueError('BMP でも PNG でもありません')
-        # 上下 10%(時計・ホームバー)を除く。地の色は 4 ピクセル、アクセント色は 2 ピクセルおき(左半分だけ)
-        total = hit = accent = 0
+        # 上下 10%(時計・ホームバー)を除く。地の色と白は 4 ピクセル、アクセント色は 2 ピクセルおき
+        total = hit = panel = accent = 0
         for y in range(h // 10, h - h // 10, 2):
             for x in range(0, w, 2):
                 c = px(x, y)
-                if x < w // 2 and all(abs(a - b) <= 12 for a, b in zip(c, ACCENT)): accent += 1
+                if all(abs(a - b) <= 12 for a, b in zip(c, ACCENT)): accent += 1
                 if x % 4 or (y - h // 10) % 4: continue
                 total += 1
                 hit += all(abs(a - b) <= 3 for a, b in zip(c, SHELF))
+                panel += all(abs(a - b) <= 3 for a, b in zip(c, PANEL))
     except Exception as e:  # 壊れた・知らない形式の画像
         print(f'{path}: 画像を読めませんでした: {e}')
         return 2
-    ratio = hit / max(total, 1)
-    print(f'{path}: {w}x{h}、本棚の地の色の割合 {ratio:.0%}(必要 {MIN_RATIO:.0%} 以上)、'
-          f'アクセント色の点 {accent}(必要 {MIN_ACCENT}〜{MAX_ACCENT})')
-    return 0 if ratio >= MIN_RATIO and MIN_ACCENT <= accent <= MAX_ACCENT else 1
-
+    ratio, pratio = hit / max(total, 1), panel / max(total, 1)
+    print(f'{path}: {w}x{h}、地の色の割合 {ratio:.0%}(必要 {MIN_RATIO:.0%} 以上)、'
+          f'白いカードの割合 {pratio:.0%}(必要 {MIN_PANEL:.0%} 以上)、アクセント色の点 {accent}(必要 {MIN_ACCENT} 以上)')
+    return 0 if ratio >= MIN_RATIO and pratio >= MIN_PANEL and accent >= MIN_ACCENT else 1
 
 if __name__ == '__main__':
     sys.exit(main(sys.argv[1]))
