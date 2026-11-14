@@ -37,6 +37,8 @@ test.beforeEach(async ({ page }, testInfo) => {
     const code = await signup(page, freshEmail(testInfo));
     await page.locator('#acct-code').fill(code);
     await expect(page.locator('#new-note')).toBeVisible();
+    // ログインしたあとの最初の同期が終わるまで待つ(本棚の上の同期の文言の行が出るので、それを含めた見た目で比べる)
+    await expect(page.locator('.substatus .sync-status')).toContainText('同期しました');
     await page.evaluate(() => { document.querySelector('#toast').hidden = true; }); // 「アカウントを作成しました」は撮らない
   }
   // 切り欠き・ホームバーのある端末のまね: Android のアプリ版で Capacitor がするのと同じく、
