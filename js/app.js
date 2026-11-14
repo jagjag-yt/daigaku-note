@@ -194,7 +194,8 @@ function bindDialogs() {
 }
 
 // 確かめる(ブラウザ標準の confirm の代わり)。押したのが ok なら true
-function askConfirm({ heading, message, ok, danger = false }) {
+// alt: { label } を渡すと3つめのボタン(取り返せない操作)を左に出し、押されたら 'alt' を返す
+function askConfirm({ heading, message, ok, danger = false, alt = null }) {
   return new Promise((resolve) => {
     const d = $('#confirm-dialog');
     $('#confirm-heading').textContent = heading;
@@ -202,7 +203,11 @@ function askConfirm({ heading, message, ok, danger = false }) {
     const b = $('#confirm-ok');
     b.textContent = ok;
     b.className = danger ? 'primary danger-fill' : 'primary';
+    const a = $('#confirm-alt');
+    a.hidden = $('#confirm-spacer').hidden = !alt;
+    a.textContent = alt ? alt.label : '';
     let result = false;
+    a.onclick = () => { result = 'alt'; d.close(); };
     $('#confirm-form').onsubmit = (e) => { e.preventDefault(); result = true; d.close(); };
     $('#confirm-cancel').onclick = () => d.close();
     d.addEventListener('close', () => resolve(result), { once: true });

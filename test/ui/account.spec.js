@@ -201,6 +201,46 @@ test('2台で同期し、端末を外すとログインのページに戻る。�
   await expect(a.locator('#account-btn .acct-avatar')).toHaveText('O');
 });
 
+test('共有の端末: この端末のノートを消してから、別のアカウントで使い始められる', async ({ browser }, testInfo) => {
+  const a = await open(browser);
+  const first = freshEmail('first', testInfo);
+  await signup(a, first);
+  await newNote(a, '前の人のノート');
+  await logout(a);
+
+  const next = freshEmail('next', testInfo);
+  await a.locator('#auth-to-signup').click();
+  await a.locator('#auth-signup-email').fill(next);
+  await a.locator('#auth-signup-form button[type=submit]').click();
+  await expect(a.locator('#confirm-alt')).toHaveText('この端末のノートを消して続ける');
+  await a.locator('#confirm-alt').click();
+  // 取り返せないので、もう一度確かめる。やめたら何も消さない
+  await expect(a.locator('#confirm-heading')).toHaveText('この端末のノートを消しますか?');
+  await a.locator('#confirm-cancel').click();
+  await expect(a.locator('#auth-local')).toContainText('この端末にあるノート(1冊)');
+  // 消す: 読み込み直して、アドレスが入ったアカウント作成のページに戻る
+  await a.locator('#auth-signup-form button[type=submit]').click();
+  await a.locator('#confirm-alt').click();
+  await a.locator('#confirm-ok').click();
+  await expect(a.locator('#toast-msg')).toContainText('この端末のノートを消しました');
+  await expect(a.locator('#auth-signup-email')).toHaveValue(next);
+  await expect(a.locator('#auth-local')).toBeHidden();
+  // そのまま番号を送ると、確かめの画面は出ずに番号の画面へ。新しいアカウントには前の人のノートはない
+  const sent = a.waitForResponse((r) => r.url() === `${API}/otp/send`);
+  await a.locator('#auth-signup-form button[type=submit]').click();
+  const { devCode } = await (await sent).json();
+  await expect(a.locator('#confirm-dialog')).not.toBeVisible();
+  await a.locator('#acct-code').fill(devCode);
+  await expect(a.locator('#library')).toBeVisible();
+  await expect(a.locator('#empty')).toBeVisible();
+  await expect(a.locator('#notes .card', { hasText: '前の人のノート' })).toHaveCount(0);
+  // 前の人がまたログインすれば、同期済みのノートは戻る
+  await logout(a);
+  const c = await sendCode(a, 'login', first); // (この端末にノートがないので、確かめは出ない)
+  await a.locator('#acct-code').fill(c);
+  await expect(a.locator('#notes .card', { hasText: '前の人のノート' })).toBeVisible();
+});
+
 test('番号の入力の間違い・全角の入力・読み込み直したときの続き', async ({ browser }, testInfo) => {
   const a = await open(browser);
   const email = freshEmail('ui2', testInfo);

@@ -17,10 +17,12 @@
 // (番号そのものは覚えない。10分で番号が切れるので、それより古いものは捨てる)。
 import * as account from './account.js';
 import * as dav from './webdav.js';
+import * as db from './db.js';
 
 const $ = (s) => document.querySelector(s);
 const PENDING_KEY = 'daigaku-note.otp';
-const LAST_KEY = 'daigaku-note.last-account'; // この端末で最後にログインしていたアカウント(別のアカウントでログインするときに確かめるため)
+const LAST_KEY = 'daigaku-note.last-account';
+const WIPED_KEY = 'daigaku-note.wiped'; // この端末のノートを消して読み込み直したあとに、続きのアドレスを入れておくため { email, how } // この端末で最後にログインしていたアカウント(別のアカウントでログインするときに確かめるため)
 const CODE_MINUTES = 10; // サーバーの番号の有効期限(server/src/index.js の OTP_MINUTES)
 const RESEND_SECONDS = 60; // 同じアドレスへ続けて送れない長さ(server/src/index.js の otpBurstSeconds)
 
@@ -402,15 +404,57 @@ async function confirmOtherAccount(email, how) {
   try { n = await h.countNotes(); } catch { /* 数えられないときは確かめる */ }
   if (n === 0) return true;
   const notes = `この端末には、前に別のアカウント(${mask(prev.email)})で使っていたときのノート${n > 0 ? `(${n}冊)` : ''}があります。`;
-  return h.askConfirm(how === 'signup' ? {
+  const alt = { label: 'この端末のノートを消して続ける' };
+  const ans = await h.askConfirm(how === 'signup' ? {
     heading: '新しいアカウントを作成しますか?',
-    message: `${notes}アカウントを作成すると、この端末で書いた内容は新しいアカウントに同期されます。`,
-    ok: '続ける',
+    message: `${notes}そのまま続けると、この端末で書いた内容は新しいアカウントに同期されます。`,
+    ok: 'そのまま続ける',
+    alt,
   } : {
     heading: '別のアカウントでログインしますか?',
-    message: `${notes}ログインすると、この端末で書いた内容はログインしたアカウントに同期されます。`,
-    ok: '続ける',
+    message: `${notes}そのまま続けると、この端末で書いた内容はログインしたアカウントに同期されます。`,
+    ok: 'そのまま続ける',
+    alt,
   });
+  if (ans !== 'alt') return ans;
+  // この端末のノートを消す: 取り返せないので、もう一度確かめる
+  const sure = await h.askConfirm({
+    heading: 'この端末のノートを消しますか?',
+    message: `この端末の中のノート${n > 0 ? `(${n}冊)` : ''}・PDF・画像をすべて消します。前のアカウント(${mask(prev.email)})に同期済みのものは、そのアカウントでログインすればまた使えますが、同期していない変更は元に戻せません。`,
+    ok: '消す',
+    danger: true,
+  });
+  if (!sure) return false;
+  await wipeDevice(email, how);
+  return false; // 読み込み直すので、ここでは番号を送らない
+}
+
+// この端末のノートと設定をすべて消して、読み込み直す。読み込み直したら、入れていたアドレスで続きから
+async function wipeDevice(email, how) {
+  busy = true;
+  setBusy(true);
+  try {
+    try { localStorage.setItem(WIPED_KEY, JSON.stringify({ email, how })); } catch { /* 入れ直してもらう */ }
+    try { localStorage.removeItem(LAST_KEY); localStorage.removeItem(PENDING_KEY); } catch { /* 使えない環境 */ }
+    await db.wipeAll();
+    location.reload();
+  } catch (err) {
+    console.warn(err);
+    busy = false;
+    setBusy(false);
+    msg(emailMsg(), 'この端末のノートを消せませんでした。ほかのタブで大学ノートを開いていたら閉じて、もう一度お試しください。');
+  }
+}
+
+// 消して読み込み直したあと: アドレスを入れ直し、知らせる
+function resumeAfterWipe() {
+  let v = null;
+  try { v = JSON.parse(localStorage.getItem(WIPED_KEY) || 'null'); localStorage.removeItem(WIPED_KEY); } catch { /* なし */ }
+  if (!v || typeof v.email !== 'string') return;
+  const how = v.how === 'signup' ? 'signup' : 'login';
+  history.replaceState(null, '', `#/${how}`);
+  $(`#auth-${how}-email`).value = v.email;
+  h.toast('この端末のノートを消しました。「番号を送る」を押して続けてください', 6000);
 }
 
 // ---------- アカウントの画面(ログイン中) ----------
@@ -517,6 +561,7 @@ async function accountOff() {
 export function init(helpers) {
   h = helpers;
   pending = loadPending();
+  resumeAfterWipe();
 
   $('#account-btn').onclick = open;
   $('#acct-open-manage').onclick = () => { $('#sync-dialog').close(); open(); };

@@ -25,10 +25,25 @@ export function openDB() {
         db.createObjectStore('search', { keyPath: 'key' });
       }
     };
-    r.onsuccess = () => resolve(r.result);
+    r.onsuccess = () => {
+      // ほかのタブがこの端末のノートを消す(データベースを消す)ときは、閉じて読み込み直す(閉じないと消せないため)
+      r.result.onversionchange = () => { r.result.close(); location.reload(); };
+      resolve(r.result);
+    };
     r.onerror = () => reject(r.error);
   });
   return dbp;
+}
+
+/** この端末のノート・設定をすべて消す(データベースごと)。消したあとは読み込み直して使う */
+export async function wipeAll() {
+  if (dbp) { try { (await dbp).close(); } catch { /* 開けていなかった */ } }
+  dbp = null;
+  await new Promise((resolve, reject) => {
+    const r = indexedDB.deleteDatabase(DB_NAME);
+    r.onsuccess = () => resolve();
+    r.onerror = () => reject(r.error);
+  });
 }
 
 const req = (r) => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
