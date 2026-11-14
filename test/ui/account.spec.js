@@ -20,7 +20,8 @@ async function open(browser) {
   await ctx.addInitScript((api) => localStorage.setItem('daigaku-note.api', api), API);
   const page = await ctx.newPage();
   await page.goto('./');
-  await expect(page.locator('#auth-login-form')).toBeVisible();
+  // この端末で使ったことがなければ、アカウント作成のページから
+  await expect(page.locator('#auth-signup-form')).toBeVisible();
   return page;
 }
 
@@ -75,6 +76,7 @@ const logout = async (page) => {
 
 test('ログインしないと使えない。ログインとアカウント作成は別のページ', async ({ browser }, testInfo) => {
   const a = await open(browser);
+  await expect(a).toHaveURL(/#\/signup$/);
   // 本棚・ノートの住所を開いても、ログインのページが出る
   await expect(a.locator('#library')).toBeHidden();
   await a.goto('./#/note/abc');
@@ -184,7 +186,8 @@ test('2台で同期し、端末を外すとログインのページに戻る。�
   await a.locator('#auth-to-signup').click();
   await a.locator('#auth-signup-email').fill(other);
   await a.locator('#auth-signup-form button[type=submit]').click();
-  await expect(a.locator('#confirm-dialog')).toContainText(`${email} で使っていたときのノート(1冊)`);
+  await expect(a.locator('#confirm-dialog')).toContainText('新しいアカウントを作成しますか?');
+  await expect(a.locator('#confirm-dialog')).toContainText(`前に別のアカウント(${email[0]}***@example.com)で使っていたときのノート(1冊)`);
   await a.locator('#confirm-cancel').click();
   await expect(a.locator('#auth-signup-form')).toBeVisible();
   await expect(a.locator('#acct-code-form')).toBeHidden();

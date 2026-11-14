@@ -157,6 +157,12 @@ function kickToAuth() {
 
 /** ログインしていないときに、本棚・ノートの代わりに出す。hash が #/signup ならアカウント作成、それ以外はログイン */
 export function showAuth(hash) {
+  // 住所がログイン・アカウント作成のどちらでもない(本棚など)ときは、この端末で使ったことがあればログイン、なければアカウント作成。
+  // 住所もそのページのものに置き換える(ノートの住所は、ログインしたあとに開くので残す)
+  if (!/^#\/(login|signup|note\/)/.test(hash)) {
+    hash = dav.config().account || loadLast() ? '#/login' : '#/signup';
+    history.replaceState(null, '', hash);
+  }
   const next = /^#\/signup\b/.test(hash) ? 'signup' : 'login';
   const was = !$('#auth').hidden;
   const changed = next !== purpose;
@@ -218,10 +224,10 @@ async function showLocalNotice() {
   const cfg = dav.config();
   let n = 0;
   try { n = await h.countNotes(); } catch { /* 数えられなくても、お知らせを出さないだけ */ }
+  $('#auth-offline').hidden = navigator.onLine;
   const parts = [];
-  if (!navigator.onLine) parts.push('オフラインのため、今はログインできません。ネットにつながってからログインしてください。');
   if (cfg.url && !cfg.account) parts.push('自分のサーバー(WebDAV)での同期は、この版から使えなくなりました。ログインすると、この端末のノートを大学ノートアカウントで同期します。');
-  if (n > 0) parts.push(`この端末にあるノート(${n}冊)は消えません。ログインすると、アカウントに同期されます。`);
+  if (n > 0) parts.push(`この端末にあるノート(${n}冊)は消えません。ログインすると、ログインしたアカウントに同期されます。`);
   el.textContent = parts.join('');
   el.hidden = !parts.length;
 }
@@ -235,7 +241,16 @@ function showCode({ focus = false } = {}) {
   lastTried = '';
   setNoAccount('');
   setCode('');
+  setLocked(!!pending.locked);
+  if (pending.locked) msg($('#acct-code-msg'), '間違いが続いたため、この番号は使えません。番号を送り直してください。');
   updateResend();
+}
+
+// 間違いが続いて番号が使えなくなったら、入力欄とログインのボタンを止める(送り直すまで)
+function setLocked(on) {
+  $('#acct-code').disabled = on;
+  $('#acct-verify').disabled = on;
+  $('#acct-code-form .code-box').classList.toggle('locked', on);
 }
 
 // ログインしようとしたらアカウントがなかった: 番号はそのままで、アカウントを作るボタンを出す
@@ -283,7 +298,7 @@ async function sendCode(email, el, how) {
     // 同じアドレスへ送ったばかりで断られた(続けて送れない1分): さきほどの番号がまだ使えるので、番号の画面へ
     // (1日・IP ごとの上限で断られたときは、サーバーの文言をそのまま出す)
     const recent = loadPending();
-    if (run.lastError?.status === 429 && recent && recent.email === email && now() - recent.sentAt < RESEND_SECONDS * 1000) {
+    if (run.lastError?.status === 429 && recent && !recent.locked && recent.email === email && now() - recent.sentAt < RESEND_SECONDS * 1000) {
       pending = { ...recent, purpose: how };
       savePending(pending);
       showCode({ focus: true });
@@ -324,7 +339,12 @@ async function verify(how) {
     setNoAccount('');
     // 入れた番号は消して、打ち直してもらう(残すと、続けて打った数字や貼り付けた番号が古い番号のまま送られてしまう)
     setCode('');
-    if (/あと0回/.test(el.textContent)) msg(el, '間違いが続いたため、この番号は使えません。送り直してください。');
+    if (/あと0回|間違いが続いた/.test(el.textContent)) {
+      // この番号はもう使えない: 入力を止めて、送り直してもらう(同じアドレスで送っても、この番号の画面に戻さない)
+      savePending({ ...pending, locked: true });
+      setLocked(true);
+      msg(el, '間違いが続いたため、この番号は使えません。番号を送り直してください。');
+    }
     if (/送り直して/.test(el.textContent)) $('#acct-resend').disabled ? $('#acct-back').focus() : $('#acct-resend').focus();
     else if (!h.coarse()) $('#acct-code').focus();
     return;
@@ -370,16 +390,24 @@ async function finishLogin(r, asked) {
   dav.syncNow(true);
 }
 
-async function confirmOtherAccount(email) {
+// 前の人のアドレスは伏せる(共有の端末で、ほかの人に見えないように)。先頭の1文字と @ から後ろだけ
+const mask = (email) => email.replace(/^(.)[^@]*/, '$1***');
+
+async function confirmOtherAccount(email, how) {
   const cfg = dav.config();
   const prev = cfg.account ? { email: cfg.account.email } : loadLast();
   if (!prev || prev.email === email) return true;
   let n = -1;
   try { n = await h.countNotes(); } catch { /* 数えられないときは確かめる */ }
   if (n === 0) return true;
-  return h.askConfirm({
+  const notes = `この端末には、前に別のアカウント(${mask(prev.email)})で使っていたときのノート${n > 0 ? `(${n}冊)` : ''}があります。`;
+  return h.askConfirm(how === 'signup' ? {
+    heading: '新しいアカウントを作成しますか?',
+    message: `${notes}アカウントを作成すると、それらのノートも新しいアカウントに同期されます。`,
+    ok: '続ける',
+  } : {
     heading: '別のアカウントでログインしますか?',
-    message: `この端末には、${prev.email} で使っていたときのノート${n > 0 ? `(${n}冊)` : ''}があります。${email} でログインすると、それらのノートも ${email} のアカウントに同期されます。`,
+    message: `${notes}ログインすると、それらのノートもログインしたアカウントに同期されます。`,
     ok: '続ける',
   });
 }
@@ -511,14 +539,14 @@ export function init(helpers) {
       if (!looksLikeEmail(email)) return msg(el, 'メールアドレスの形式が正しくありません。もう一度確かめてください。'), input.focus();
       // 同じアドレス・同じ目的で送ったばかりなら、送り直さずに番号の画面へ(続けて送ると断られるため)
       const recent = loadPending();
-      if (recent && recent.email === email && recent.purpose === how && now() - recent.sentAt < RESEND_SECONDS * 1000) {
+      if (recent && !recent.locked && recent.email === email && recent.purpose === how && now() - recent.sentAt < RESEND_SECONDS * 1000) {
         pending = recent;
         showCode({ focus: true });
         if (!h.coarse()) $('#acct-code').focus();
         return;
       }
       // この端末に、前に別のアドレスで使っていたときのノートがあれば、そのノートも新しいアカウントに同期されることを先に確かめる
-      if (!(await confirmOtherAccount(email))) return;
+      if (!(await confirmOtherAccount(email, how))) return;
       sendCode(email, el, how);
     };
   }

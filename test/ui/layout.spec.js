@@ -223,18 +223,17 @@ test('同期のダイアログ', async ({ page }) => {
 });
 
 test('ログイン・アカウント作成(ログインのページ)', async ({ page }) => {
+  await page.locator('#auth-to-login').click();
   await expect(page.locator('#auth-login-form')).toBeVisible();
   await check(page, 'auth-login');
 });
 
 test('ログイン・アカウント作成(アカウント作成のページ)', async ({ page }) => {
-  await page.locator('#auth-to-signup').click();
-  await expect(page.locator('#auth-signup-form')).toBeVisible();
+  await expect(page.locator('#auth-signup-form')).toBeVisible(); // この端末で使ったことがなければ、最初はアカウント作成
   await check(page, 'auth-signup');
 });
 
 test('ログイン・アカウント作成(6桁の番号)', async ({ page }, testInfo) => {
-  await page.locator('#auth-to-signup').click();
   await signup(page, freshEmail(testInfo));
   // アドレスと有効期限はテストごとに変わるので、決まった文字にそろえてから撮る
   await page.evaluate(() => {
@@ -246,6 +245,7 @@ test('ログイン・アカウント作成(6桁の番号)', async ({ page }, tes
 });
 
 test('ログイン・アカウント作成(ログインしようとしたらアカウントがない)', async ({ page }, testInfo) => {
+  await page.locator('#auth-to-login').click();
   await page.locator('#auth-login-email').fill(freshEmail(testInfo));
   const sent = page.waitForResponse((r) => r.url() === `${API}/otp/send`);
   await page.locator('#auth-login-form button[type=submit]').click();

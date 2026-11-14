@@ -340,7 +340,7 @@ p.acct-msg { color: var(--danger); font-size: 13px; margin: -2px 0 10px; line-he
 button.acct-wide { width: 100%; min-height: 44px; font-size: 15px; font-weight: 600; }
 p.acct-foot { margin: 14px 0 0; text-align: center; line-height: 1.6; }
 .acct-links { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px 20px; margin-top: 12px; font-size: 14px; }
-.acct-links button.link { min-height: 36px; }
+.acct-links button.link { min-height: 44px; }
 /* ログイン・アカウント作成のページ(ログインしていないときは、これだけを出す) */
 .auth {
   position: fixed; inset: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; background: var(--shelf);
@@ -352,9 +352,18 @@ p.acct-foot { margin: 14px 0 0; text-align: center; line-height: 1.6; }
 .auth-brand img { border-radius: 10px; }
 .auth-card { width: 100%; max-width: 420px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 24px 20px; box-shadow: 0 6px 24px rgba(31,41,55,.06); }
 .auth-card p { line-height: 1.6; font-size: 14px; }
+/* 日本語の文を、文節の途中・1文字だけで折り返さない(対応しているブラウザだけ) */
+.auth-card p, .auth-card h1, .acct-points li, p.auth-local, dialog h2, dialog p, #toast-msg { word-break: auto-phrase; text-wrap: pretty; }
+.auth-card h1, dialog h2 { text-wrap: balance; }
+p.auth-offline { margin: 0 0 14px; padding: 10px 12px; border-radius: 10px; background: #fdf2f2; color: var(--danger); font-size: 13px; }
+.file-sync { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 6px; }
+.file-sync summary { min-height: 44px; display: flex; align-items: center; font-size: 15px; font-weight: 600; cursor: pointer; }
+.file-sync summary::before { content: '▸'; margin-right: 6px; color: var(--muted); }
+.file-sync[open] summary::before { content: '▾'; }
+.file-sync summary::-webkit-details-marker { display: none; }
 .auth-card .small { color: var(--muted); font-size: 12px; }
-p.auth-switch { margin: 18px 0 0; padding-top: 14px; border-top: 1px solid var(--line); text-align: center; color: var(--muted); }
-.auth a { color: var(--accent); font-weight: 600; text-decoration: none; display: inline-block; padding: 6px 2px; }
+p.auth-switch { margin: 18px 0 0; padding-top: 6px; line-height: 1.4; border-top: 1px solid var(--line); text-align: center; color: var(--muted); }
+.auth a { color: var(--accent); font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px; white-space: nowrap; }
 .auth a:hover { text-decoration: underline; }
 p.auth-local { max-width: 420px; margin: 0; padding: 0 4px; font-size: 13px; line-height: 1.6; color: var(--muted); text-align: center; }
 .acct-noacct { margin: 0 0 4px; padding: 12px 14px; border-radius: 10px; background: var(--accent-soft); }
@@ -369,6 +378,7 @@ p.auth-local { max-width: 420px; margin: 0; padding: 0 4px; font-size: 13px; lin
 }
 .code-cells span.filled { border-color: var(--text); }
 .code-box.focus .code-cells span.cur { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.code-box.locked .code-cells span { opacity: .45; }
 #acct-code {
   position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: none; background: transparent;
   color: transparent; caret-color: transparent; font-size: 16px; letter-spacing: 1em; outline: none;

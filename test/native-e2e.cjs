@@ -90,7 +90,7 @@ async function device(browser, viewport, errors, name) {
   await page.addInitScript(fakeCapacitor);
   await page.addInitScript((api) => localStorage.setItem('daigaku-note.api', api), API);
   await page.goto(URL);
-  await page.waitForSelector('#auth-login-form:not([hidden])');
+  await page.waitForSelector('#auth:not([hidden])');
   return { ctx, page, sent, dev };
 }
 
@@ -210,6 +210,7 @@ async function syncNow(p) {
 
     // 同期ファイルの書き出しも同じく
     await page.click('#sync-btn');
+    await page.click('.file-sync summary'); // ファイルで同期の欄はたたんである
     await page.click('#sync-export');
     await page.waitForFunction(() => window.__native.saved.length === 2);
     const sj = await page.evaluate(() => window.__native.saved.at(-1));
