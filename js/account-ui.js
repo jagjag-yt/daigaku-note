@@ -233,6 +233,7 @@ async function sendCode(email, el) {
 }
 
 async function verify() {
+  if (busy) return; // 確かめている途中に呼ばれたとき(7桁目・入力の確定が2回届くなど)は何もしない
   const code = setCode($('#acct-code').value);
   const el = $('#acct-code-msg');
   if (!pending) { // ほかのタブでログインした・番号が切れたなど
