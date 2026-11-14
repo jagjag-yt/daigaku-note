@@ -243,6 +243,21 @@ test('アカウントの画面(ログイン中)', async ({ page }, testInfo) => 
   await check(page, 'account-info');
 });
 
+test('同期のダイアログ(アカウントでログイン中)', async ({ page }, testInfo) => {
+  const code = await sendCode(page, `layout-sync-${testInfo.project.name}-${Date.now()}@example.com`);
+  await page.locator('#acct-code').fill(code);
+  await expect(page.locator('#acct-info .sync-status')).toContainText('同期しました');
+  await page.locator('#account-dialog .dlg-close').click();
+  await page.locator('#sync-btn').click();
+  await expect(page.locator('#acct-summary-in')).toBeVisible();
+  await page.evaluate(() => {
+    document.querySelector('#acct-summary-who').textContent = 'student@example.com';
+    for (const el of document.querySelectorAll('.sync-status')) el.textContent = 'クラウド同期: 10:00 に同期しました(送信 0件・受信 0件)';
+    document.activeElement?.blur();
+  });
+  await check(page, 'sync-dialog-account');
+});
+
 test('本棚(ノートあり・長い名前)', async ({ page }) => {
   await newNote(page, '生理学');
   await page.locator('#back').click();
