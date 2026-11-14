@@ -23,6 +23,7 @@
         <div class="spacer"></div>
         <label class="search-box"><span data-icon="search" data-icon-size="18"></span><input id="search" type="search" placeholder="検索" aria-label="ノートを検索(名前・PDFの文字)" autocomplete="off"></label>
         <button id="sync-btn" class="icon-btn" data-icon="cloud" title="同期" aria-label="同期"><span class="sync-dot" hidden></span></button>
+        <button id="account-btn" class="icon-btn acct-btn" data-icon="user" title="アカウント" aria-label="アカウント"><span class="acct-avatar" aria-hidden="true" hidden></span><span class="acct-dot" hidden></span></button>
       </div>
       <div class="substatus"><span class="sync-status"></span><span id="search-status"></span></div>
     </header>
@@ -109,39 +110,22 @@
 
   <dialog id="sync-dialog" class="wide">
     <h2>端末どうしの同期</h2>
-    <section id="acct">
-      <h3>大学ノートアカウントで同期</h3>
-      <div id="acct-login">
-        <p>メールアドレスに届く6桁の番号でログインするだけで、ほかの端末と自動で同期します。サーバーの用意や設定はいりません(1人 1GB まで・無料)。</p>
-        <form id="acct-email-form">
-          <label class="field">メールアドレス<input id="acct-email" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required></label>
-          <div class="row">
-            <button type="submit" id="acct-send" class="primary">番号を送る</button>
-          </div>
-        </form>
-        <form id="acct-code-form" hidden>
-          <p class="small"><span id="acct-sent-to"></span> に6桁の番号を送りました。10分以内に入力してください。</p>
-          <label class="field">6桁の番号<input id="acct-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required></label>
-          <div class="row">
-            <button type="submit" id="acct-verify" class="primary">ログイン</button>
-            <button type="button" id="acct-back">メールアドレスを変える</button>
-          </div>
-        </form>
+    <section id="acct-summary" class="acct-summary">
+      <h3>大学ノートアカウント</h3>
+      <div id="acct-summary-out">
+        <p id="acct-summary-text">ログインするだけで、ほかの端末と自動で同期します。サーバーの用意や設定はいりません(無料・1人 1GB まで)。</p>
+        <div class="row">
+          <button type="button" id="acct-open-login" class="primary">ログイン・新規登録</button>
+        </div>
       </div>
-      <div id="acct-info" hidden>
-        <p><strong id="acct-who"></strong> でログインしています。</p>
+      <div id="acct-summary-in" hidden>
+        <p><strong id="acct-summary-who"></strong> で同期しています。</p>
         <p class="small sync-status"></p>
         <div class="row">
-          <button type="button" id="acct-sync" class="primary">今すぐ同期</button>
-          <button type="button" id="acct-logout">ログアウト</button>
-        </div>
-        <h4>ほかの端末</h4>
-        <ul id="acct-devices" class="acct-devices"></ul>
-        <div class="row">
-          <button type="button" id="acct-delete" class="danger">アカウントを削除</button>
+          <button type="button" id="acct-summary-sync" class="primary">今すぐ同期</button>
+          <button type="button" id="acct-open-manage">アカウントの管理</button>
         </div>
       </div>
-      <p class="small acct-msg" id="acct-msg" role="status"></p>
     </section>
     <details id="dav-details">
       <summary>自分のサーバーを使う(WebDAV / Nextcloud)</summary>
@@ -169,6 +153,84 @@
       <button id="sync-close">閉じる</button>
     </div>
     <input id="sync-input" type="file" accept="application/json,.json" multiple hidden>
+  </dialog>
+
+  <dialog id="account-dialog" class="acct-dialog" aria-labelledby="acct-heading">
+    <!-- ログイン・新規登録: メールアドレス -->
+    <form id="acct-email-form" class="acct-step" novalidate>
+      <div class="acct-hero" data-icon="cloud" data-icon-size="30"></div>
+      <h2 id="acct-heading" class="acct-title" tabindex="-1">大学ノートに<wbr>ログイン</h2>
+      <p class="acct-lead">ログインすると、iPad・スマホ・パソコンのノートが自動で同期されます。</p>
+      <ul class="acct-points">
+        <li data-icon="check" data-icon-size="18"><span>パスワードは不要です。メールに届く6桁の番号でログインします</span></li>
+        <li data-icon="check" data-icon-size="18"><span>はじめての方は、そのまま新規登録になります</span></li>
+        <li data-icon="check" data-icon-size="18"><span>無料で 1GB まで。ノートはこの端末にも残ります</span></li>
+      </ul>
+      <label class="field">メールアドレス<input id="acct-email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com" aria-describedby="acct-email-msg"></label>
+      <p class="acct-msg" id="acct-email-msg" role="alert"></p>
+      <button type="submit" id="acct-send" class="primary acct-wide">番号を送る</button>
+      <div class="acct-links">
+        <button type="button" id="acct-local-logout" class="link" hidden>この端末でログアウトする</button>
+        <button type="button" id="acct-to-sync" class="link">自分のサーバーで同期する(WebDAV)</button>
+      </div>
+    </form>
+
+    <!-- ログイン・新規登録: 6桁の番号 -->
+    <form id="acct-code-form" class="acct-step" novalidate hidden>
+      <div class="acct-hero" data-icon="mail" data-icon-size="30"></div>
+      <h2 id="acct-code-heading" class="acct-title" tabindex="-1">メールを<wbr>確認してください</h2>
+      <p class="acct-lead"><strong id="acct-sent-to" class="acct-addr"></strong> に6桁の番号を送りました。番号は <span id="acct-expires"></span> まで有効です。</p>
+      <div class="code-box">
+        <input id="acct-code" type="text" inputmode="numeric" autocomplete="one-time-code" enterkeyhint="done" maxlength="64" aria-label="6桁の番号" aria-describedby="acct-code-msg">
+        <div class="code-cells" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+      </div>
+      <p class="acct-msg" id="acct-code-msg" role="alert"></p>
+      <button type="submit" id="acct-verify" class="primary acct-wide">ログイン</button>
+      <div class="acct-links">
+        <button type="button" id="acct-resend" class="link">番号を送り直す</button>
+        <button type="button" id="acct-back" class="link">メールアドレスを変える</button>
+      </div>
+      <p class="small acct-foot">メールが届かないときは、迷惑メールのフォルダも確かめてください。送信元は <span class="nowrap">no-reply@quiz-make.com</span> です。</p>
+    </form>
+
+    <!-- ログイン中 -->
+    <div id="acct-info" class="acct-step" hidden>
+      <h2 id="acct-info-heading" class="acct-title-left" tabindex="-1">アカウント</h2>
+      <div class="acct-profile">
+        <span id="acct-avatar" class="acct-avatar big" aria-hidden="true"></span>
+        <div class="acct-profile-text">
+          <strong id="acct-who"></strong>
+          <small id="acct-since"></small>
+        </div>
+      </div>
+      <p class="acct-note" id="acct-note" role="status" hidden></p>
+      <section class="acct-card">
+        <div class="acct-card-head">
+          <h3>同期</h3>
+          <button type="button" id="acct-sync">今すぐ同期</button>
+        </div>
+        <p class="small sync-status"></p>
+      </section>
+      <section class="acct-card">
+        <h3>使っている容量</h3>
+        <div class="acct-meter" id="acct-meter" role="meter" aria-label="使っている容量" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
+        <p class="small" id="acct-usage">読み込んでいます…</p>
+      </section>
+      <section class="acct-card">
+        <h3>ログイン中の端末</h3>
+        <ul id="acct-devices" class="acct-devices"></ul>
+        <p class="small">ログインできるのは5台までです。6台目でログインすると、いちばん長く使っていない端末が外れます。</p>
+      </section>
+      <p class="acct-msg" id="acct-msg" role="alert"></p>
+      <div class="acct-actions">
+        <button type="button" id="acct-logout">ログアウト</button>
+      </div>
+      <details class="acct-danger">
+        <summary>アカウントを削除する</summary>
+        <p class="small">サーバーに預けた変更・PDF・画像をすべて削除し、すべての端末でログアウトします。元に戻せません。端末の中のノートは消えずに残ります。</p>
+        <button type="button" id="acct-delete" class="danger">アカウントを削除</button>
+      </details>
+    </div>
   </dialog>
 
   <dialog id="rename-dialog">

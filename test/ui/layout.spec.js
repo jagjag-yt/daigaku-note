@@ -201,6 +201,63 @@ test('同期のダイアログ(自分のサーバーの欄を開く)', async ({ 
   await check(page, 'sync-dialog-webdav');
 });
 
+// アカウントの画面。番号の画面とログイン中の画面は、手元で動かした同期サーバー(test/worker-server.mjs)を使う
+const API = 'http://127.0.0.1:8131';
+async function sendCode(page, email) {
+  await page.evaluate((api) => localStorage.setItem('daigaku-note.api', api), API);
+  await page.locator('#account-btn').click();
+  await page.locator('#acct-email').fill(email);
+  const sent = page.waitForResponse((r) => r.url() === `${API}/otp/send`);
+  await page.locator('#acct-send').click();
+  const { devCode } = await (await sent).json();
+  await expect(page.locator('#acct-code-form')).toBeVisible();
+  return devCode;
+}
+
+test('アカウントの画面(ログイン・新規登録)', async ({ page }) => {
+  await page.locator('#account-btn').click();
+  await expect(page.locator('#acct-email-form')).toBeVisible();
+  await check(page, 'account-login');
+});
+
+test('アカウントの画面(6桁の番号)', async ({ page }) => {
+  await sendCode(page, `layout-code-${test.info().project.name}-${Date.now()}@example.com`);
+  await page.locator('#acct-code').fill('12');
+  await check(page, 'account-code');
+});
+
+test('アカウントの画面(ログイン中)', async ({ page }, testInfo) => {
+  const code = await sendCode(page, `layout-${testInfo.project.name}-${Date.now()}@example.com`);
+  await page.locator('#acct-code').fill(code);
+  await expect(page.locator('#acct-devices li').first()).toContainText('この端末');
+  await expect(page.locator('#acct-usage')).toContainText('GB');
+  await expect(page.locator('#acct-info .sync-status')).toContainText('同期しました');
+  // アドレス・使った量・同期した時刻・端末の数はテストごとに変わるので、決まった文字にそろえてから撮る
+  await page.evaluate(() => {
+    document.querySelector('#acct-who').textContent = 'student@example.com';
+    document.querySelector('#acct-usage').textContent = '12.3 MB / 1.00 GB(1%)';
+    document.querySelector('#acct-info .sync-status').textContent = 'クラウド同期: 10:00 に同期しました(送信 0件・受信 0件)';
+    const ul = document.querySelector('#acct-devices');
+    while (ul.children.length > 1) ul.lastElementChild.remove();
+  });
+  await check(page, 'account-info');
+});
+
+test('同期のダイアログ(アカウントでログイン中)', async ({ page }, testInfo) => {
+  const code = await sendCode(page, `layout-sync-${testInfo.project.name}-${Date.now()}@example.com`);
+  await page.locator('#acct-code').fill(code);
+  await expect(page.locator('#acct-info .sync-status')).toContainText('同期しました');
+  await page.locator('#account-dialog .dlg-close').click();
+  await page.locator('#sync-btn').click();
+  await expect(page.locator('#acct-summary-in')).toBeVisible();
+  await page.evaluate(() => {
+    document.querySelector('#acct-summary-who').textContent = 'student@example.com';
+    for (const el of document.querySelectorAll('.sync-status')) el.textContent = 'クラウド同期: 10:00 に同期しました(送信 0件・受信 0件)';
+    document.activeElement?.blur();
+  });
+  await check(page, 'sync-dialog-account');
+});
+
 test('本棚(ノートあり・長い名前)', async ({ page }) => {
   await newNote(page, '生理学');
   await page.locator('#back').click();
