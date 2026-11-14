@@ -18,11 +18,12 @@
 import * as account from './account.js';
 import * as dav from './webdav.js';
 import * as db from './db.js';
+import { clearExports } from './native.js';
 
 const $ = (s) => document.querySelector(s);
 const PENDING_KEY = 'daigaku-note.otp';
-const LAST_KEY = 'daigaku-note.last-account';
-const WIPED_KEY = 'daigaku-note.wiped'; // この端末のノートを消して読み込み直したあとに、続きのアドレスを入れておくため { email, how } // この端末で最後にログインしていたアカウント(別のアカウントでログインするときに確かめるため)
+const LAST_KEY = 'daigaku-note.last-account'; // この端末で最後にログインしていたアカウント(別のアカウントでログインするときに確かめるため)
+const WIPED_KEY = 'daigaku-note.wiped'; // この端末のノートを消して読み込み直したあとに、続きのアドレスを入れておくため { email, how }
 const CODE_MINUTES = 10; // サーバーの番号の有効期限(server/src/index.js の OTP_MINUTES)
 const RESEND_SECONDS = 60; // 同じアドレスへ続けて送れない長さ(server/src/index.js の otpBurstSeconds)
 
@@ -434,9 +435,16 @@ async function wipeDevice(email, how) {
   busy = true;
   setBusy(true);
   try {
-    try { localStorage.setItem(WIPED_KEY, JSON.stringify({ email, how })); } catch { /* 入れ直してもらう */ }
-    try { localStorage.removeItem(LAST_KEY); localStorage.removeItem(PENDING_KEY); } catch { /* 使えない環境 */ }
-    await db.wipeAll();
+    await clearExports(); // アプリ版: 書き出した PDF のキャッシュも消す
+    await db.wipeAll({
+      onBlocked: () => msg(emailMsg(), 'ほかのタブ・ウィンドウで開いている大学ノートを閉じてください。閉じると続きます。'),
+    });
+    // 消せてから、前のアカウントの印を消す(消せなかったのに印だけ消すと、次は確かめずに同期してしまうため)
+    try {
+      localStorage.removeItem(LAST_KEY);
+      localStorage.removeItem(PENDING_KEY);
+      localStorage.setItem(WIPED_KEY, JSON.stringify({ email, how }));
+    } catch { /* 使えない環境: アドレスは入れ直してもらう */ }
     location.reload();
   } catch (err) {
     console.warn(err);
