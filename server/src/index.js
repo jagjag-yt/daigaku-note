@@ -6,8 +6,13 @@
 //
 // 受け口:
 //   GET    /health            動いている版
-//   POST   /otp/send          { email } → 6桁の番号をメールで送る
-//   POST   /otp/verify        { email, code, label } → 端末の鍵(token)を返す。初めてのアドレスならここで利用者を作る
+//   POST   /otp/send          { email, purpose } → 6桁の番号をメールで送る
+//   POST   /otp/verify        { email, code, label, purpose } → 端末の鍵(token)を返す
+//     purpose: 'login'(ログイン)・'signup'(アカウント作成)。メールの文面と、確かめたあとの扱いが変わる
+//       login  … アカウントがなければ鍵を出さず 404 { reason: 'no_account' }(番号は使用済みにしないので、
+//                同じ番号を purpose: 'signup' で送り直せば作れる)。番号を確かめたあとなので、登録の有無を本人以外に漏らさない
+//       signup … アカウントを作る。すでにあれば、そのままログインして existing: true を返す
+//       なし   … 以前のアプリ。アカウントがなければ作る(signup と同じ)
 //   GET    /me                ログイン中の利用者・端末・使っている量
 //   GET    /devices           ログイン中の端末の一覧
 //   DELETE /devices?id=…      端末を1台外す(なくした端末など)
@@ -46,7 +51,7 @@ import { QUOTA_BYTES, handleDav, parseDavPath } from './dav.js';
  * 配信されている版。/health に載せて、外から「どれが動いているか」を確かめられるようにする。
  * 受け口を足したり応答を変えたりしたら、この文字列も更新すること。
  */
-export const API_VERSION = '2026-11-13-dav';
+export const API_VERSION = '2026-11-15-purpose';
 
 /** 1人が同時にログインできる端末の数。超えたら、いちばん長く使っていない端末を外す。 */
 const MAX_DEVICES = 5;
@@ -150,9 +155,13 @@ async function authenticate(request, env) {
  * 「そのアドレスが登録されているか」は返さない(どのアドレスが使われているかを調べられないように)。
  * 登録があってもなくても、同じ処理・同じ応答にする(利用者を作るのは番号を確かめたとき)。
  */
+// ログインかアカウント作成か(それ以外・なしは以前のアプリ)
+const purposeOf = (body) => (body?.purpose === 'login' || body?.purpose === 'signup' ? body.purpose : null);
+
 async function handleOtpSend(request, env) {
   const body = await readJson(request);
   const email = normalizeEmail(body?.email);
+  const purpose = purposeOf(body);
   if (!looksLikeEmail(email)) return fail(400, 'メールアドレスの形式が正しくありません。');
 
   const ip = clientIp(request);
@@ -170,20 +179,24 @@ async function handleOtpSend(request, env) {
     .run();
 
   const echo = shouldEchoOtp(request, env);
-  const sent = echo ? { ok: true } : await sendOtpMail(env, email, code);
+  const sent = echo ? { ok: true } : await sendOtpMail(env, email, code, purpose);
   // 送れなかったことは伝える(黙って成功にすると、届かない理由が分からなくなる)
   if (!sent.ok) return fail(502, 'メールを送れませんでした。時間をおいてお試しください。');
   return json({ ok: true, expiresInMinutes: OTP_MINUTES, ...(echo ? { devCode: code } : {}) });
 }
 
-/** Resend でメールを送る。 */
-async function sendOtpMail(env, email, code) {
+/**
+ * Resend でメールを送る。文面は、利用者が選んだ purpose だけで変える
+ * (アカウントがあるかどうかでは変えない。メールを見られる人以外に登録の有無が分からないように)。
+ */
+async function sendOtpMail(env, email, code, purpose) {
+  const signup = purpose === 'signup';
   const body = {
     from: env.MAIL_FROM,
     to: [email],
-    subject: `大学ノートのログイン番号: ${code}`,
+    subject: signup ? `大学ノートのアカウント作成の確認番号: ${code}` : `大学ノートのログイン番号: ${code}`,
     text: [
-      '大学ノートのクラウド同期のログイン番号は次のとおりです。',
+      signup ? '大学ノートのアカウント作成の確認番号は次のとおりです。' : '大学ノートのログイン番号は次のとおりです。',
       '',
       `    ${code}`,
       '',
@@ -214,6 +227,7 @@ async function sendOtpMail(env, email, code) {
 async function handleOtpVerify(request, env) {
   const body = await readJson(request);
   const email = normalizeEmail(body?.email);
+  const purpose = purposeOf(body);
   const code = String(body?.code ?? '').trim();
   if (!looksLikeEmail(email) || !/^\d{6}$/.test(code)) return fail(400, '入力の形式が正しくありません。');
 
@@ -239,6 +253,11 @@ async function handleOtpVerify(request, env) {
   const codeHash = await hashSecret(code, env.SECRET_PEPPER);
   if (!safeEqual(codeHash, row.code_hash)) {
     return fail(400, `番号が違います。あと${Math.max(0, OTP_MAX_ATTEMPTS - claim.attempts)}回まで試せます。`);
+  }
+  // ログインなのにアカウントがない: 鍵は出さず、番号も使用済みにしない(このままアカウントを作れるように)
+  const existing = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
+  if (purpose === 'login' && !existing) {
+    return json({ ok: false, reason: 'no_account', message: 'このメールアドレスのアカウントはありません。' }, 404);
   }
   // 使用済みにする。同時に正しい番号が2回届いても、鍵を出すのは1回だけ
   const consumed = await env.DB.prepare('UPDATE otp_requests SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL RETURNING id')
@@ -272,6 +291,7 @@ async function handleOtpVerify(request, env) {
     deviceId,
     deviceLabel: label,
     removedDevices: removed.length,
+    existing: !!existing, // 前からあったアカウントか(アカウント作成の画面で、すでにあったときに知らせるため)
     // 同期の置き場の URL(アプリはこれを WebDAV の URL として使う)
     dav: new URL('/dav/', request.url).href,
   });

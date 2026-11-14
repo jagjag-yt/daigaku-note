@@ -38,6 +38,7 @@ async function call(path, { method = 'GET', body, token } = {}) {
   if (!res.ok || !data || data.ok === false) {
     const err = new Error(data?.message || `サーバーでエラーが起きました(${res.status})`);
     err.status = res.status;
+    err.reason = data?.reason; // 'no_account'(ログインしようとしたアドレスにアカウントがない)など
     throw err;
   }
   return data;
@@ -46,9 +47,11 @@ async function call(path, { method = 'GET', body, token } = {}) {
 // 端末の名前(ほかの端末の一覧で見分けるため)。ブラウザはサーバーが User-Agent から作る
 const label = () => (isNative ? (platform === 'ios' ? 'iPhone・iPad のアプリ' : 'Android のアプリ') : undefined);
 
-export const sendCode = (email) => call('/otp/send', { method: 'POST', body: { email } });
-// → { token, email, userId, deviceId, deviceLabel, dav, removedDevices }
-export const verify = (email, code) => call('/otp/verify', { method: 'POST', body: { email, code, label: label() } });
+// purpose: 'login'(ログイン)・'signup'(アカウント作成)
+export const sendCode = (email, purpose) => call('/otp/send', { method: 'POST', body: { email, purpose } });
+// → { token, email, userId, deviceId, deviceLabel, dav, removedDevices, existing }
+// ログインでアカウントがなければ、reason: 'no_account' のエラー(番号は使用済みにならない)
+export const verify = (email, code, purpose) => call('/otp/verify', { method: 'POST', body: { email, code, purpose, label: label() } });
 export const me = (token) => call('/me', { token });
 export const devices = (token) => call('/devices', { token }).then((d) => d.devices);
 export const revoke = (token, id) => call(`/devices?id=${encodeURIComponent(id)}`, { method: 'DELETE', token });

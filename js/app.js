@@ -129,9 +129,25 @@ function route() {
   closePopover();
   if (!$('#toast-act').hidden) $('#toast').hidden = true; // 「元に戻す」付きのトーストだけ、画面が変わったら消す
   for (const d of document.querySelectorAll('dialog[open]')) d.close();
+  // ログインしないと使えない: ログインしていなければ、本棚・ノートの代わりにログイン・アカウント作成のページを出す
+  if (!accountUI.loggedIn()) {
+    closeEditor();
+    $('#library').hidden = true;
+    $('#editor').hidden = true;
+    accountUI.showAuth(location.hash);
+    return;
+  }
+  accountUI.hideAuth();
+  if (/^#\/(login|signup)\b/.test(location.hash)) { location.hash = '#/'; return; } // ログイン済みなら本棚へ
   const m = location.hash.match(/^#\/note\/(\w+)(?:\/p\/(\w+))?/);
   if (m) openNote(m[1], m[2]);
   else showLibrary();
+}
+
+// この端末にあるノートの数(ログインのページで、ノートが消えないことを知らせるため)
+async function countNotes() {
+  const lib = buildLibrary(await db.noteLevelOps());
+  return [...lib.values()].filter((n) => !n.deleted && n.titleS).length;
 }
 
 // action: { label, run } を渡すと「元に戻す」などのボタンを付ける
@@ -238,6 +254,12 @@ function bindNative() {
     if (d) { if (d.requestClose) d.requestClose(); else d.close(); return true; }
     // ページ一覧は、画面に重なって出ているとき(狭い画面)だけ閉じる。横に並んでいるときはそのまま
     if (!$('#sidebar').hidden && $('#sb-scrim').getClientRects().length) { $('#pages-close').click(); return true; }
+    if (!$('#auth').hidden) {
+      // アカウント作成のページからはログインのページへ。番号の画面からはメールアドレスの画面へ
+      if (!$('#acct-code-form').hidden) { $('#acct-back').click(); return true; }
+      if (/^#\/signup\b/.test(location.hash)) { location.hash = '#/login'; return true; }
+      return false;
+    }
     if (/^#\/note\//.test(location.hash)) {
       if (S.sel) { clearSelection(); return true; } // 投げ縄で選んでいるなら、まず選択を外す
       location.hash = '#/';
@@ -397,19 +419,11 @@ async function onRemoteChange(noteIds) {
   }
 }
 
-// 同期のダイアログを開く。webdav: true なら「自分のサーバーを使う」の欄を開いておく
-function openSync({ webdav = false } = {}) {
+// 同期のダイアログを開く
+function openSync() {
   $('#device-id').textContent = S.rec.device;
-  const cfg = dav.config();
-  // アカウントで同期しているときは、WebDAV の欄にアカウントの住所・鍵を出さない
-  const own = cfg.account ? {} : cfg;
-  $('#dav-url').value = own.url || '';
-  $('#dav-user').value = own.user || '';
-  $('#dav-pass').value = own.pass || '';
-  $('#dav-auto').checked = own.auto !== false;
-  $('#dav-details').open = webdav || (!cfg.account && !!cfg.url);
   accountUI.refresh();
-  showDialog($('#sync-dialog'), webdav ? $('#dav-url') : null);
+  showDialog($('#sync-dialog'), null);
 }
 
 // ---------- ノート一覧 ----------
@@ -485,18 +499,8 @@ function bindLibrary() {
     }
   };
   $('#sync-btn').onclick = () => openSync();
-  accountUI.init({ askConfirm, toast, showDialog, coarse, setSyncStatus, openSync });
+  accountUI.init({ askConfirm, toast, showDialog, coarse, setSyncStatus, openSync, route, countNotes });
   $('#sync-close').onclick = () => $('#sync-dialog').close();
-  $('#dav-form').onsubmit = async (e) => {
-    e.preventDefault();
-    await dav.configure({ url: $('#dav-url').value.trim(), user: $('#dav-user').value.trim(), pass: $('#dav-pass').value, auto: $('#dav-auto').checked });
-    accountUI.refresh();
-    await dav.syncNow(true);
-  };
-  $('#dav-off').onclick = async () => {
-    await dav.configure({ url: '', user: '', pass: '', auto: false });
-    setSyncStatus('クラウド同期はオフです');
-  };
   $('#sync-export').onclick = async () => {
     const json = await buildSyncFile(S.rec.device);
     if ((await download(JSON.stringify(json), `大学ノート同期-${S.rec.device}-${stamp()}.json`, 'application/json')) === 'saved') {
@@ -1392,7 +1396,7 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v26\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v27\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 図形補正の様子(最後の数本): オン/オフ、最後に止めていた時間と揺れ、整えた結果
 const debugShapes = [];
