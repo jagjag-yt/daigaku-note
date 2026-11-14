@@ -151,8 +151,17 @@ test('ログアウトすると同期が止まる。番号の入力の間違い�
   expect((await verify).status()).toBe(400);
   await expect(a.locator('#acct-code-msg')).toContainText('番号が違います');
   await expect(a.locator('#acct-code')).toHaveValue(''); // 間違えた番号は消える(打ち足しで古い番号が送られないように)
-  // 全角の数字でも入る
-  await a.locator('#acct-code').fill([...devCode].map((c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0)).join(''));
+  // 同じ間違いをもう一度打っても送らずに知らせる
+  await a.locator('#acct-code').fill(wrong);
+  await expect(a.locator('#acct-code-msg')).toContainText('先ほど違っていました');
+  await a.locator('#acct-code').fill('');
+  // メールの件名をそのまま貼り付けても(全角の数字でも)、番号だけを読み取る
+  const zen = [...devCode].map((c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0)).join('');
+  await a.locator('#acct-code').evaluate((el, text) => {
+    const dt = new DataTransfer();
+    dt.setData('text/plain', text);
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  }, `大学ノートのログイン番号: ${zen}\nこの番号は 10 分で使えなくなります。`);
   await expect(a.locator('#acct-info')).toBeVisible();
   await expect(a.locator('#acct-who')).toHaveText('wrong@example.com');
 

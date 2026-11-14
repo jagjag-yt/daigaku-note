@@ -221,13 +221,13 @@ test('アカウントの画面(ログイン・新規登録)', async ({ page }) =
 });
 
 test('アカウントの画面(6桁の番号)', async ({ page }) => {
-  await sendCode(page, 'layout-code@example.com');
+  await sendCode(page, `layout-code-${test.info().project.name}-${Date.now()}@example.com`);
   await page.locator('#acct-code').fill('12');
   await check(page, 'account-code');
 });
 
 test('アカウントの画面(ログイン中)', async ({ page }, testInfo) => {
-  const code = await sendCode(page, `layout-${testInfo.project.name}@example.com`);
+  const code = await sendCode(page, `layout-${testInfo.project.name}-${Date.now()}@example.com`);
   await page.locator('#acct-code').fill(code);
   await expect(page.locator('#acct-devices li').first()).toContainText('この端末');
   await expect(page.locator('#acct-usage')).toContainText('GB');

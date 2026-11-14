@@ -181,7 +181,7 @@
       <h2 id="acct-code-heading" class="acct-title" tabindex="-1">メールを<wbr>確認してください</h2>
       <p class="acct-lead"><strong id="acct-sent-to" class="acct-addr"></strong> に6桁の番号を送りました。番号は <span id="acct-expires"></span> まで有効です。</p>
       <div class="code-box">
-        <input id="acct-code" type="text" inputmode="numeric" autocomplete="one-time-code" enterkeyhint="done" maxlength="12" aria-label="6桁の番号" aria-describedby="acct-code-msg">
+        <input id="acct-code" type="text" inputmode="numeric" autocomplete="one-time-code" enterkeyhint="done" maxlength="64" aria-label="6桁の番号" aria-describedby="acct-code-msg">
         <div class="code-cells" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div>
       </div>
       <p class="acct-msg" id="acct-code-msg" role="alert"></p>
@@ -190,7 +190,7 @@
         <button type="button" id="acct-resend" class="link">番号を送り直す</button>
         <button type="button" id="acct-back" class="link">メールアドレスを変える</button>
       </div>
-      <p class="small acct-foot">メールが届かないときは、迷惑メールのフォルダも確かめてください。送信元は no-reply@quiz-make.com です。</p>
+      <p class="small acct-foot">メールが届かないときは、迷惑メールのフォルダも確かめてください。送信元は <span class="nowrap">no-reply@quiz-make.com</span> です。</p>
     </form>
 
     <!-- ログイン中 -->

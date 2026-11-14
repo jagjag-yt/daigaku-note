@@ -331,6 +331,7 @@ dialog h2[tabindex]:focus { outline: none; }
 dialog h2.acct-title-left { margin-bottom: 12px; }
 dialog p.acct-lead { text-align: center; margin: 0 0 14px; color: var(--text); }
 .acct-addr { overflow-wrap: anywhere; }
+.nowrap { white-space: nowrap; }
 .acct-points { list-style: none; margin: 0 0 16px; padding: 12px 14px; border-radius: 10px; background: var(--shelf); display: flex; flex-direction: column; gap: 8px; }
 .acct-points li { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.5; }
 .acct-points li svg.ic { color: var(--accent); margin-top: 1px; }

@@ -127,7 +127,7 @@ export function refresh() {
 
   // 管理の画面を開いているときに鍵が断られたら、ログインの画面に戻す(逆も)
   const d = $('#account-dialog');
-  if (d.open && ok === $('#acct-info').hidden) render();
+  if (d.open && ok === $('#acct-info').hidden) render({ focus: true });
 }
 
 // ---------- アカウントの画面 ----------
@@ -220,7 +220,8 @@ async function sendCode(email, el) {
   if (!sent) {
     // 同じアドレスへ送ったばかりで断られた(続けて送れない1分): さきほどの番号がまだ使えるので、番号の画面へ
     const recent = loadPending();
-    if (run.lastError?.status === 429 && recent && recent.email === email) {
+    // (1日・IP ごとの上限で断られたときは、サーバーの文言をそのまま出す)
+    if (run.lastError?.status === 429 && recent && recent.email === email && now() - recent.sentAt < RESEND_SECONDS * 1000) {
       pending = recent;
       showCode({ focus: true });
       msg($('#acct-code-msg'), 'さきほど送った番号を入力してください。');
@@ -242,7 +243,6 @@ async function verify() {
     msg(el, '6桁の番号を入力してください。');
     return;
   }
-  lastTried = code;
   const ok = await run(el, async () => {
     const r = await account.verify(pending.email, code);
     // 同期先は、サーバーが返した /dav/ の住所(ログインしたサーバーと同じ場所のときだけ使う)
@@ -260,6 +260,8 @@ async function verify() {
     return true;
   });
   if (!ok) {
+    // 「番号が違う」と断られた番号だけ覚える(通信の失敗なら、同じ番号をもう一度送れるように)
+    lastTried = run.lastError?.status === 400 ? code : '';
     // 入れた番号は消して、打ち直してもらう(残すと、続けて打った数字や貼り付けた番号が古い番号のまま送られてしまう)
     setCode('');
     if (/あと0回/.test(el.textContent)) msg(el, '間違いが続いたため、この番号は使えません。送り直してください。');
@@ -421,14 +423,26 @@ export function init(helpers) {
     const digits = normalizeCode(code.value.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0)).replace(/\D/g, '').slice(-6));
     const v = setCode(digits);
     toEnd();
-    if (v.length < 6 || v !== lastTried) msg($('#acct-code-msg'), '');
+    if (v.length === 6 && v === lastTried) msg($('#acct-code-msg'), 'この番号は先ほど違っていました。メールの番号をもう一度確かめてください。');
+    else msg($('#acct-code-msg'), '');
     // 6桁そろったら、そのまま確かめる(貼り付け・自動入力のときも)。断られたのと同じ番号は自動では送らない
     if (v.length === 6 && v !== lastTried) verify();
   };
   // 日本語入力で打っている途中(変換前)は書き換えない(書き換えると数字が重なる)。確定したときに読む
   code.addEventListener('input', (e) => { if (!e.isComposing) onCode(); });
   code.addEventListener('compositionend', onCode);
-  for (const ev of ['click', 'keyup', 'select']) code.addEventListener(ev, toEnd);
+  // 全部を選んでいるとき(すべてを選択 → 削除)はそのままにする
+  const toEndUnlessAll = () => { if (!(code.selectionStart === 0 && code.selectionEnd === code.value.length && code.value)) toEnd(); };
+  for (const ev of ['click', 'keyup', 'select']) code.addEventListener(ev, toEndUnlessAll);
+  // 貼り付けは、文の中の最初の6桁の数字を使う(メールの件名「大学ノートのログイン番号: 123456」をそのまま貼ったときなど)
+  code.addEventListener('paste', (e) => {
+    const text = (e.clipboardData?.getData('text') || '').replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+    const m = /\d{6}/.exec(text.replace(/[\s-]/g, '')) || /\d{6}/.exec(text);
+    if (!m) return;
+    e.preventDefault();
+    code.value = m[0];
+    onCode();
+  });
   for (const ev of ['focus', 'blur']) {
     code.addEventListener(ev, () => {
       $('#acct-code-form .code-box').classList.toggle('focus', document.activeElement === code);
