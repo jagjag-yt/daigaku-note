@@ -230,8 +230,8 @@ async function showLocalNotice() {
   try { n = await h.countNotes(); } catch { /* 数えられなくても、お知らせを出さないだけ */ }
   $('#auth-offline').hidden = navigator.onLine;
   const parts = [];
-  if (cfg.url && !cfg.account) parts.push('自分のサーバー(WebDAV)での同期は、この版から使えなくなりました。ログインすると、この端末のノートを大学ノートアカウントで同期します。');
-  if (n > 0) parts.push(`この端末にあるノート(${n}冊)は消えません。ログインすると、ログインしたアカウントに同期されます。`);
+  if (cfg.url && !cfg.account) parts.push('自分のサーバー(WebDAV)での同期は、この版から使えなくなりました。ログインすると、この端末で書いた内容を大学ノートアカウントで同期します。ほかの端末で書いた内容は、その端末でもログインすると同期されます。');
+  if (n > 0) parts.push(`この端末にあるノート(${n}冊)は消えません。この端末で書いた内容は、ログインするとログインしたアカウントに同期されます。`);
   el.textContent = parts.join('');
   el.hidden = !parts.length;
 }
@@ -404,11 +404,11 @@ async function confirmOtherAccount(email, how) {
   const notes = `この端末には、前に別のアカウント(${mask(prev.email)})で使っていたときのノート${n > 0 ? `(${n}冊)` : ''}があります。`;
   return h.askConfirm(how === 'signup' ? {
     heading: '新しいアカウントを作成しますか?',
-    message: `${notes}アカウントを作成すると、それらのノートも新しいアカウントに同期されます。`,
+    message: `${notes}アカウントを作成すると、この端末で書いた内容は新しいアカウントに同期されます。`,
     ok: '続ける',
   } : {
     heading: '別のアカウントでログインしますか?',
-    message: `${notes}ログインすると、それらのノートもログインしたアカウントに同期されます。`,
+    message: `${notes}ログインすると、この端末で書いた内容はログインしたアカウントに同期されます。`,
     ok: '続ける',
   });
 }
