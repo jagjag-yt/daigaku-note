@@ -169,7 +169,7 @@ function bindDialogs() {
     d.prepend(x);
     d.addEventListener('pointerdown', (e) => { d._downOnBackdrop = e.target === d; });
     d.addEventListener('click', (e) => {
-      if (e.target !== d || !d._downOnBackdrop) return;
+      if (e.target !== d || !d._downOnBackdrop || d.classList.contains('busy')) return; // 通信の途中は閉じない
       const r = d.getBoundingClientRect();
       if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) d.close();
     });

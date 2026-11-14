@@ -326,7 +326,8 @@ button.link:disabled { color: var(--muted); text-decoration: none; opacity: 1; }
   align-self: center; display: flex; align-items: center; justify-content: center;
   width: 60px; height: 60px; margin: 8px 0 10px; border-radius: 50%; background: var(--accent-soft); color: var(--accent);
 }
-dialog h2.acct-title { text-align: center; padding: 0 32px; margin: 0 0 6px; font-size: 20px; }
+dialog h2.acct-title { text-align: center; padding: 0 32px; margin: 0 0 6px; font-size: 20px; word-break: keep-all; overflow-wrap: anywhere; }
+dialog h2[tabindex]:focus { outline: none; }
 dialog h2.acct-title-left { margin-bottom: 12px; }
 dialog p.acct-lead { text-align: center; margin: 0 0 14px; color: var(--text); }
 .acct-addr { overflow-wrap: anywhere; }

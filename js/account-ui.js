@@ -20,6 +20,8 @@ let pending = null; // 番号を送った先: { email, sentAt }
 let resendTimer = 0;
 let busy = false;
 let note = ''; // ログイン直後などに管理の画面の上に出すお知らせ
+let lastTried = ''; // 断られた番号(同じ番号を自動でもう一度送らないように)
+let editing = false; // 「メールアドレスを変える」を押したあと(送った番号は覚えたまま、アドレスの画面を出す)
 
 // ---------- 小さな道具 ----------
 
@@ -58,12 +60,15 @@ export function normalizeEmail(v) {
 }
 const looksLikeEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 
+// 末尾の 0 は書かない(1 GB・1.5 GB・12.3 MB)
+const trim = (x, digits) => String(Number(x.toFixed(digits)));
 export function formatBytes(n) {
   if (!(n > 0)) return '0 MB';
-  if (n < 1024 * 1024) return `${Math.max(0.1, n / 1024 / 1024).toFixed(1)} MB`;
-  if (n < 1024 ** 3) return `${(n / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)} MB`;
-  return `${(n / 1024 ** 3).toFixed(n < 10 * 1024 ** 3 ? 2 : 1)} GB`;
+  if (n < 1024 * 1024) return `${trim(Math.max(0.1, n / 1024 / 1024), 1)} MB`;
+  if (n < 1024 ** 3) return `${trim(n / 1024 / 1024, n < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+  return `${trim(n / 1024 ** 3, 2)} GB`;
 }
+const hhmm = (t) => new Date(t).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
 const initial = (email) => (String(email || '?').trim()[0] || '?').toUpperCase();
 
 function msg(el, text) { el.textContent = text || ''; }
@@ -73,13 +78,15 @@ function clearMsgs() { for (const id of ['#acct-email-msg', '#acct-code-msg', '#
 async function run(el, fn) {
   if (busy) return;
   busy = true;
+  run.lastError = null;
   setBusy(true);
   msg(el, '');
   try {
     return await fn();
   } catch (err) {
     console.warn(err);
-    msg(el, err.message);
+    msg(el, err.status === undefined ? '問題が起きました。もう一度お試しください。' : err.message);
+    run.lastError = err;
     return undefined;
   } finally {
     busy = false;
@@ -87,7 +94,8 @@ async function run(el, fn) {
   }
 }
 function setBusy(on) {
-  for (const b of document.querySelectorAll('#account-dialog button:not(.dlg-close), #acct-summary button')) b.disabled = on;
+  // 閉じるボタンも止める(通信の途中で閉じると、結果のお知らせを見られないため。Esc・背景は app.js と下の cancel で止める)
+  for (const b of document.querySelectorAll('#account-dialog button, #acct-summary button')) b.disabled = on;
   $('#account-dialog').classList.toggle('busy', on);
   if (!on) updateResend(); // 送り直しは待ち時間のあいだ押せないまま
 }
@@ -111,7 +119,11 @@ export function refresh() {
   $('#acct-summary-out').hidden = ok;
   $('#acct-summary-in').hidden = !ok;
   if (ok) $('#acct-summary-who').textContent = acc.email;
-  $('#acct-open-login').textContent = acc && !ok ? 'もう一度ログイン' : 'ログイン・新規登録';
+  const expired = !!acc && !ok;
+  $('#acct-summary-text').textContent = expired
+    ? `${acc.email} のログインが切れたため、同期が止まっています。もう一度ログインすると再開します。`
+    : 'ログインするだけで、ほかの端末と自動で同期します。サーバーの用意や設定はいりません(無料・1人 1GB まで)。';
+  $('#acct-open-login').textContent = expired ? 'もう一度ログイン' : 'ログイン・新規登録';
 
   // 管理の画面を開いているときに鍵が断られたら、ログインの画面に戻す(逆も)
   const d = $('#account-dialog');
@@ -120,42 +132,53 @@ export function refresh() {
 
 // ---------- アカウントの画面 ----------
 
-function show(step) {
+// 段を切り替える。ダイアログの名前(読み上げ)もその段の見出しにする。
+// focus: true なら見出しに移す(隠れた部品に残ったままだと、読み上げ・キーボードで迷子になるため)
+function show(step, { focus = false } = {}) {
   for (const id of ['#acct-email-form', '#acct-code-form', '#acct-info']) $(id).hidden = id !== step;
-  $('#account-dialog').scrollTop = 0;
+  const d = $('#account-dialog');
+  const head = $(step).querySelector('h2');
+  d.setAttribute('aria-labelledby', head.id);
+  d.scrollTop = 0;
+  if (focus && d.open) head.focus({ preventScroll: true });
 }
 
 // 今の状態に合わせて、どの段を出すかを決める
-function render() {
+function render({ focus = false } = {}) {
   clearMsgs();
   const acc = dav.config().account;
   if (loggedIn()) {
-    renderInfo();
+    renderInfo({ focus });
     return;
   }
   pending = pending && now() - pending.sentAt < CODE_MINUTES * 60_000 ? pending : loadPending();
-  if (pending) {
-    showCode();
+  if (pending && !editing) {
+    showCode({ focus });
     return;
   }
-  show('#acct-email-form');
+  show('#acct-email-form', { focus });
+  $('#acct-local-logout').hidden = !acc;
   if (acc) {
     // ログインが切れた: 同じアドレスでログインし直してもらう
-    $('#acct-email').value = acc.email;
-    msg($('#acct-email-msg'), 'ログインが切れました。もう一度ログインしてください');
+    if (!editing) $('#acct-email').value = acc.email;
+    msg($('#acct-email-msg'), 'ログインが切れました。もう一度ログインしてください。');
   }
 }
 
 /** アカウントの画面を開く */
 export function open() {
+  editing = false;
   render();
   const focus = !$('#acct-email-form').hidden ? $('#acct-email') : !$('#acct-code-form').hidden ? $('#acct-code') : null;
   h.showDialog($('#account-dialog'), focus);
 }
 
-function showCode() {
-  show('#acct-code-form');
+function showCode({ focus = false } = {}) {
+  editing = false;
+  show('#acct-code-form', { focus });
   $('#acct-sent-to').textContent = pending.email;
+  $('#acct-expires').textContent = hhmm(pending.sentAt + CODE_MINUTES * 60_000);
+  lastTried = '';
   setCode('');
   updateResend();
 }
@@ -178,7 +201,7 @@ function updateResend() {
   const b = $('#acct-resend');
   if (!pending) return;
   const left = Math.ceil((pending.sentAt + RESEND_SECONDS * 1000 - now()) / 1000);
-  if (left > 0 && $('#account-dialog').open) {
+  if (left > 0) { // 閉じたら止める(close の処理)。開き直したときは open() から数え直す
     b.disabled = true;
     b.textContent = `番号を送り直す(${left}秒後)`;
     resendTimer = setTimeout(updateResend, 1000);
@@ -189,21 +212,37 @@ function updateResend() {
 }
 
 async function sendCode(email, el) {
-  await run(el, async () => {
+  const sent = await run(el, async () => {
     await account.sendCode(email);
     savePending({ email, sentAt: now() });
-    showCode();
-    if (!h.coarse()) $('#acct-code').focus();
+    return true;
   });
+  if (!sent) {
+    // 同じアドレスへ送ったばかりで断られた(続けて送れない1分): さきほどの番号がまだ使えるので、番号の画面へ
+    const recent = loadPending();
+    if (run.lastError?.status === 429 && recent && recent.email === email) {
+      pending = recent;
+      showCode({ focus: true });
+      msg($('#acct-code-msg'), 'さきほど送った番号を入力してください。');
+    }
+    return;
+  }
+  showCode({ focus: true });
+  if (!h.coarse()) $('#acct-code').focus();
 }
 
 async function verify() {
   const code = setCode($('#acct-code').value);
   const el = $('#acct-code-msg');
-  if (code.length < 6) {
-    msg(el, '6桁の番号を入力してください');
+  if (!pending) { // ほかのタブでログインした・番号が切れたなど
+    render({ focus: true });
     return;
   }
+  if (code.length < 6) {
+    msg(el, '6桁の番号を入力してください。');
+    return;
+  }
+  lastTried = code;
   const ok = await run(el, async () => {
     const r = await account.verify(pending.email, code);
     // 同期先は、サーバーが返した /dav/ の住所(ログインしたサーバーと同じ場所のときだけ使う)
@@ -221,31 +260,28 @@ async function verify() {
     return true;
   });
   if (!ok) {
-    // 番号が切れた・使い切ったときは、送り直しを案内する。間違いなら打ち直せるように選んでおく
-    const text = el.textContent;
-    if (/送り直して/.test(text)) {
-      setCode('');
-      $('#acct-resend').focus();
-    } else if (!h.coarse()) {
-      $('#acct-code').select();
-    }
+    // 入れた番号は消して、打ち直してもらう(残すと、続けて打った数字や貼り付けた番号が古い番号のまま送られてしまう)
+    setCode('');
+    if (/あと0回/.test(el.textContent)) msg(el, '間違いが続いたため、この番号は使えません。送り直してください。');
+    if (/送り直して/.test(el.textContent)) $('#acct-resend').disabled ? $('#acct-back').focus() : $('#acct-resend').focus();
+    else if (!h.coarse()) $('#acct-code').focus();
     return;
   }
-  renderInfo(); // 先に管理の画面にする(refresh() が描き直してお知らせを消さないように)
+  renderInfo({ focus: true }); // 先に管理の画面にする(refresh() が描き直してお知らせを消さないように)
   refresh();
   dav.syncNow(true);
 }
 
-function renderInfo() {
+function renderInfo({ focus = false } = {}) {
   const acc = dav.config().account;
-  show('#acct-info');
+  show('#acct-info', { focus });
   $('#acct-avatar').textContent = initial(acc.email);
   $('#acct-who').textContent = acc.email;
   $('#acct-since').textContent = acc.deviceLabel ? `この端末: ${acc.deviceLabel}` : '';
   const n = $('#acct-note');
   n.textContent = note;
   n.hidden = !note;
-  note = '';
+  if ($('#account-dialog').open) note = ''; // 閉じているあいだに描いたときは、次に開いたときにも出す
   loadDetails();
 }
 
@@ -272,14 +308,16 @@ async function loadDetails() {
     meter.setAttribute('aria-valuenow', String(Math.round(pct)));
     meter.classList.toggle('warn', pct >= 90);
     $('#acct-usage').textContent = `${formatBytes(bytes)} / ${formatBytes(quota)}(${pct < 1 && bytes > 0 ? '1% 未満' : `${Math.round(pct)}%`})`;
+    meter.setAttribute('aria-valuetext', $('#acct-usage').textContent);
     if (me.value.deviceLabel) $('#acct-since').textContent = `この端末: ${me.value.deviceLabel}`;
   } else {
     meter.querySelector('span').style.width = '0%';
-    $('#acct-usage').textContent = '容量を読み込めませんでした';
+    meter.removeAttribute('aria-valuetext');
+    $('#acct-usage').textContent = '容量を読み込めませんでした。';
   }
 
   if (list.status !== 'fulfilled') {
-    row('端末の一覧を読み込めませんでした');
+    row('端末の一覧を読み込めませんでした。');
     return;
   }
   const devices = [...list.value].sort((a, b) => (b.current ? 1 : 0) - (a.current ? 1 : 0));
@@ -303,14 +341,14 @@ async function loadDetails() {
       b.type = 'button';
       b.textContent = '外す';
       b.setAttribute('aria-label', `「${d.label}」を外す`);
+      b.disabled = busy;
       b.onclick = async () => {
         const yes = await h.askConfirm({
           heading: 'この端末を外しますか?',
           message: `「${d.label}」では同期が止まり、もう一度ログインするまで使えなくなります。その端末の中のノートは消えません。`,
           ok: '外す',
         });
-        if (yes) await run($('#acct-msg'), async () => { await account.revoke(token(), d.id); });
-        if (yes) loadDetails();
+        if (yes && (await run($('#acct-msg'), async () => { await account.revoke(token(), d.id); return true; }))) loadDetails();
       };
       li.append(b);
     }
@@ -337,43 +375,74 @@ export function init(helpers) {
   $('#acct-summary-sync').onclick = () => dav.syncNow(true);
   $('#acct-to-sync').onclick = () => { $('#account-dialog').close(); h.openSync({ webdav: true }); };
   $('#account-dialog').addEventListener('close', () => clearTimeout(resendTimer));
+  $('#account-dialog').addEventListener('cancel', (e) => { if (busy) e.preventDefault(); }); // 通信の途中は Esc で閉じない
+  $('#acct-local-logout').onclick = () => run($('#acct-email-msg'), async () => {
+    await accountOff();
+    savePending(null);
+    render({ focus: true });
+    h.toast('この端末でログアウトしました。この端末のノートはそのまま残っています', 6000);
+  });
 
-  $('#acct-email-form').onsubmit = (e) => {
+  $('#acct-email-form').onsubmit = async (e) => {
     e.preventDefault();
     const input = $('#acct-email');
     const email = normalizeEmail(input.value);
     input.value = email;
     const el = $('#acct-email-msg');
-    if (!email) return msg(el, 'メールアドレスを入力してください'), input.focus();
-    if (!looksLikeEmail(email)) return msg(el, 'メールアドレスの形式が正しくありません。もう一度確かめてください'), input.focus();
+    if (!email) return msg(el, 'メールアドレスを入力してください。'), input.focus();
+    if (!looksLikeEmail(email)) return msg(el, 'メールアドレスの形式が正しくありません。もう一度確かめてください。'), input.focus();
     // 同じアドレスへ送ったばかりなら、送り直さずに番号の画面へ(続けて送ると断られるため)
     const recent = loadPending();
     if (recent && recent.email === email && now() - recent.sentAt < RESEND_SECONDS * 1000) {
       pending = recent;
-      showCode();
+      showCode({ focus: true });
       if (!h.coarse()) $('#acct-code').focus();
       return;
+    }
+    // 自分のサーバー(WebDAV)で同期しているときは、切り替えてよいか先に確かめる
+    const cfg = dav.config();
+    if (cfg.url && !cfg.account) {
+      const yes = await h.askConfirm({
+        heading: '大学ノートアカウントに切り替えますか?',
+        message: 'ログインすると、自分のサーバー(WebDAV)との同期をやめて、大学ノートアカウントで同期します。端末の中のノートは消えません。',
+        ok: '続ける',
+      });
+      if (!yes) return;
     }
     sendCode(email, el);
   };
   $('#acct-email').oninput = () => msg($('#acct-email-msg'), '');
 
   const code = $('#acct-code');
-  code.oninput = () => {
-    const v = setCode(code.value);
-    msg($('#acct-code-msg'), '');
-    if (v.length === 6) verify(); // 6桁そろったら、そのまま確かめる(貼り付け・自動入力のときも)
+  // 入力欄は「後ろに足す・後ろから消す」だけにする(見えないカーソルが途中の桁にあると、見た目と違う桁が変わるため)
+  const toEnd = () => { const n = code.value.length; try { code.setSelectionRange(n, n); } catch { /* 対応していない */ } };
+  const onCode = () => {
+    // 7桁以上になったら(古い番号の後ろに貼り付けた・打ち足した)、新しく入った後ろの6桁を使う
+    const digits = normalizeCode(code.value.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0)).replace(/\D/g, '').slice(-6));
+    const v = setCode(digits);
+    toEnd();
+    if (v.length < 6 || v !== lastTried) msg($('#acct-code-msg'), '');
+    // 6桁そろったら、そのまま確かめる(貼り付け・自動入力のときも)。断られたのと同じ番号は自動では送らない
+    if (v.length === 6 && v !== lastTried) verify();
   };
-  for (const ev of ['focus', 'blur']) code.addEventListener(ev, () => $('#acct-code-form .code-box').classList.toggle('focus', document.activeElement === code));
+  // 日本語入力で打っている途中(変換前)は書き換えない(書き換えると数字が重なる)。確定したときに読む
+  code.addEventListener('input', (e) => { if (!e.isComposing) onCode(); });
+  code.addEventListener('compositionend', onCode);
+  for (const ev of ['click', 'keyup', 'select']) code.addEventListener(ev, toEnd);
+  for (const ev of ['focus', 'blur']) {
+    code.addEventListener(ev, () => {
+      $('#acct-code-form .code-box').classList.toggle('focus', document.activeElement === code);
+      if (ev === 'focus') setTimeout(toEnd, 0);
+    });
+  }
   $('#acct-code-form').onsubmit = (e) => { e.preventDefault(); verify(); };
   $('#acct-resend').onclick = () => { if (pending) sendCode(pending.email, $('#acct-code-msg')); };
+  // 送った番号は覚えたまま(同じアドレスに戻したら、送り直さずにその番号を入れられる)
   $('#acct-back').onclick = () => {
-    clearMsgs();
-    const email = pending?.email || '';
-    savePending(null);
+    editing = true;
     clearTimeout(resendTimer);
-    show('#acct-email-form');
-    $('#acct-email').value = email;
+    render({ focus: true });
+    if (pending) $('#acct-email').value = pending.email;
     if (!h.coarse()) { $('#acct-email').focus(); $('#acct-email').select(); }
   };
 
@@ -390,7 +459,7 @@ export function init(helpers) {
       // サーバーで鍵を消せなくても(オフラインなど)、この端末ではログアウトする
       try { await account.logout(token()); } catch (err) { offline = err.status !== 401; }
       await accountOff();
-      render();
+      render({ focus: true });
       h.toast(offline
         ? 'サーバーに接続できなかったため、この端末の中だけでログアウトしました。ほかの端末の「ログイン中の端末」から外せます'
         : 'ログアウトしました。この端末のノートはそのまま残っています', 6000);

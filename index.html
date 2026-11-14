@@ -113,7 +113,7 @@
     <section id="acct-summary" class="acct-summary">
       <h3>大学ノートアカウント</h3>
       <div id="acct-summary-out">
-        <p>ログインするだけで、ほかの端末と自動で同期します。サーバーの用意や設定はいりません(無料・1人 1GB まで)。</p>
+        <p id="acct-summary-text">ログインするだけで、ほかの端末と自動で同期します。サーバーの用意や設定はいりません(無料・1人 1GB まで)。</p>
         <div class="row">
           <button type="button" id="acct-open-login" class="primary">ログイン・新規登録</button>
         </div>
@@ -159,17 +159,18 @@
     <!-- ログイン・新規登録: メールアドレス -->
     <form id="acct-email-form" class="acct-step" novalidate>
       <div class="acct-hero" data-icon="cloud" data-icon-size="30"></div>
-      <h2 id="acct-heading" class="acct-title">大学ノートにログイン</h2>
-      <p class="acct-lead">ログインすると、iPad・スマホ・パソコンのノートが自動で同じになります。</p>
+      <h2 id="acct-heading" class="acct-title" tabindex="-1">大学ノートに<wbr>ログイン</h2>
+      <p class="acct-lead">ログインすると、iPad・スマホ・パソコンのノートが自動で同期されます。</p>
       <ul class="acct-points">
-        <li data-icon="check" data-icon-size="18"><span>パスワードはいりません。メールに届く6桁の番号でログインします</span></li>
-        <li data-icon="check" data-icon-size="18"><span>はじめての方は、そのままアカウントが作られます</span></li>
+        <li data-icon="check" data-icon-size="18"><span>パスワードは不要です。メールに届く6桁の番号でログインします</span></li>
+        <li data-icon="check" data-icon-size="18"><span>はじめての方は、そのまま新規登録になります</span></li>
         <li data-icon="check" data-icon-size="18"><span>無料で 1GB まで。ノートはこの端末にも残ります</span></li>
       </ul>
       <label class="field">メールアドレス<input id="acct-email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com" aria-describedby="acct-email-msg"></label>
       <p class="acct-msg" id="acct-email-msg" role="alert"></p>
       <button type="submit" id="acct-send" class="primary acct-wide">番号を送る</button>
       <div class="acct-links">
+        <button type="button" id="acct-local-logout" class="link" hidden>この端末でログアウトする</button>
         <button type="button" id="acct-to-sync" class="link">自分のサーバーで同期する(WebDAV)</button>
       </div>
     </form>
@@ -177,8 +178,8 @@
     <!-- ログイン・新規登録: 6桁の番号 -->
     <form id="acct-code-form" class="acct-step" novalidate hidden>
       <div class="acct-hero" data-icon="mail" data-icon-size="30"></div>
-      <h2 class="acct-title">メールを確認してください</h2>
-      <p class="acct-lead"><strong id="acct-sent-to" class="acct-addr"></strong> に6桁の番号を送りました。10分以内に入力してください。</p>
+      <h2 id="acct-code-heading" class="acct-title" tabindex="-1">メールを<wbr>確認してください</h2>
+      <p class="acct-lead"><strong id="acct-sent-to" class="acct-addr"></strong> に6桁の番号を送りました。番号は <span id="acct-expires"></span> まで有効です。</p>
       <div class="code-box">
         <input id="acct-code" type="text" inputmode="numeric" autocomplete="one-time-code" enterkeyhint="done" maxlength="12" aria-label="6桁の番号" aria-describedby="acct-code-msg">
         <div class="code-cells" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div>
@@ -194,7 +195,7 @@
 
     <!-- ログイン中 -->
     <div id="acct-info" class="acct-step" hidden>
-      <h2 class="acct-title-left">アカウント</h2>
+      <h2 id="acct-info-heading" class="acct-title-left" tabindex="-1">アカウント</h2>
       <div class="acct-profile">
         <span id="acct-avatar" class="acct-avatar big" aria-hidden="true"></span>
         <div class="acct-profile-text">

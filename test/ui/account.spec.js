@@ -37,7 +37,7 @@ async function login(page, email) {
   await expect(page.locator('#acct-note')).toContainText('ログインしました');
   await expect(page.locator('#acct-info .sync-status')).toContainText('同期しました');
   await expect(page.locator('#acct-devices')).toContainText('この端末');
-  await expect(page.locator('#acct-usage')).toContainText('/ 1.00 GB');
+  await expect(page.locator('#acct-usage')).toContainText('/ 1 GB');
   await expect(page.locator('#account-btn .acct-avatar')).toHaveText(email[0].toUpperCase());
 }
 
@@ -88,9 +88,14 @@ test('メールの番号でログインして2台で同期し、端末を外し�
   // 2台目でアカウントの画面を開くと、サーバーに断られたことが分かり、ログインの画面に戻る
   await b.locator('#account-btn').click();
   await expect(b.locator('#acct-email-form')).toBeVisible();
-  await expect(b.locator('#acct-email-msg')).toHaveText('ログインが切れました。もう一度ログインしてください');
+  await expect(b.locator('#acct-email-msg')).toHaveText('ログインが切れました。もう一度ログインしてください。');
   await expect(b.locator('#acct-email')).toHaveValue(email);
   await expect(b.locator('#account-btn .acct-dot')).toBeVisible();
+  // ログインし直さずに、この端末の同期を止めることもできる(赤い点も消える)
+  await b.locator('#acct-local-logout').click();
+  await expect(b.locator('#acct-local-logout')).toBeHidden();
+  await expect(b.locator('#account-btn .acct-dot')).toBeHidden();
+  await expect(b.locator('#acct-email-msg')).toHaveText('');
   await closeAccount(b);
 
   // アカウントの削除: キャンセルできる。削除しても、この端末のノートは残る
@@ -132,6 +137,12 @@ test('ログアウトすると同期が止まる。番号の入力の間違い�
   await closeAccount(a);
   await a.locator('#account-btn').click();
   await expect(a.locator('#acct-code-form')).toBeVisible();
+  await expect(a.locator('#acct-resend')).toBeDisabled(); // 開き直しても、1分たつまでは送り直せない
+  // 「メールアドレスを変える」で同じアドレスに戻すと、送り直さずに番号の画面へ戻る
+  await a.locator('#acct-back').click();
+  await expect(a.locator('#acct-email')).toHaveValue('wrong@example.com');
+  await a.locator('#acct-send').click();
+  await expect(a.locator('#acct-code-form')).toBeVisible();
 
   // 間違った番号はサーバーの文言を出す
   const wrong = devCode === '000000' ? '111111' : '000000';
@@ -139,6 +150,7 @@ test('ログアウトすると同期が止まる。番号の入力の間違い�
   await a.locator('#acct-code').fill(wrong);
   expect((await verify).status()).toBe(400);
   await expect(a.locator('#acct-code-msg')).toContainText('番号が違います');
+  await expect(a.locator('#acct-code')).toHaveValue(''); // 間違えた番号は消える(打ち足しで古い番号が送られないように)
   // 全角の数字でも入る
   await a.locator('#acct-code').fill([...devCode].map((c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0)).join(''));
   await expect(a.locator('#acct-info')).toBeVisible();
