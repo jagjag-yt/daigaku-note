@@ -1,0 +1,49 @@
+{
+  // 大学ノートの同期サーバーのデプロイ設定(Cloudflare Workers)。手順は server/README.md。
+  //
+  // Cloudflare 側の「Root directory」を server にして、このファイルを使わせる
+  // (リポジトリの直下はアプリ本体。Workers の設定ファイルはここだけ)。
+  //
+  // 秘密の値は wrangler secret put で入れる(このファイルには書かない):
+  //   RESEND_API_KEY … メール送信の鍵(Resend)
+  //   SECRET_PEPPER  … ハッシュに混ぜる長い乱数の文字列。変えると全員がログアウトされる(ログインし直せば同期は続く)
+  "name": "daigaku-note-api",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-01",
+
+  // 受け口の住所。アプリは https://note-api.quiz-make.com/dav/ を同期先にする。
+  // custom_domain を付けると、デプロイ時に DNS レコードも自動で作られる(quiz-make.com が同じ Cloudflare のアカウントにあるため)。
+  "routes": [{ "pattern": "note-api.quiz-make.com", "custom_domain": true }],
+
+  "vars": {
+    // 送信元。Resend で認証したドメイン(quiz-make.com)のアドレスにする
+    "MAIL_FROM": "大学ノート <no-reply@quiz-make.com>"
+  },
+
+  // 利用者・端末の鍵・変更のファイル。`npx wrangler d1 create daigaku-note` で作り、出てきた database_id をここに書く
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "daigaku-note",
+      "database_id": "103cc9cc-d22b-475f-8d4a-4eb6d407d6c4"
+    }
+  ],
+
+  // PDF・画像の置き場。`npx wrangler r2 bucket create daigaku-note-files` で作っておく
+  "r2_buckets": [
+    {
+      "binding": "FILES",
+      "bucket_name": "daigaku-note-files"
+    }
+  ],
+
+  // 定期実行。毎週月曜 3:00(日本時間)に、期限切れのログインの番号・回数制限の行を消し、使っている量を数え直す。
+  // Cloudflare の書き方では日曜を 0 と書けない(1〜7 か SUN〜SAT)ので、曜日は名前で書く
+  "triggers": {
+    "crons": ["0 18 * * SUN"]
+  },
+
+  "observability": {
+    "enabled": true
+  }
+}

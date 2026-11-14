@@ -9,6 +9,7 @@ import { importPdf, renderPdfPage, exportPdf } from './pdf.js';
 import { buildSyncFile, importSyncFile } from './sync.js';
 import * as search from './search.js';
 import * as dav from './webdav.js';
+import * as account from './account.js';
 import { icon, fillIcons, openPopover, closePopover, menu, retargetPopover, popoverOpen, safeRect } from './ui.js';
 import * as native from './native.js';
 
@@ -123,6 +124,7 @@ function savePrefs() {
 
 function route() {
   flushPen();
+  dav.flush(); // アカウントで同期しているとき、ノートを閉じたら待っている変更をすぐ送る
   closePopover();
   if (!$('#toast-act').hidden) $('#toast').hidden = true; // 「元に戻す」付きのトーストだけ、画面が変わったら消す
   for (const d of document.querySelectorAll('dialog[open]')) d.close();
@@ -171,6 +173,24 @@ function bindDialogs() {
       if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) d.close();
     });
   }
+}
+
+// 確かめる(ブラウザ標準の confirm の代わり)。押したのが ok なら true
+function askConfirm({ heading, message, ok, danger = false }) {
+  return new Promise((resolve) => {
+    const d = $('#confirm-dialog');
+    $('#confirm-heading').textContent = heading;
+    $('#confirm-msg').textContent = message;
+    const b = $('#confirm-ok');
+    b.textContent = ok;
+    b.className = danger ? 'primary danger-fill' : 'primary';
+    let result = false;
+    $('#confirm-form').onsubmit = (e) => { e.preventDefault(); result = true; d.close(); };
+    $('#confirm-cancel').onclick = () => d.close();
+    d.addEventListener('close', () => resolve(result), { once: true });
+    d.showModal();
+    $('#confirm-cancel').focus(); // 消すなどの取り返せない操作なので、うっかり Enter で進まないように
+  });
 }
 
 // 名前を入力してもらう(ブラウザ標準の prompt の代わり)
@@ -355,6 +375,8 @@ function setSyncStatus(msg) {
   const bad = /失敗|エラー|できません/.test(msg || '');
   $('.sync-dot').hidden = !bad;
   $('#sync-btn').title = bad ? '同期: ' + msg : '同期';
+  // アカウントの鍵が断られたら、開いている同期のダイアログをログインの欄に戻す
+  if (dav.authExpired() && $('#sync-dialog').open && !$('#acct-info').hidden) renderAccount();
 }
 
 // 他の端末の変更が届いたとき
@@ -372,6 +394,141 @@ async function onRemoteChange(noteIds) {
   } else if (!$('#library').hidden) {
     showLibrary();
   }
+}
+
+// ---------- 大学ノートアカウント(同期のダイアログ) ----------
+// メールアドレスに届く6桁の番号でログインし、同期サーバーの /dav/ を WebDAV の同期先にする(js/account.js・server/)
+function acctMsg(msg) { $('#acct-msg').textContent = msg; }
+// 通信のあいだは、アカウントの欄のボタンを押せないようにする(2回押されないように)
+function acctBusy(on) { for (const b of document.querySelectorAll('#acct button')) b.disabled = on; }
+async function acctRun(fn) {
+  acctBusy(true);
+  acctMsg('');
+  try {
+    return await fn();
+  } catch (err) {
+    console.warn(err);
+    acctMsg(err.message);
+  } finally {
+    acctBusy(false);
+  }
+}
+
+function renderAccount() {
+  const acc = dav.config().account;
+  const loggedIn = !!acc && !dav.authExpired();
+  $('#acct-login').hidden = loggedIn;
+  $('#acct-info').hidden = !loggedIn;
+  if (!loggedIn) {
+    $('#acct-email-form').hidden = false;
+    $('#acct-code-form').hidden = true;
+    if (acc) {
+      $('#acct-email').value = acc.email; // ログインが切れた: 同じアドレスでログインし直してもらう
+      acctMsg('ログインが切れました。もう一度ログインしてください');
+    }
+    return;
+  }
+  $('#acct-who').textContent = acc.email;
+  loadDevices();
+}
+
+async function loadDevices() {
+  const ul = $('#acct-devices');
+  const row = (text) => { const li = document.createElement('li'); li.className = 'none'; li.textContent = text; ul.replaceChildren(li); };
+  row('読み込んでいます…');
+  try {
+    const list = await account.devices(dav.config().pass);
+    const others = list.filter((d) => !d.current);
+    if (!others.length) return row('ほかにログインしている端末はありません');
+    ul.replaceChildren(...others.map((d) => {
+      const li = document.createElement('li');
+      const name = document.createElement('span');
+      name.textContent = d.label;
+      const when = document.createElement('small');
+      when.textContent = `最後に使った日: ${new Date(d.lastUsedAt).toLocaleDateString('ja-JP')}`;
+      name.append(when);
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = '外す';
+      b.onclick = async () => {
+        const yes = await askConfirm({
+          heading: 'この端末を外しますか?',
+          message: `「${d.label}」では同期が止まり、もう一度ログインするまで使えなくなります。その端末の中のノートは消えません。`,
+          ok: '外す',
+        });
+        if (yes) await acctRun(async () => { await account.revoke(dav.config().pass, d.id); await loadDevices(); });
+      };
+      li.append(name, b);
+      return li;
+    }));
+  } catch (err) {
+    row(err.status === 401 ? 'ログインが切れました。もう一度ログインしてください' : '端末の一覧を読み込めませんでした');
+  }
+}
+
+// ログアウト・退会のあと: この端末の同期を止める(端末の中のノートはそのまま)
+async function accountOff() {
+  await dav.configure({ url: '', user: '', pass: '', auto: false });
+  setSyncStatus('クラウド同期はオフです');
+  renderAccount();
+}
+
+function bindAccount() {
+  let email = '';
+  $('#acct-email-form').onsubmit = (e) => {
+    e.preventDefault();
+    acctRun(async () => {
+      const value = $('#acct-email').value.trim();
+      await account.sendCode(value);
+      email = value;
+      $('#acct-sent-to').textContent = value;
+      $('#acct-code').value = '';
+      $('#acct-email-form').hidden = true;
+      $('#acct-code-form').hidden = false;
+      if (!coarse()) $('#acct-code').focus();
+    });
+  };
+  $('#acct-back').onclick = () => {
+    acctMsg('');
+    $('#acct-code-form').hidden = true;
+    $('#acct-email-form').hidden = false;
+  };
+  $('#acct-code-form').onsubmit = (e) => {
+    e.preventDefault();
+    acctRun(async () => {
+      const r = await account.verify(email, $('#acct-code').value.trim());
+      // 同期先は、サーバーが返した /dav/ の住所(ログインしたサーバーと同じ場所のときだけ使う)
+      const base = account.apiBase();
+      const url = typeof r.dav === 'string' && r.dav.startsWith(base + '/') ? r.dav : base + '/dav/';
+      // ユーザー名には利用者の ID を入れる(同期の進み具合は「URL とユーザー名」ごとに覚えるので、アカウントを替えたら最初から)
+      await dav.configure({ url, user: r.userId, pass: r.token, auto: true, account: { email: r.email, deviceId: r.deviceId } });
+      renderAccount();
+      if (r.removedDevices) acctMsg(`ログインできる端末は5台までのため、いちばん長く使っていない端末を外しました`);
+      await dav.syncNow(true);
+    });
+  };
+  $('#acct-sync').onclick = () => dav.syncNow(true);
+  $('#acct-logout').onclick = () => acctRun(async () => {
+    let offline = false;
+    // サーバーで鍵を消せなくても(オフラインなど)、この端末ではログアウトする
+    try { await account.logout(dav.config().pass); } catch (err) { offline = err.status !== 401; }
+    await accountOff();
+    if (offline) acctMsg('サーバーに接続できなかったため、この端末の中だけでログアウトしました。ほかの端末の「ほかの端末」から外せます');
+  });
+  $('#acct-delete').onclick = async () => {
+    const yes = await askConfirm({
+      heading: 'アカウントを削除しますか?',
+      message: 'サーバーに預けた変更・PDF・画像をすべて削除し、すべての端末でログアウトします。元に戻せません。この端末の中のノートは消えずに残ります(ほかの端末の中のノートも残ります)。',
+      ok: '削除する',
+      danger: true,
+    });
+    if (!yes) return;
+    await acctRun(async () => {
+      await account.deleteAccount(dav.config().pass);
+      await accountOff();
+      toast('アカウントを削除しました。この端末のノートはそのまま残っています', 6000);
+    });
+  };
 }
 
 // ---------- ノート一覧 ----------
@@ -449,21 +606,29 @@ function bindLibrary() {
   $('#sync-btn').onclick = async () => {
     $('#device-id').textContent = S.rec.device;
     const cfg = dav.config();
-    $('#dav-url').value = cfg.url || '';
-    $('#dav-user').value = cfg.user || '';
-    $('#dav-pass').value = cfg.pass || '';
-    $('#dav-auto').checked = cfg.auto !== false;
+    // アカウントで同期しているときは、WebDAV の欄にアカウントの住所・鍵を出さない
+    const own = cfg.account ? {} : cfg;
+    $('#dav-url').value = own.url || '';
+    $('#dav-user').value = own.user || '';
+    $('#dav-pass').value = own.pass || '';
+    $('#dav-auto').checked = own.auto !== false;
+    $('#dav-details').open = !cfg.account && !!cfg.url;
+    acctMsg('');
+    renderAccount();
     showDialog($('#sync-dialog'));
   };
+  bindAccount();
   $('#sync-close').onclick = () => $('#sync-dialog').close();
   $('#dav-form').onsubmit = async (e) => {
     e.preventDefault();
     await dav.configure({ url: $('#dav-url').value.trim(), user: $('#dav-user').value.trim(), pass: $('#dav-pass').value, auto: $('#dav-auto').checked });
+    renderAccount();
     await dav.syncNow(true);
   };
   $('#dav-off').onclick = async () => {
     await dav.configure({ url: '', user: '', pass: '', auto: false });
     setSyncStatus('クラウド同期はオフです');
+    renderAccount();
   };
   $('#sync-export').onclick = async () => {
     const json = await buildSyncFile(S.rec.device);
@@ -1360,7 +1525,7 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v24\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v25\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 図形補正の様子(最後の数本): オン/オフ、最後に止めていた時間と揺れ、整えた結果
 const debugShapes = [];

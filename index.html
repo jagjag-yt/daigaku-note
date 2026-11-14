@@ -109,20 +109,56 @@
 
   <dialog id="sync-dialog" class="wide">
     <h2>端末どうしの同期</h2>
-    <h3>クラウド同期(WebDAV / Nextcloud)</h3>
-    <p>Nextcloud などの WebDAV に対応した保存先を使って、自動で同期します。自分のサーバーを用意する必要はありません。</p>
-    <form id="dav-form">
-      <label class="field">フォルダのURL<input id="dav-url" type="url" placeholder="https://example.com/remote.php/dav/files/ユーザー名/" autocomplete="off"></label>
-      <label class="field">ユーザー名<input id="dav-user" type="text" autocomplete="username"></label>
-      <label class="field">アプリパスワード<input id="dav-pass" type="password" autocomplete="current-password"></label>
-      <label class="check"><input id="dav-auto" type="checkbox" checked> 変更したら自動で同期する</label>
-      <p class="small">指定したフォルダの中に「daigaku-note」フォルダを作り、そこに保存します。<span class="web-only">ブラウザから接続するため、サーバー側で CORS を許可する必要があります(README を参照してください)。</span>パスワードはこの端末の中だけに保存します。</p>
-      <div class="row">
-        <button type="submit" class="primary">保存して今すぐ同期</button>
-        <button type="button" id="dav-off">クラウド同期をオフにする</button>
+    <section id="acct">
+      <h3>大学ノートアカウントで同期</h3>
+      <div id="acct-login">
+        <p>メールアドレスに届く6桁の番号でログインするだけで、ほかの端末と自動で同期します。サーバーの用意や設定はいりません(1人 1GB まで・無料)。</p>
+        <form id="acct-email-form">
+          <label class="field">メールアドレス<input id="acct-email" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required></label>
+          <div class="row">
+            <button type="submit" id="acct-send" class="primary">番号を送る</button>
+          </div>
+        </form>
+        <form id="acct-code-form" hidden>
+          <p class="small"><span id="acct-sent-to"></span> に6桁の番号を送りました。10分以内に入力してください。</p>
+          <label class="field">6桁の番号<input id="acct-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required></label>
+          <div class="row">
+            <button type="submit" id="acct-verify" class="primary">ログイン</button>
+            <button type="button" id="acct-back">メールアドレスを変える</button>
+          </div>
+        </form>
       </div>
-      <p class="small sync-status"></p>
-    </form>
+      <div id="acct-info" hidden>
+        <p><strong id="acct-who"></strong> でログインしています。</p>
+        <p class="small sync-status"></p>
+        <div class="row">
+          <button type="button" id="acct-sync" class="primary">今すぐ同期</button>
+          <button type="button" id="acct-logout">ログアウト</button>
+        </div>
+        <h4>ほかの端末</h4>
+        <ul id="acct-devices" class="acct-devices"></ul>
+        <div class="row">
+          <button type="button" id="acct-delete" class="danger">アカウントを削除</button>
+        </div>
+      </div>
+      <p class="small acct-msg" id="acct-msg" role="status"></p>
+    </section>
+    <details id="dav-details">
+      <summary>自分のサーバーを使う(WebDAV / Nextcloud)</summary>
+      <p>Nextcloud などの WebDAV に対応した保存先を使って、自動で同期します。</p>
+      <form id="dav-form">
+        <label class="field">フォルダのURL<input id="dav-url" type="url" placeholder="https://example.com/remote.php/dav/files/ユーザー名/" autocomplete="off"></label>
+        <label class="field">ユーザー名<input id="dav-user" type="text" autocomplete="username"></label>
+        <label class="field">アプリパスワード<input id="dav-pass" type="password" autocomplete="current-password"></label>
+        <label class="check"><input id="dav-auto" type="checkbox" checked> 変更したら自動で同期する</label>
+        <p class="small">指定したフォルダの中に「daigaku-note」フォルダを作り、そこに保存します。<span class="web-only">ブラウザから接続するため、サーバー側で CORS を許可する必要があります(README を参照してください)。</span>パスワードはこの端末の中だけに保存します。大学ノートアカウントで同期しているときにここで保存すると、アカウントでの同期は止まります。</p>
+        <div class="row">
+          <button type="submit" class="primary">保存して今すぐ同期</button>
+          <button type="button" id="dav-off">クラウド同期をオフにする</button>
+        </div>
+        <p class="small sync-status"></p>
+      </form>
+    </details>
     <h3>ファイルで同期</h3>
     <p>片方の端末で「同期ファイルを書き出す」を押し、できたファイルを OneDrive・Google ドライブ・AirDrop などでもう一方の端末に送って「同期ファイルを取り込む」を押してください。</p>
     <p>両方の端末で書いた内容は消えずに統合されます。同じファイルを何度取り込んでも結果は変わりません。</p>
@@ -142,6 +178,17 @@
       <div class="row end">
         <button type="button" id="rename-cancel">キャンセル</button>
         <button type="submit" class="primary">変更</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog">
+    <form id="confirm-form">
+      <h2 id="confirm-heading"></h2>
+      <p id="confirm-msg"></p>
+      <div class="row end">
+        <button type="button" id="confirm-cancel">キャンセル</button>
+        <button type="submit" id="confirm-ok" class="primary"></button>
       </div>
     </form>
   </dialog>

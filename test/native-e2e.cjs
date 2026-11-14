@@ -89,6 +89,8 @@ async function device(browser, viewport, errors, name) {
 
 async function setDav(p) {
   await p.click('#sync-btn');
+  // 自分のサーバー(WebDAV)の欄はたたんであるので開く
+  if ((await p.locator('#dav-details').getAttribute('open')) === null) await p.click('#dav-details summary');
   if (await p.locator('#sync-dialog .web-only').isVisible()) fail('アプリ版なのに CORS の説明が出ている');
   await p.fill('#dav-url', DAV);
   await p.fill('#dav-user', 'test');
