@@ -79,7 +79,7 @@ WebDAV の URL・ユーザー名・アプリパスワードを手で入れなく
    npx wrangler d1 create daigaku-note
    ```
 
-   出てきた `database_id` を `wrangler.jsonc` の `REPLACE_WITH_DATABASE_ID` のところに書いて、コミットする。
+   出てきた `database_id` を `wrangler.jsonc` の `database_id` に書いて、コミットする(作った D1 は 2026-11-14 に書き込み済み)。「設定に書き足すか」と聞かれたら n と答える(別の名前で二重に書かれるため)。
 
 3. **表を作る**
 
