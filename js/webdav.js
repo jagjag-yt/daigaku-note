@@ -517,8 +517,11 @@ export async function syncNow(manual = false) {
     else if (e.status === 401 && accountMode()) {
       msg = 'ログインが切れました。もう一度ログインしてください';
       expired = true;
-      cfg = { ...cfg, expired: true };
-      try { await db.setMeta('dav', cfg); } catch { /* 保存できなくても、開いているあいだは止まる */ }
+      // ほかのタブでログインし直した・ログアウトした設定を、古い鍵の設定で上書きしないように、保存されている鍵が同じときだけ書く
+      try {
+        const saved = (await db.getMeta('dav')) || {};
+        if (saved.pass === cfg.pass) { cfg = { ...cfg, expired: true }; await db.setMeta('dav', cfg); }
+      } catch { /* 保存できなくても、開いているあいだは止まる */ }
     }
     else if (e.status === 507 && accountMode()) msg = '容量の上限(1GB)に達しました';
     else if (e.status === 401) msg = 'ユーザー名またはパスワードが違います';

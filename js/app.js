@@ -258,7 +258,7 @@ function bindNative() {
     if (!$('#auth').hidden) {
       // アカウント作成のページからはログインのページへ。番号の画面からはメールアドレスの画面へ
       if (!$('#acct-code-form').hidden) { $('#acct-back').click(); return true; }
-      if (/^#\/signup\b/.test(location.hash)) { location.hash = '#/login'; return true; }
+      if (/^#\/signup\b/.test(location.hash)) { location.replace('#/login'); return true; }
       return false;
     }
     if (/^#\/note\//.test(location.hash)) {

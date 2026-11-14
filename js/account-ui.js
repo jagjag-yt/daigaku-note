@@ -79,7 +79,8 @@ export function normalizeEmail(v) {
   return String(v || '')
     .replace(/[！-～]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
     .replace(/　/g, ' ')
-    .trim();
+    .trim()
+    .toLowerCase(); // サーバーも小文字にそろえて保存する(前のアカウントと比べるときに、大文字だけの違いで別の人としないように)
 }
 const looksLikeEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 
@@ -122,7 +123,10 @@ function setBusy(on) {
   for (const b of document.querySelectorAll('#auth button, #account-dialog button, #acct-summary button')) b.disabled = on;
   $('#auth').classList.toggle('busy', on);
   $('#account-dialog').classList.toggle('busy', on);
-  if (!on) updateResend(); // 送り直しは待ち時間のあいだ押せないまま
+  if (!on) {
+    updateResend(); // 送り直しは待ち時間のあいだ押せないまま
+    if (pending?.locked && !$('#acct-code-form').hidden) setLocked(true); // 使えなくなった番号では、ログインのボタンも押せないまま
+  }
 }
 
 // ---------- 本棚のボタン・同期のダイアログの要約 ----------
@@ -354,11 +358,8 @@ async function verify(how) {
 
 // 鍵を受け取ったあと: 同期の設定を入れて本棚へ
 async function finishLogin(r, asked) {
-  const cfg = dav.config();
-  // 以前の版で自分のサーバー(WebDAV)と同期していた: 切り替える前に、まだ取り込んでいないほかの端末の変更を一度取りに行く
-  if (cfg.url && !cfg.account) {
-    await run($('#acct-code-msg'), () => dav.syncNow(true));
-  }
+  // (以前の版で自分のサーバー(WebDAV)と同期していた端末は、ログインのページを出しているあいだも WebDAV との自動同期を続けている。
+  //  ここで切り替える)
   const ok = await run($('#acct-code-msg'), async () => {
     // 同期先は、サーバーが返した /dav/ の住所(ログインしたサーバーと同じ場所のときだけ使う)
     const base = account.apiBase();
@@ -522,7 +523,13 @@ export function init(helpers) {
   $('#acct-summary-sync').onclick = () => dav.syncNow(true);
   $('#account-dialog').addEventListener('cancel', (e) => { if (busy) e.preventDefault(); }); // 通信の途中は Esc で閉じない
   // 通信の途中は、ページを切り替えない(ログイン ⇔ アカウント作成)
-  for (const a of document.querySelectorAll('#auth a')) a.addEventListener('click', (e) => { if (busy) e.preventDefault(); });
+  // ページの行き来は履歴に足さない(足すと、ログインしたあとの「戻る」が、ログインのページの住所に戻って空振りするため)
+  for (const a of document.querySelectorAll('#auth a')) {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (!busy) location.replace(a.getAttribute('href'));
+    });
+  }
   // ネットにつながった・切れたら、ページの下のお知らせを合わせる
   for (const ev of ['online', 'offline']) window.addEventListener(ev, () => { if (!$('#auth').hidden) showLocalNotice(); });
 
@@ -610,6 +617,8 @@ export function init(helpers) {
     if (!yes) return;
     let offline = false;
     const done = await run($('#acct-msg'), async () => {
+      // 待っている変更を先に送る(送れなくても、変更は端末に残っていて、次にログインしたときに送る)
+      try { await dav.flush(); } catch { /* 送れなくても続ける */ }
       // サーバーで鍵を消せなくても(オフラインなど)、この端末ではログアウトする
       try { await account.logout(token()); } catch (err) { offline = err.status !== 401; }
       await accountOff();
