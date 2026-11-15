@@ -6,12 +6,30 @@ export const TEMPLATES = [
   { id: 'lines-a', label: 'A罫(7mm)' },
   { id: 'lines-b', label: 'B罫(6mm)' },
   { id: 'lines-c', label: 'C罫(5mm)' },
+  { id: 'margin', label: 'B罫(余白線つき)' },
+  { id: 'cols', label: '2段(B罫)' },
   { id: 'grid', label: '方眼(5mm)' },
+  { id: 'grid-10', label: '方眼(10mm)' },
   { id: 'dots', label: 'ドット(5mm)' },
+  { id: 'todo', label: 'ToDo リスト' },
   { id: 'cornell', label: 'コーネル式' },
   { id: 'music', label: '五線譜' },
   { id: 'none', label: '無地' },
 ];
+
+// 紙の色(背景が罫線・無地のページ)。値は id で持つ。知らない id や無いときは白
+export const PAPERS = [
+  { id: 'white', label: '白', c: '#ffffff' },
+  { id: 'cream', label: 'クリーム', c: '#fbf6e9' },
+  { id: 'yellow', label: '黄', c: '#fff6c7' },
+  { id: 'blue', label: '水色', c: '#eaf3fb' },
+  { id: 'green', label: '薄緑', c: '#ecf6ea' },
+  { id: 'gray', label: '灰', c: '#f0f0f0' },
+];
+export function paperColor(bg) {
+  if (!bg || bg.type !== 'blank') return '#ffffff';
+  return (PAPERS.find((p) => p.id === bg.paper) || PAPERS[0]).c;
+}
 
 export const SIZES = [
   { id: 'a4', label: 'A4 縦', w: 210 * MM, h: 297 * MM },
@@ -38,6 +56,33 @@ export function templatePrims(bg, w, h) {
     case 'lines-a': ruled(7 * MM); break;
     case 'lines-b': ruled(6 * MM); break;
     case 'lines-c': ruled(5 * MM); break;
+    case 'margin': { // B罫と、左の余白線
+      ruled(6 * MM);
+      const x = 24 + 22 * MM;
+      out.lines.push([x, 22 * MM - 6 * MM, x, h - 14 * MM, 0.8, ACCENT]);
+      break;
+    }
+    case 'cols': { // 2段組み(左右に分けた B罫)
+      const mid = w / 2, gap = 5 * MM;
+      for (let y = 22 * MM; y < h - 14 * MM; y += 6 * MM) { hl(y, 24, mid - gap); hl(y, mid + gap, w - 24); }
+      break;
+    }
+    case 'grid-10': {
+      const g = 10 * MM;
+      for (let y = g; y < h; y += g) out.lines.push([0, y, w, y, 0.5, RULING_COLOR]);
+      for (let x = g; x < w; x += g) out.lines.push([x, 0, x, h, 0.5, RULING_COLOR]);
+      break;
+    }
+    case 'todo': { // チェックの四角と、書く線
+      const step = 9 * MM, box = 4.2 * MM, x0 = 24 + 4 * MM;
+      for (let y = 26 * MM; y < h - 14 * MM; y += step) {
+        const bx = x0, by = y - box - 1.2 * MM;
+        out.lines.push([bx, by, bx + box, by, 0.7, '#8fa3c7'], [bx + box, by, bx + box, by + box, 0.7, '#8fa3c7'],
+          [bx + box, by + box, bx, by + box, 0.7, '#8fa3c7'], [bx, by + box, bx, by, 0.7, '#8fa3c7']);
+        hl(y, x0 + box + 3 * MM, w - 24);
+      }
+      break;
+    }
     case 'grid': {
       const g = 5 * MM;
       for (let y = g; y < h; y += g) out.lines.push([0, y, w, y, 0.4, RULING_COLOR]);

@@ -489,7 +489,7 @@ dialog .acct-card p { margin: 6px 0 0; }
 /* 用紙・表紙を選ぶ */
 .tpl-pick { max-width: 480px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; color: var(--text); }
 .tpl-opt { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 4px; min-height: 0; border: 2px solid transparent; background: transparent; border-radius: 10px; font-size: 12px; line-height: 1.3; text-align: center; overflow-wrap: anywhere; }
-.tpl-opt svg { width: 100%; height: auto; aspect-ratio: var(--ar, 210 / 297); background: #fff; border-radius: 2px; box-shadow: 0 0 0 1px var(--line), 0 1px 3px rgba(0,0,0,.08); }
+.tpl-opt svg { width: 100%; height: auto; aspect-ratio: var(--ar, 210 / 297); background: var(--paper, #fff); border-radius: 2px; box-shadow: 0 0 0 1px var(--line), 0 1px 3px rgba(0,0,0,.08); }
 .tpl-opt.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .cover-pick { display: flex; flex-wrap: wrap; gap: 10px; padding: 2px 0; }
 .cover-pick.small { gap: 8px; padding: 0 10px 4px; }
@@ -679,3 +679,8 @@ button.hit { width: 100%; text-align: left; font: inherit; cursor: pointer; }
 .ol-go { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 8px; border: none; background: transparent; color: var(--text); text-align: left; font-size: 14px; }
 .ol-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ol-no { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* 紙の色 */
+.paper-pick { display: flex; flex-wrap: wrap; gap: 10px; padding: 2px 0; }
+.paper-opt { width: 36px; height: 36px; min-height: 0; padding: 0; border-radius: 50%; background: var(--paper); border: 1px solid var(--line); box-shadow: inset 0 0 0 2px #fff; }
+.paper-opt.on { outline: 3px solid var(--accent); outline-offset: 2px; }
+.menu-select select + .menu-cap { margin-top: 6px; }
