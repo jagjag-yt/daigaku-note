@@ -783,3 +783,15 @@ body:has(#editor.tb-bottom:not([hidden])) #toast { bottom: calc(72px + var(--sa-
 .tm-presets button { min-height: 30px; padding: 0 8px; font-size: 13px; border-radius: 999px; }
 .tm-ctrl { display: flex; gap: 8px; }
 .tm-ctrl button { flex: 1; }
+/* 拡大ウインドウ */
+.zoom-win { flex: none; background: var(--panel); border-top: 1px solid var(--line); padding: 0 max(8px, var(--sa-right)) 8px max(8px, var(--sa-left)); display: flex; flex-direction: column; height: min(260px, 38vh); z-index: 4; }
+.zoom-win[hidden] { display: none; }
+.zw-bar { display: flex; align-items: center; gap: 2px; min-height: 40px; }
+.zw-cap { font-size: 13px; font-weight: 600; color: var(--muted); margin-right: 6px; }
+.zw-right svg { transform: rotate(180deg); }
+.zw-nl { min-height: 32px; padding: 0 10px; font-size: 13px; border-radius: 999px; }
+.zw-pad { position: relative; flex: 1; min-height: 0; border-radius: 8px; overflow: hidden; box-shadow: inset 0 0 0 1px var(--line); touch-action: none; cursor: crosshair; }
+.zw-bg, .zw-svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.zw-adv { position: absolute; top: 0; bottom: 0; left: 78%; right: 0; background: rgba(47, 93, 158, .07); border-left: 1px dashed rgba(47, 93, 158, .4); pointer-events: none; }
+.zw-target { position: absolute; border: 2px solid rgba(47, 93, 158, .8); background: rgba(47, 93, 158, .06); border-radius: 2px; pointer-events: none; z-index: 2; }
+.zw-tpl path { vector-effect: non-scaling-stroke; stroke-width: 1px; }

@@ -162,6 +162,19 @@
       </div>
       <button id="page-ind" class="page-ind" title="ページを指定して移動"></button>
     </div>
+    <div id="zoom-win" class="zoom-win" hidden role="region" aria-label="拡大ウインドウ(下の枠に書くと、ページの青い枠の中に入る)">
+      <div class="zw-bar">
+        <span class="zw-cap">拡大ウインドウ</span>
+        <button type="button" class="icon-btn small zw-left" data-icon="back" data-icon-size="18" aria-label="枠を左へ" title="左へ"></button>
+        <button type="button" class="icon-btn small zw-up" data-icon="up" data-icon-size="18" aria-label="枠を上へ" title="上へ"></button>
+        <button type="button" class="icon-btn small zw-down" data-icon="down" data-icon-size="18" aria-label="枠を下へ" title="下へ"></button>
+        <button type="button" class="icon-btn small zw-right" data-icon="back" data-icon-size="18" aria-label="枠を右へ" title="右へ"></button>
+        <button type="button" class="zw-nl">改行</button>
+        <span class="spacer"></span>
+        <button type="button" class="icon-btn small zw-x" data-icon="close" data-icon-size="18" aria-label="拡大ウインドウを閉じる" title="閉じる"></button>
+      </div>
+      <div class="zw-pad" role="img" aria-label="ここにペンで書くと、ページの青い枠の中に小さく入ります"><canvas class="zw-bg"></canvas><svg class="zw-svg" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><g class="zw-tpl"></g><g class="zw-ink"></g><g class="zw-live"></g></svg><div class="zw-adv" aria-hidden="true"></div></div>
+    </div>
   </section>
 
   <dialog id="new-dialog" class="wide">
