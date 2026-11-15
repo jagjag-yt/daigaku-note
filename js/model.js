@@ -4,7 +4,8 @@
 // 端末ごとに書いた op を後から足し合わせるだけで同期(マージ)できる。
 // DOM には依存しない(Node でテストできる)。
 
-export const NOTE_TYPES = ['note.create', 'note.rename', 'note.delete', 'note.restore', 'note.cover'];
+// note.fav: お気に入り / note.purge: ゴミ箱から完全に削除(本棚・ゴミ箱・検索に出さず、開けない。同期の記録の中身は残る)
+export const NOTE_TYPES = ['note.create', 'note.rename', 'note.delete', 'note.restore', 'note.cover', 'note.fav', 'note.purge'];
 
 export const PAGE_A4 = { w: 595.28, h: 841.89 };
 
@@ -98,8 +99,16 @@ export function applyOp(note, op) {
     case 'note.cover': // 表紙の色
       if (newer(s, note.coverS)) { note.cover = p.cover; note.coverS = s; }
       break;
+    case 'note.fav': // お気に入り
+      if (newer(s, note.favS)) { note.fav = !!p.fav; note.favS = s; }
+      break;
+    case 'note.purge': // 完全に削除(取り消せない。どの順で届いても消えたまま)
+      note.purged = true;
+      note.deleted = true;
+      break;
     case 'note.delete':
     case 'note.restore':
+      if (note.purged) break; // 完全に削除したノートは、ほかの端末で戻しても戻らない
       if (newer(s, note.delS)) {
         note.deleted = op.t === 'note.delete';
         note.delS = s;
