@@ -795,3 +795,15 @@ body:has(#editor.tb-bottom:not([hidden])) #toast { bottom: calc(72px + var(--sa-
 .zw-adv { position: absolute; top: 0; bottom: 0; left: 78%; right: 0; background: rgba(47, 93, 158, .07); border-left: 1px dashed rgba(47, 93, 158, .4); pointer-events: none; }
 .zw-target { position: absolute; border: 2px solid rgba(47, 93, 158, .8); background: rgba(47, 93, 158, .06); border-radius: 2px; pointer-events: none; z-index: 2; }
 .zw-tpl path { vector-effect: non-scaling-stroke; stroke-width: 1px; }
+/* 発表モード */
+#editor.present .ed-top, #editor.present .ed-row.toolbar.bottom, #editor.present .page-ind, #editor.present #add-tile, #editor.present #sidebar, #editor.present .sb-scrim { display: none !important; }
+#editor.present { background: #111; }
+#editor.present #pages { gap: 48px; padding-top: 50vh; padding-bottom: 50vh; }
+#editor.present .page { box-shadow: none; }
+.present-bar { position: absolute; right: max(16px, var(--sa-right)); bottom: max(16px, var(--sa-bottom)); z-index: 6; display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 999px; background: rgba(31,41,55,.85); color: #fff; opacity: .72; transition: opacity .2s; }
+.present-bar:hover, .present-bar:focus-within { opacity: 1; }
+@media (hover: none) { .present-bar { opacity: .8; } }
+.present-bar[hidden] { display: none; }
+.present-bar .icon-btn { color: #fff; }
+.present-bar .icon-btn.on { background: rgba(255,255,255,.18); }
+.pr-no { font-size: 13px; min-width: 52px; text-align: center; font-variant-numeric: tabular-nums; }

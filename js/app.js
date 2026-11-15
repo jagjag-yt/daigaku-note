@@ -50,7 +50,7 @@ const PEN_NIBS = {
 };
 const PEN_DEFAULTS = { nib: 'fountain', sens: 50, stab: 0, dash: '', shape: '' }; // shape: ドラッグで描く図形(空ならふつうに書く)
 
-const APP_VERSION = 'v47'; // sw.js の VERSION と合わせる
+const APP_VERSION = 'v48'; // sw.js の VERSION と合わせる
 const MAX_TABS = 12; // 開いておけるタブの数
 const DEFAULT_HIDDEN = ['laser']; // 最初は隠しておく道具(設定やその他のメニューから使う)
 
@@ -94,6 +94,7 @@ const S = {
   colorHist: { pen: [], marker: [], tape: [] }, // 最近使った色
   // ツールバー: 道具の並び・隠す道具・置く場所(top / bottom)
   tb: { order: ['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky', 'image', 'laser', 'shapes'], hidden: ['laser'], pos: 'top' },
+  present: null, // 発表モード { tool, sidebar, zoom, fit }(戻すための元の状態)。null は普段の表示
   zw: null, // 拡大ウインドウ { pageId, x, y, w }(ページの座標の枠)。null は閉じている
   ruler: null, // 定規 { x, y, a }(画面上の中心と角度)。null はしまっている
   tabs: [], // 開いているノートのタブ: [{ id, title, page }](page は最後に見ていたページ)
@@ -1733,6 +1734,7 @@ function moreMenu(anchor) {
     { icon: 'rename', label: '名前を変更', onClick: renameNote },
     { icon: 'laser', label: 'レーザーポインター', id: 'laser-menu', on: S.tool === 'laser', onClick: () => setTool(S.tool === 'laser' ? (S.prevTool && S.prevTool !== 'laser' ? S.prevTool : 'pen') : 'laser') },
     { icon: 'ruler', label: '定規', id: 'ruler-menu', on: !!S.ruler, onClick: () => toggleRuler() },
+    { icon: 'present', label: '発表モード', id: 'present-menu', onClick: () => enterPresent() },
     { icon: 'zoomwin', label: '拡大ウインドウ', id: 'zw-menu', on: !!S.zw, onClick: () => toggleZoomWin() },
     { icon: 'timer', label: 'タイマー', id: 'timer-menu', on: !$('#timer').hidden, onClick: () => toggleTimer() },
     { icon: 'settings', label: '設定…', id: 'open-settings', onClick: openSettings },
@@ -1925,6 +1927,7 @@ function bindEditor() {
   bindRuler();
   bindTimer();
   bindZoomWin();
+  bindPresent();
   for (const c of STICKY_COLORS) {
     const b = document.createElement('button');
     b.className = 'swatch sticky-c';
@@ -1985,7 +1988,15 @@ function bindEditor() {
   $('#title').onclick = renameNote;
   bindAddDialog();
   document.addEventListener('keydown', (e) => {
-    if ($('#editor').hidden || e.repeat || e.target.closest('input, select, textarea, dialog')) return;
+    if ($('#editor').hidden || e.target.closest('input, select, textarea, dialog')) return;
+    if (S.present) {
+      const k = e.key;
+      if (k === ' ' && e.target.closest('button')) return; // ボタンにフォーカスがあるときは、ボタンを押す
+      if (k === 'ArrowRight' || k === 'ArrowDown' || k === 'PageDown' || k === ' ') { e.preventDefault(); presentGo(1); return; } // 押し続けると続けて送る
+      if (k === 'ArrowLeft' || k === 'ArrowUp' || k === 'PageUp') { e.preventDefault(); presentGo(-1); return; }
+      if (k === 'Escape') { e.preventDefault(); exitPresent(); return; }
+    }
+    if (e.repeat) return;
     const mod = e.ctrlKey || e.metaKey;
     const k = e.key.toLowerCase();
     if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
@@ -2134,6 +2145,7 @@ function closeTab(id) {
 }
 
 function closeEditor() {
+  if (S.present) exitPresent(true);
   rememberTabPage();
   if (S.zw) closeZoomWin();
   S.ruler = null; // 定規はノートを閉じたらしまう
@@ -2161,6 +2173,10 @@ function fitZoom() {
   const ps = getComputedStyle($('#pages'));
   const pad = (parseFloat(ps.paddingLeft) || 16) + (parseFloat(ps.paddingRight) || 16);
   const avail = (sc.clientWidth || window.innerWidth) - pad;
+  if (S.present) { // 発表モード: ページ全体が画面に入る大きさ
+    const maxH = Math.max(...pages.map((p) => p.h), 1);
+    return clampZoom(Math.min(avail / maxW, ((sc.clientHeight || window.innerHeight) - 24) / maxH, 4));
+  }
   return clampZoom(Math.min(avail / maxW, 1.5));
 }
 const clampZoom = (z) => Math.max(0.3, Math.min(4, z));
@@ -2454,6 +2470,82 @@ function laserFade(a) {
     g.style.opacity = '0';
     setTimeout(() => { if (g.isConnected && !(active && active.v === a.v)) paintLive(a.v, ''); }, 650);
   }, 700);
+}
+
+// ---------- 発表モード(画面いっぱいに 1 ページずつ。レーザーで指し示す) ----------
+function enterPresent() {
+  if (S.present || !S.note) return;
+  const pg = currentPage();
+  if (S.zw) closeZoomWin();
+  // 戻すときのために、見ていた位置(ページと、その中の割合)と定規も覚える
+  const sc = $('#scroller'), v0 = pg && S.views.get(pg.id);
+  const frac = v0 ? (sc.getBoundingClientRect().top - v0.el.getBoundingClientRect().top) / Math.max(1, v0.el.offsetHeight) : 0;
+  S.present = { tool: S.tool, sidebar: S.sidebar, zoom: S.zoom, fit: S.fit, pg: pg && pg.id, frac, ruler: S.ruler };
+  if (S.ruler) { S.ruler = null; placeRuler(); } // 発表のじゃまになるので、定規はしまっておく
+  if (S.sidebar) { S.sidebar = false; $('#sidebar').hidden = true; $('#sb-scrim').hidden = true; }
+  $('#editor').classList.add('present');
+  $('#present-bar').hidden = false;
+  // 画面いっぱい(できる端末だけ。できなくても、画面の中で発表モードにする)
+  document.documentElement.requestFullscreen?.().catch(() => {});
+  if (S.tool !== 'laser') setTool('laser');
+  S.fit = true;
+  requestAnimationFrame(() => {
+    if (!S.present) return; // すぐに終えた
+    S.zoom = fitZoom();
+    layoutPages();
+    if (pg) presentShow(pg);
+  });
+}
+function exitPresent(quiet) {
+  if (!S.present) return;
+  const p = S.present, pg = currentPage();
+  S.present = null;
+  $('#editor').classList.remove('present');
+  $('#present-bar').hidden = true;
+  if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+  S.fit = p.fit;
+  if (quiet) { S.tool = p.tool; return; } // ノートを閉じるとき: 道具と表示の決め方だけ戻す
+  if (p.tool !== S.tool) setTool(p.tool);
+  S.zoom = p.fit ? fitZoom() : p.zoom;
+  if (p.sidebar) toggleSidebar(true);
+  layoutPages();
+  // 発表の前に見ていた所へ戻す(発表中にページを送っていたら、そのページの先頭へ)
+  const back = pg && pg.id !== p.pg ? { id: pg.id, frac: 0 } : { id: p.pg, frac: p.frac };
+  const v = back.id && S.views.get(back.id);
+  if (v) { const sc = $('#scroller'); sc.scrollTop += v.el.getBoundingClientRect().top - sc.getBoundingClientRect().top + back.frac * v.el.offsetHeight; }
+  if (p.ruler) { S.ruler = p.ruler; placeRuler(); }
+}
+// ページを画面の真ん中に出す
+function presentShow(pg) {
+  const v = S.views.get(pg.id), sc = $('#scroller');
+  if (!v) return;
+  const r = v.el.getBoundingClientRect(), s = sc.getBoundingClientRect();
+  sc.scrollTop += r.top - s.top - (s.height - r.height) / 2;
+  const pages = pagesOf(S.note);
+  $('#present-bar .pr-no').textContent = `${pages.indexOf(pg) + 1} / ${pages.length}`;
+}
+function presentGo(d) {
+  const pages = pagesOf(S.note), cur = currentPage();
+  const next = pages[Math.max(0, Math.min(pages.length - 1, pages.indexOf(cur) + d))];
+  if (next) presentShow(next);
+}
+function bindPresent() {
+  const bar = $('#present-bar');
+  bar.querySelector('.pr-prev').onclick = () => presentGo(-1);
+  bar.querySelector('.pr-next').onclick = () => presentGo(1);
+  bar.querySelector('.pr-laser').onclick = () => setTool('laser');
+  bar.querySelector('.pr-pen').onclick = () => setTool('pen');
+  bar.querySelector('.pr-x').onclick = () => exitPresent();
+  // 画面いっぱいを Esc などで抜けたら、発表モードも終える
+  document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && S.present) exitPresent(); });
+  // スクロールしたら、ページ番号を合わせる
+  $('#scroller').addEventListener('scroll', () => {
+    if (!S.present) return;
+    const pages = pagesOf(S.note), pg = currentPage();
+    if (pg) bar.querySelector('.pr-no').textContent = `${pages.indexOf(pg) + 1} / ${pages.length}`;
+    bar.querySelector('.pr-laser').classList.toggle('on', S.tool === 'laser');
+    bar.querySelector('.pr-pen').classList.toggle('on', S.tool === 'pen');
+  }, { passive: true });
 }
 
 // ---------- 拡大ウインドウ(下の大きな枠に書くと、ページの小さな枠に入る) ----------
