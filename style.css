@@ -809,3 +809,9 @@ body:has(#editor.tb-bottom:not([hidden])) #toast { bottom: calc(72px + var(--sa-
 .pr-no { font-size: 13px; min-width: 52px; text-align: center; font-variant-numeric: tabular-nums; }
 /* 印刷用の見えない枠 */
 .print-frame { position: fixed; right: 0; bottom: 0; width: 1px; height: 1px; border: 0; opacity: 0; pointer-events: none; }
+/* 閲覧専用・ロック */
+#editor.ro .ed-row.toolbar, #editor.ro #add-tile, #editor.ro .sb-foot { display: none !important; }
+.ro-badge { font-size: 11px; color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 1px 8px; margin-top: 2px; }
+.lock-badge { position: absolute; left: 10px; top: 8px; width: 26px; height: 26px; border-radius: 50%; background: var(--chip-bg); color: var(--text); display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 3px rgba(0,0,0,.15); pointer-events: none; }
+.grid.list .lock-badge { position: static; grid-column: 2; grid-row: 1; justify-self: end; box-shadow: none; }
+.set-btns { display: flex; gap: 6px; flex: none; }

@@ -50,7 +50,7 @@ const PEN_NIBS = {
 };
 const PEN_DEFAULTS = { nib: 'fountain', sens: 50, stab: 0, dash: '', shape: '' }; // shape: ドラッグで描く図形(空ならふつうに書く)
 
-const APP_VERSION = 'v49'; // sw.js の VERSION と合わせる
+const APP_VERSION = 'v50'; // sw.js の VERSION と合わせる
 const MAX_TABS = 12; // 開いておけるタブの数
 const DEFAULT_HIDDEN = ['laser']; // 最初は隠しておく道具(設定やその他のメニューから使う)
 
@@ -94,6 +94,9 @@ const S = {
   colorHist: { pen: [], marker: [], tape: [] }, // 最近使った色
   // ツールバー: 道具の並び・隠す道具・置く場所(top / bottom)
   tb: { order: ['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky', 'image', 'laser', 'shapes'], hidden: ['laser'], pos: 'top' },
+  ro: new Set(), // 閲覧専用にしているノートの id(端末ごと)
+  unlocked: new Set(), // この端末でパスコードを入れて開いたロック中のノート(本棚に戻ると閉じる)
+  lockHash: null, // ロック用のパスコード { salt, hash }(この端末だけ)
   present: null, // 発表モード { tool, sidebar, zoom, fit }(戻すための元の状態)。null は普段の表示
   zw: null, // 拡大ウインドウ { pageId, x, y, w }(ページの座標の枠)。null は閉じている
   ruler: null, // 定規 { x, y, a }(画面上の中心と角度)。null はしまっている
@@ -159,6 +162,8 @@ async function init() {
     if (Array.isArray(hs)) S.colorHist[k] = clean(hs).slice(0, HIST_MAX);
   }
   if (['system', 'light', 'dark'].includes(prefs.theme)) S.theme = prefs.theme;
+  if (Array.isArray(prefs.ro)) S.ro = new Set(prefs.ro.filter((x) => typeof x === 'string' && /^\w+$/.test(x)).slice(0, 500));
+  if (prefs.lockHash && typeof prefs.lockHash.salt === 'string' && typeof prefs.lockHash.hash === 'string') S.lockHash = prefs.lockHash;
   if (Array.isArray(prefs.tabs)) {
     const seen = new Set();
     S.tabs = prefs.tabs.filter((t) => t && typeof t.id === 'string' && /^\w+$/.test(t.id) && !seen.has(t.id) && seen.add(t.id))
@@ -229,7 +234,7 @@ async function init() {
 }
 
 function savePrefs() {
-  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lib: { sort: S.lib.sort, view: S.lib.view }, nn: S.nn, theme: S.theme, tb: S.tb, tabs: S.tabs, tape: S.tape, markerMode: S.markerMode, straight: S.straight, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text, sticky: S.sticky });
+  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lib: { sort: S.lib.sort, view: S.lib.view }, nn: S.nn, theme: S.theme, tb: S.tb, tabs: S.tabs, ro: [...S.ro], lockHash: S.lockHash, tape: S.tape, markerMode: S.markerMode, straight: S.straight, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text, sticky: S.sticky });
 }
 
 function route() {
@@ -330,10 +335,15 @@ function askConfirm({ heading, message, ok, danger = false, alt = null }) {
 }
 
 // 名前を入力してもらう(ブラウザ標準の prompt の代わり)
-function askName(heading, value) {
+function askName(heading, value, { secret = false } = {}) {
   return new Promise((resolve) => {
     const d = $('#rename-dialog'), inp = $('#rename-input');
     $('#rename-heading').textContent = heading;
+    // パスコードを聞くときは伏せ字・数字のキーボード
+    inp.type = secret ? 'password' : 'text';
+    inp.inputMode = secret ? 'numeric' : '';
+    inp.autocomplete = secret ? 'off' : 'off';
+    d.addEventListener('close', () => { inp.type = 'text'; inp.inputMode = ''; }, { once: true });
     inp.value = value || '';
     let result = null;
     $('#rename-form').onsubmit = (e) => { e.preventDefault(); result = inp.value.trim(); d.close(); };
@@ -601,6 +611,8 @@ function mk(t, p, n = S.note.id) {
   return S.rec.make(n, t, p);
 }
 async function commit(ops) {
+  // 閲覧専用のノートは書き換えない(ページの追加・貼り付け・取り消しなど、どの操作から来ても)
+  if (isRO() && ops.some((op) => op.n === S.note.id)) { toast('閲覧専用です。書くには、その他のメニューで外してください'); return false; }
   for (const op of ops) if (S.note && op.n === S.note.id) applyOp(S.note, op);
   try {
     await db.putOps(ops, S.rec.clock);
@@ -815,7 +827,7 @@ async function runSearch() {
   const lib = buildLibrary(await db.noteLevelOps());
   // 検索の対象は、今の絞り込み(すべて / お気に入り / ゴミ箱)に合わせる
   const f = S.lib.filter;
-  const live = new Map([...lib.values()].filter((n) => n.titleS && !n.purged && (f === 'trash' ? n.deleted : !n.deleted && (f !== 'fav' || n.fav))).map((n) => [n.id, n]));
+  const live = new Map([...lib.values()].filter((n) => n.titleS && !n.purged && !n.locked && (f === 'trash' ? n.deleted : !n.deleted && (f !== 'fav' || n.fav))).map((n) => [n.id, n])); // ロック中のノートは検索に出さない
   const hits = await search.query(q, live);
   if (seq !== searchSeq) return; // もっと新しい検索が始まっている
   box.hidden = false;
@@ -856,6 +868,7 @@ async function showLibrary() {
   $('#library').hidden = false;
   $('#editor').hidden = true;
   document.title = '大学ノート';
+  S.unlocked.clear(); // 本棚に戻ったら、ロック中のノートはまた閉じる
   const readAt = Date.now();
   const [ops, metas] = await Promise.all([db.noteLevelOps(), db.allNoteMeta()]);
   const lib = buildLibrary(ops);
@@ -910,6 +923,7 @@ async function showLibrary() {
       ${trash ? '<button type="button" class="cover" aria-haspopup="menu"' : `<a class="cover" href="#/note/${n.id}"`} style="--cover:${coverColor(n)}">
         <span class="label"><span class="label-title"></span></span>
       ${trash ? '</button>' : '</a>'}
+      ${n.locked ? `<span class="lock-badge" title="ロック中" aria-label="ロック中">${icon('lock', 16)}</span>` : ''}
       ${trash ? '' : `<button class="fav-btn${n.fav ? ' on' : ''}" type="button" data-id="${n.id}" aria-pressed="${!!n.fav}" title="お気に入り" aria-label="お気に入り">${icon('star', 18)}</button>`}
       <div class="meta">
         <button class="name-btn" aria-haspopup="menu" title="ノートの操作"><span class="name"></span>${icon('chevron', 16)}</button>
@@ -973,9 +987,11 @@ function noteMenu(anchor, n) {
       showLibrary();
     } },
     { icon: 'copy', label: '複製', attrs: { 'data-act': 'dup' }, onClick: () => duplicateNote(n) },
+    { icon: 'lock', label: n.locked ? 'ロックを外す…' : 'ロックする…', attrs: { 'data-act': 'lock' }, onClick: () => setNoteLock(n, !n.locked) },
     { icon: 'move', label: '移動…', attrs: { 'data-act': 'move' }, onClick: () => moveNote(anchor, n) },
     { icon: 'star', label: n.fav ? 'お気に入りから外す' : 'お気に入りにする', attrs: { 'data-act': 'fav' }, onClick: () => setFav(n, !n.fav) },
     { icon: 'export', label: '同期ファイルとして書き出す', attrs: { 'data-act': 'export' }, onClick: async () => {
+      if (n.locked && !(await unlockNote(n))) return; // ロック中は、パスコードを入れてから
       const json = await buildSyncFile(S.rec.device, n.id);
       if ((await download(JSON.stringify(json), `${safeName(n.title)}.daigaku.json`, 'application/json')) === 'saved') toast('書き出しました');
     } },
@@ -1178,6 +1194,7 @@ async function emptyTrash(notes) {
 
 // ノートを複製する: 今の状態(ページ・背景・線・画像・テキスト)を新しいノートとして作る。履歴は引き継がない
 async function duplicateNote(n) {
+  if (n.locked && !(await unlockNote(n))) return; // ロック中は、パスコードを入れてから(複製はロックなしになるため)
   const src = emptyNote(n.id);
   for (const op of await db.opsForNote(n.id)) applyOp(src, op);
   const id = newId();
@@ -1231,6 +1248,9 @@ function buildToolbar() {
 
 function refreshToolbar() {
   syncHiddenTools();
+  const ro = isRO();
+  $('#editor').classList.toggle('ro', ro);
+  $('#ro-badge').hidden = !ro;
   for (const t of ['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky', 'laser']) {
     const b = $('#tool-' + t);
     b.classList.toggle('on', S.tool === t);
@@ -1273,8 +1293,8 @@ function refreshToolbar() {
   em.classList.toggle('on', !!only);
   em.title = '消しゴムの種類・消すもの' + (only ? `(いまは${only}だけ消す)` : '');
   em.setAttribute('aria-label', `消しゴムの種類: ${ERASER_MODES[S.eraser.mode].label}` + (only ? `、${only}だけ消す` : ''));
-  $('#undo').disabled = !S.undo.length;
-  $('#redo').disabled = !S.redo.length;
+  $('#undo').disabled = !S.undo.length || isRO();
+  $('#redo').disabled = !S.redo.length || isRO();
   $('#pages-btn').classList.toggle('on', S.sidebar);
   const eraser = S.tool === 'eraser', lasso = S.tool === 'lasso';
   const k = inkTool(), st = toolState(), sl = S.slots[k];
@@ -1735,6 +1755,7 @@ function moreMenu(anchor) {
     { icon: 'rename', label: '名前を変更', onClick: renameNote },
     { icon: 'laser', label: 'レーザーポインター', id: 'laser-menu', on: S.tool === 'laser', onClick: () => setTool(S.tool === 'laser' ? (S.prevTool && S.prevTool !== 'laser' ? S.prevTool : 'pen') : 'laser') },
     { icon: 'ruler', label: '定規', id: 'ruler-menu', on: !!S.ruler, onClick: () => toggleRuler() },
+    { icon: 'eye', label: '閲覧専用', id: 'ro-menu', on: isRO(), onClick: () => setRO(!isRO()) },
     { icon: 'present', label: '発表モード', id: 'present-menu', onClick: () => enterPresent() },
     { icon: 'zoomwin', label: '拡大ウインドウ', id: 'zw-menu', on: !!S.zw, onClick: () => toggleZoomWin() },
     { icon: 'timer', label: 'タイマー', id: 'timer-menu', on: !$('#timer').hidden, onClick: () => toggleTimer() },
@@ -1892,6 +1913,17 @@ function openSettings() {
   reset.textContent = 'ツールバーを元に戻す';
   reset.onclick = () => { S.tb = { order: Object.keys(TOOL_INFO), hidden: [], pos: 'top' }; savePrefs(); applyToolbarLayout(); openSettings(); };
   body.appendChild(reset);
+  section('ロック');
+  const lockRow = document.createElement('div');
+  lockRow.className = 'set-row';
+  lockRow.innerHTML = `<span class="set-text"><span class="set-label">ロック用のパスコード</span><span class="set-hint">ノートのメニューの「ロックする」で使います。この端末だけのもので、ノートの中身を暗号にするものではありません</span></span><span class="set-btns"></span>`;
+  const lb = lockRow.querySelector('.set-btns');
+  const mkBtn = (label, fn) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.onclick = fn; lb.appendChild(b); };
+  if (S.lockHash) {
+    mkBtn('変更…', async () => { if ((await checkPasscode('今のパスコード')) && (await setPasscode())) openSettings(); });
+    mkBtn('消す…', async () => { if (await checkPasscode('今のパスコード')) { S.lockHash = null; savePrefs(); toast('パスコードを消しました。ロック中のノートを開くときに、また決めます'); openSettings(); } });
+  } else mkBtn('決める…', async () => { if (await setPasscode()) openSettings(); });
+  body.appendChild(lockRow);
   section('このアプリについて');
   const ver = document.createElement('p');
   ver.className = 'set-hint set-about';
@@ -2063,7 +2095,7 @@ function bindEditor() {
   // 貼り付け(コピーした画像)とドラッグ&ドロップでも入れる
   // Ctrl+V: コピーした画像(ほかのアプリから)があればそれを、なければこのアプリでコピーした線などを貼る
   document.addEventListener('paste', (e) => {
-    if ($('#editor').hidden || S.edit || e.target.closest?.('input, textarea, [contenteditable]')) return;
+    if ($('#editor').hidden || S.edit || isRO() || e.target.closest?.('input, textarea, [contenteditable]')) return;
     clearTimeout(pasteFallback);
     if (Date.now() - fallbackAt < 1000) return; // 待ちきれずにもう貼ったあとに届いた(二重に貼らない)
     const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
@@ -2075,6 +2107,7 @@ function bindEditor() {
     const files = [...(e.dataTransfer?.files || [])].filter((f) => f.type.startsWith('image/'));
     if (!files.length) return;
     e.preventDefault();
+    if (isRO()) return toast('閲覧専用のノートには入れられません');
     if (S.edit) await commitText();
     const pageEl = e.target.closest?.('.page');
     const v = pageEl && S.views.get(pageEl.dataset.id);
@@ -2111,6 +2144,7 @@ function bindEditor() {
     if (e.repeat) return;
     const mod = e.ctrlKey || e.metaKey;
     const k = e.key.toLowerCase();
+    if (isRO() && !(mod && ['=', '+', '-', '0', 'c'].includes(k))) return; // 閲覧専用: 拡大縮小とコピーだけ
     if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
     else if (mod && k === 'y') { e.preventDefault(); redo(); }
     else if (mod && (k === '=' || k === '+')) { e.preventDefault(); setZoom(S.zoom * 1.25); }
@@ -2157,6 +2191,9 @@ async function openNote(id, pageId) {
     const note = emptyNote(id);
     for (const op of ops) applyOp(note, op);
     if (!note.titleS || note.deleted || note.purged) { dropTab(id); location.hash = '#/'; return; }
+    if (note.locked && !S.unlocked.has(id)) {
+      if (!(await unlockNote(note))) { if (!S.note) location.hash = '#/'; return; }
+    }
     if (!accountUI.loggedIn()) return; // 読み込んでいるあいだにログインが切れた(ログインのページを出したまま)
     S.note = note;
     S.undo = [];
@@ -2582,6 +2619,76 @@ function laserFade(a) {
     g.style.opacity = '0';
     setTimeout(() => { if (g.isConnected && !(active && active.v === a.v)) paintLive(a.v, ''); }, 650);
   }, 700);
+}
+
+// ---------- 閲覧専用(書けないようにして、読むことに集中する。ノートごと・端末ごと) ----------
+function isRO() { return !!(S.note && S.ro.has(S.note.id)); }
+async function setRO(on) {
+  if (!S.note) return;
+  if (on) {
+    if (S.edit) await commitText();
+    flushPen();
+    clearSelection();
+    closePopover();
+    if (S.zw) closeZoomWin();
+    S.ro.add(S.note.id);
+  } else S.ro.delete(S.note.id);
+  savePrefs();
+  refreshToolbar();
+  toast(on ? '閲覧専用にしました。書くには、その他のメニューで外してください' : '書けるようにしました');
+}
+
+// ---------- ノートのロック(この端末のパスコードで開く。中身を暗号にするものではない) ----------
+async function passHash(code, salt) {
+  const buf = new TextEncoder().encode(salt + ':' + code);
+  return [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+const codeOk = (c) => /^\d{4,12}$/.test(c || '');
+// パスコードを決める(2 回入れてもらう)。決めたら true
+async function setPasscode() {
+  const a = await askName('ロック用のパスコードを決める(数字 4〜12 桁)', '', { secret: true });
+  if (a == null) return false;
+  if (!codeOk(a)) { toast('数字 4〜12 桁で入れてください'); return false; }
+  const b = await askName('もう一度入れてください', '', { secret: true });
+  if (b !== a) { if (b != null) toast('2 回の入力が違いました'); return false; }
+  const salt = [...crypto.getRandomValues(new Uint8Array(12))].map((x) => x.toString(16).padStart(2, '0')).join('');
+  S.lockHash = { salt, hash: await passHash(a, salt) };
+  savePrefs();
+  toast('パスコードを決めました。この端末だけで使います');
+  return true;
+}
+// 間違いが続いたら、次に入れられるまで待ってもらう(3 回目から 2・4・8… 秒、最大 60 秒)
+const LOCKTRY = { fails: 0, until: 0 };
+async function checkPasscode(heading) {
+  const wait = LOCKTRY.until - Date.now();
+  if (wait > 0) { toast(`あと ${Math.ceil(wait / 1000)} 秒待ってから入れてください`); return false; }
+  const c = await askName(heading, '', { secret: true });
+  if (c == null) return false;
+  if (S.lockHash && (await passHash(c, S.lockHash.salt)) === S.lockHash.hash) { LOCKTRY.fails = 0; return true; }
+  LOCKTRY.fails++;
+  if (LOCKTRY.fails >= 3) LOCKTRY.until = Date.now() + Math.min(60000, 1000 * 2 ** (LOCKTRY.fails - 2));
+  toast('パスコードが違います');
+  return false;
+}
+async function setNoteLock(n, lock) {
+  if (lock && !S.lockHash && !(await setPasscode())) return;
+  if (!lock && !(await checkPasscode(`「${n.title}」のロックを外す: パスコード`))) return;
+  await db.putOps([S.rec.make(n.id, 'note.lock', { lock })], S.rec.clock);
+  dav.schedule();
+  showLibrary();
+  toast(lock ? `「${n.title}」をロックしました` : `「${n.title}」のロックを外しました`);
+}
+// ロック中のノートを開く。この端末にパスコードが無いとき(ほかの端末でロックした)は、まず決めてもらう
+async function unlockNote(note) {
+  if (!S.lockHash) {
+    toast('このノートはロックされています。この端末で使うパスコードを決めてください', 6000);
+    if (!(await setPasscode())) return false;
+    S.unlocked.add(note.id);
+    return true;
+  }
+  if (!(await checkPasscode(`「${note.title}」はロックされています: パスコード`))) return false;
+  S.unlocked.add(note.id);
+  return true;
 }
 
 // ---------- 発表モード(画面いっぱいに 1 ページずつ。レーザーで指し示す) ----------
@@ -3210,6 +3317,11 @@ function onDown(e) {
   // 指はスクロールに使うので、軽く押したときだけ書き終える(gestureUp)
   if (S.edit && !(isTouchEv(e) && !S.fingerDraw)) { e.preventDefault(); commitText(); return; }
   const isTouch = e.pointerType === 'touch';
+  // 閲覧専用: 指はスクロール・拡大だけ。ペンとマウスでは何もしない(マウスはホイールでスクロール)
+  if (isRO()) {
+    if (isTouch && !e.zw && !palmRecent()) return gestureDown(e);
+    return;
+  }
   // ペンで書いている最中・直後の指は手のひらとみなして無視する
   if (isTouch && palmRecent()) return;
   // 指でも、投げ縄で選んだ枠のつまみはつかめるようにする(つまみ以外は今までどおりスクロール)
@@ -4443,7 +4555,7 @@ function gestureUp(e) {
       const [x, y] = pagePoint(v, e);
       // 指で軽く押した: テープならめくる・戻す。テキスト・付箋の道具なら文字を打つ
       if (toggleTapeAt(v, x, y)) return;
-      if (S.tool === 'text' || S.tool === 'sticky') { textTap(v, x, y); return; }
+      if ((S.tool === 'text' || S.tool === 'sticky') && !isRO()) { textTap(v, x, y); return; }
     }
   }
   if (pinch) {
@@ -4480,6 +4592,7 @@ function stopInertia() {
 
 // ---------- 元に戻す ----------
 function pushUndo(entry) {
+  if (isRO()) return; // 閲覧専用では書かない(commit が断ったあとの呼び出し)
   S.undo.push(entry);
   if (S.undo.length > 200) S.undo.shift();
   S.redo = [];
@@ -4497,6 +4610,7 @@ async function runEntry(list, entry, which) {
   refreshToolbar();
 }
 async function undo() {
+  if (isRO()) return;
   if (S.edit) await commitText(); // 書いている途中の文字を先に確定してから戻す
   flushPen();
   const e = S.undo.pop();
@@ -4505,6 +4619,7 @@ async function undo() {
   await runEntry(e.undo, e, 'undo');
 }
 async function redo() {
+  if (isRO()) return;
   if (S.edit) await commitText();
   flushPen();
   const e = S.redo.pop();
@@ -4951,7 +5066,7 @@ function renderOutline(list, all, cur) {
 async function pickNote(anchor) {
   const [ops, metas] = await Promise.all([db.noteLevelOps(), db.allNoteMeta()]);
   const upd = new Map(metas.map((m) => [m.id, m.updatedAt]));
-  const notes = [...buildLibrary(ops).values()].filter((n) => n.titleS && !n.deleted && !n.purged && n.id !== S.note.id)
+  const notes = [...buildLibrary(ops).values()].filter((n) => n.titleS && !n.deleted && !n.purged && !n.locked && !S.ro.has(n.id) && n.id !== S.note.id) // ロック中・閲覧専用のノートには送らない
     .sort((a, b) => (upd.get(b.id) || 0) - (upd.get(a.id) || 0));
   if (!notes.length) { toast('ほかのノートがありません。本棚でノートを作ってください'); return; }
   return new Promise((resolve) => {
