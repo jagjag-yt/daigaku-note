@@ -206,6 +206,12 @@ export async function saveFile(blob, name, type = blob.type || 'application/octe
 // 何もしないと、本棚で「戻る」を押したときにダイアログが開いていてもアプリが閉じてしまう。
 // 開いているものを内側から順に閉じ、何もなければアプリを裏に回す(閉じない)。
 // back(): 閉じるものがあれば閉じて true を返す関数
+/** アプリ版で書き出したファイルの置き場(キャッシュ)を空にする(この端末のノートを消すとき) */
+export async function clearExports() {
+  if (!isNative) return;
+  await plugin('Filesystem')?.rmdir({ path: 'export', directory: 'CACHE', recursive: true }).catch(() => {});
+}
+
 export function onBackButton(back) {
   const app = plugin('App');
   if (!app || platform !== 'android') return;

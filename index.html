@@ -15,8 +15,65 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- ログイン・アカウント作成(ログインしていないときは、ここだけが出る) -->
+  <section id="auth" class="auth" hidden>
+    <div class="auth-wrap">
+      <div class="auth-brand"><img src="icons/icon.svg" alt="" width="40" height="40"><span>大学ノート</span></div>
+      <main class="auth-card" id="auth-card">
+        <p class="auth-offline" id="auth-offline" role="status" hidden>オフラインのため、今はログインできません。ネットにつながってからお試しください。</p>
+        <!-- ログイン -->
+        <form id="auth-login-form" class="acct-step" novalidate hidden>
+          <h1 id="auth-login-heading" class="acct-title" tabindex="-1">ログイン</h1>
+          <p class="acct-lead">メールアドレスに届く6桁の番号でログインします。パスワードは不要です。</p>
+          <label class="field">メールアドレス<input id="auth-login-email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com" aria-describedby="auth-login-msg"></label>
+          <p class="acct-msg" id="auth-login-msg" role="alert"></p>
+          <button type="submit" class="primary acct-wide">番号を送る</button>
+          <p class="auth-switch">アカウントをお持ちでない方は、<a href="#/signup" id="auth-to-signup">アカウントを作成</a></p>
+        </form>
+
+        <!-- アカウント作成 -->
+        <form id="auth-signup-form" class="acct-step" novalidate hidden>
+          <h1 id="auth-signup-heading" class="acct-title" tabindex="-1">アカウントを作成</h1>
+          <p class="acct-lead">大学ノートを使うには、無料のアカウントが必要です。</p>
+          <ul class="acct-points">
+            <li data-icon="check" data-icon-size="18"><span>メールアドレスだけで作れます。パスワードは不要です</span></li>
+            <li data-icon="check" data-icon-size="18"><span>iPad・スマホ・パソコンのノートが自動で同期されます</span></li>
+            <li data-icon="check" data-icon-size="18"><span>無料で 1GB まで。ノートは端末にも保存されるので、オフラインでも書けます</span></li>
+          </ul>
+          <label class="field">メールアドレス<input id="auth-signup-email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com" aria-describedby="auth-signup-msg"></label>
+          <p class="acct-msg" id="auth-signup-msg" role="alert"></p>
+          <button type="submit" class="primary acct-wide">番号を送る</button>
+          <p class="auth-switch">すでにアカウントをお持ちの方は、<a href="#/login" id="auth-to-login">ログイン</a></p>
+        </form>
+
+        <!-- 6桁の番号(ログイン・アカウント作成の共通) -->
+        <form id="acct-code-form" class="acct-step" novalidate hidden>
+          <div class="acct-hero" data-icon="mail" data-icon-size="30"></div>
+          <h1 id="acct-code-heading" class="acct-title" tabindex="-1">メールを<wbr>確認してください</h1>
+          <p class="acct-lead"><strong id="acct-sent-to" class="acct-addr"></strong> に6桁の番号を送りました。番号は <span id="acct-expires"></span> まで有効です。</p>
+          <div class="code-box">
+            <input id="acct-code" type="text" inputmode="numeric" autocomplete="one-time-code" enterkeyhint="done" maxlength="64" aria-label="6桁の番号" aria-describedby="acct-code-msg">
+            <div class="code-cells" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+          </div>
+          <p class="acct-msg" id="acct-code-msg" role="alert"></p>
+          <div id="acct-noacct" class="acct-noacct" hidden>
+            <p id="acct-noacct-text" role="status">このメールアドレスのアカウントはまだありません。このままアカウントを作成できます。</p>
+            <button type="button" id="acct-noacct-create" class="primary acct-wide" aria-describedby="acct-noacct-text">このアドレスでアカウントを作成</button>
+          </div>
+          <button type="submit" id="acct-verify" class="primary acct-wide">ログイン</button>
+          <div class="acct-links">
+            <button type="button" id="acct-resend" class="link">番号を送り直す</button>
+            <button type="button" id="acct-back" class="link">メールアドレスを変える</button>
+          </div>
+          <p class="small acct-foot">メールが届かないときは、迷惑メールのフォルダも確かめてください。送信元は <span class="nowrap">no-reply@quiz-make.com</span> です。</p>
+        </form>
+      </main>
+      <p class="auth-local" id="auth-local" role="note" hidden></p>
+    </div>
+  </section>
+
   <!-- ノート一覧(本棚) -->
-  <section id="library">
+  <section id="library" hidden>
     <header class="lib-top">
       <div class="lib-row">
         <h1>書類</h1>
@@ -109,16 +166,10 @@
   </dialog>
 
   <dialog id="sync-dialog" class="wide">
-    <h2>端末どうしの同期</h2>
+    <h2>同期</h2>
     <section id="acct-summary" class="acct-summary">
       <h3>大学ノートアカウント</h3>
-      <div id="acct-summary-out">
-        <p id="acct-summary-text">ログインするだけで、ほかの端末と自動で同期します。サーバーの用意や設定はいりません(無料・1人 1GB まで)。</p>
-        <div class="row">
-          <button type="button" id="acct-open-login" class="primary">ログイン・新規登録</button>
-        </div>
-      </div>
-      <div id="acct-summary-in" hidden>
+      <div id="acct-summary-in">
         <p><strong id="acct-summary-who"></strong> で同期しています。</p>
         <p class="small sync-status"></p>
         <div class="row">
@@ -127,74 +178,25 @@
         </div>
       </div>
     </section>
-    <details id="dav-details">
-      <summary>自分のサーバーを使う(WebDAV / Nextcloud)</summary>
-      <p>Nextcloud などの WebDAV に対応した保存先を使って、自動で同期します。</p>
-      <form id="dav-form">
-        <label class="field">フォルダのURL<input id="dav-url" type="url" placeholder="https://example.com/remote.php/dav/files/ユーザー名/" autocomplete="off"></label>
-        <label class="field">ユーザー名<input id="dav-user" type="text" autocomplete="username"></label>
-        <label class="field">アプリパスワード<input id="dav-pass" type="password" autocomplete="current-password"></label>
-        <label class="check"><input id="dav-auto" type="checkbox" checked> 変更したら自動で同期する</label>
-        <p class="small">指定したフォルダの中に「daigaku-note」フォルダを作り、そこに保存します。<span class="web-only">ブラウザから接続するため、サーバー側で CORS を許可する必要があります(README を参照してください)。</span>パスワードはこの端末の中だけに保存します。大学ノートアカウントで同期しているときにここで保存すると、アカウントでの同期は止まります。</p>
-        <div class="row">
-          <button type="submit" class="primary">保存して今すぐ同期</button>
-          <button type="button" id="dav-off">クラウド同期をオフにする</button>
-        </div>
-        <p class="small sync-status"></p>
-      </form>
-    </details>
-    <h3>ファイルで同期</h3>
+    <details class="file-sync">
+    <summary>ファイルで同期(アカウントで同期できないとき)</summary>
     <p>片方の端末で「同期ファイルを書き出す」を押し、できたファイルを OneDrive・Google ドライブ・AirDrop などでもう一方の端末に送って「同期ファイルを取り込む」を押してください。</p>
     <p>両方の端末で書いた内容は消えずに統合されます。同じファイルを何度取り込んでも結果は変わりません。</p>
     <p class="small">この端末のID: <code id="device-id"></code></p>
     <div class="row">
       <button id="sync-export">同期ファイルを書き出す</button>
       <button id="sync-import">同期ファイルを取り込む</button>
+    </div>
+    </details>
+    <div class="row end">
       <button id="sync-close">閉じる</button>
     </div>
     <input id="sync-input" type="file" accept="application/json,.json" multiple hidden>
   </dialog>
 
-  <dialog id="account-dialog" class="acct-dialog" aria-labelledby="acct-heading">
-    <!-- ログイン・新規登録: メールアドレス -->
-    <form id="acct-email-form" class="acct-step" novalidate>
-      <div class="acct-hero" data-icon="cloud" data-icon-size="30"></div>
-      <h2 id="acct-heading" class="acct-title" tabindex="-1">大学ノートに<wbr>ログイン</h2>
-      <p class="acct-lead">ログインすると、iPad・スマホ・パソコンのノートが自動で同期されます。</p>
-      <ul class="acct-points">
-        <li data-icon="check" data-icon-size="18"><span>パスワードは不要です。メールに届く6桁の番号でログインします</span></li>
-        <li data-icon="check" data-icon-size="18"><span>はじめての方は、そのまま新規登録になります</span></li>
-        <li data-icon="check" data-icon-size="18"><span>無料で 1GB まで。ノートはこの端末にも残ります</span></li>
-      </ul>
-      <label class="field">メールアドレス<input id="acct-email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com" aria-describedby="acct-email-msg"></label>
-      <p class="acct-msg" id="acct-email-msg" role="alert"></p>
-      <button type="submit" id="acct-send" class="primary acct-wide">番号を送る</button>
-      <div class="acct-links">
-        <button type="button" id="acct-local-logout" class="link" hidden>この端末でログアウトする</button>
-        <button type="button" id="acct-to-sync" class="link">自分のサーバーで同期する(WebDAV)</button>
-      </div>
-    </form>
-
-    <!-- ログイン・新規登録: 6桁の番号 -->
-    <form id="acct-code-form" class="acct-step" novalidate hidden>
-      <div class="acct-hero" data-icon="mail" data-icon-size="30"></div>
-      <h2 id="acct-code-heading" class="acct-title" tabindex="-1">メールを<wbr>確認してください</h2>
-      <p class="acct-lead"><strong id="acct-sent-to" class="acct-addr"></strong> に6桁の番号を送りました。番号は <span id="acct-expires"></span> まで有効です。</p>
-      <div class="code-box">
-        <input id="acct-code" type="text" inputmode="numeric" autocomplete="one-time-code" enterkeyhint="done" maxlength="64" aria-label="6桁の番号" aria-describedby="acct-code-msg">
-        <div class="code-cells" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span></div>
-      </div>
-      <p class="acct-msg" id="acct-code-msg" role="alert"></p>
-      <button type="submit" id="acct-verify" class="primary acct-wide">ログイン</button>
-      <div class="acct-links">
-        <button type="button" id="acct-resend" class="link">番号を送り直す</button>
-        <button type="button" id="acct-back" class="link">メールアドレスを変える</button>
-      </div>
-      <p class="small acct-foot">メールが届かないときは、迷惑メールのフォルダも確かめてください。送信元は <span class="nowrap">no-reply@quiz-make.com</span> です。</p>
-    </form>
-
+  <dialog id="account-dialog" class="acct-dialog" aria-labelledby="acct-info-heading">
     <!-- ログイン中 -->
-    <div id="acct-info" class="acct-step" hidden>
+    <div id="acct-info" class="acct-step">
       <h2 id="acct-info-heading" class="acct-title-left" tabindex="-1">アカウント</h2>
       <div class="acct-profile">
         <span id="acct-avatar" class="acct-avatar big" aria-hidden="true"></span>
@@ -249,6 +251,8 @@
       <h2 id="confirm-heading"></h2>
       <p id="confirm-msg"></p>
       <div class="row end">
+        <button type="button" id="confirm-alt" class="danger" hidden></button>
+        <div class="spacer" id="confirm-spacer" hidden></div>
         <button type="button" id="confirm-cancel">キャンセル</button>
         <button type="submit" id="confirm-ok" class="primary"></button>
       </div>

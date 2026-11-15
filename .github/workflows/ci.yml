@@ -66,8 +66,10 @@ jobs:
       - name: アプリ版(Android)の動きをブラウザで再現して確かめる
         if: success() || failure()
         run: |
-          node serve.mjs 8124 & node test/davserver.mjs 8125 &
-          timeout 30 bash -c 'until curl -sf -o /dev/null http://localhost:8124/ && curl -s -o /dev/null http://localhost:8125/; do sleep 1; done' || { echo "::error::テスト用のサーバーが起動しません"; exit 1; }
+          # 同期サーバー(テスト用)は画面のテストで起動したものが残っていることがあるので、別の番号で起動する
+          node serve.mjs 8124 & node test/worker-server.mjs 8132 &
+          timeout 30 bash -c 'until curl -sf -o /dev/null http://localhost:8124/ && curl -sf -o /dev/null http://127.0.0.1:8132/health; do sleep 1; done' || { echo "::error::テスト用のサーバーが起動しません"; exit 1; }
+          export API=http://127.0.0.1:8132
           node test/native-e2e.cjs
       - name: 結果(違いの画像つき)を残す
         if: failure()
