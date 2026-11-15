@@ -72,6 +72,8 @@ const S = {
   sel: null, // 投げ縄で選んだ線 { pageId, ids:Set, box }
   // 投げ縄の囲み方(free: 自由な形 / rect: 長方形)と、選ぶものの種類
   lasso: { mode: 'free', pick: { pen: true, marker: true, image: true, text: true } },
+  palettes: { pen: [...PEN_PALETTE], marker: [...MARKER_PALETTE] }, // 色のプリセット(編集できる)
+  colorHist: { pen: [], marker: [] }, // 最近使った色
   clip: null, // コピーしたもの { items: [線・部品のデータ], pageId, cx, cy, n: 同じ場所に貼った回数 }
 };
 const CLIP_KEY = 'daigaku-note-clip';
@@ -117,6 +119,12 @@ async function init() {
     if (!ERASER_MODES[S.eraser.mode]) S.eraser.mode = 'stroke';
     if (!S.eraser.pick.pen && !S.eraser.pick.marker) S.eraser.pick = { pen: true, marker: true }; // 何も消せない設定にはしない
   }
+  for (const k of ['pen', 'marker']) {
+    const pl = prefs.palettes?.[k], hs = prefs.colorHist?.[k];
+    const clean = (a) => [...new Set(a.filter((c) => typeof c === 'string' && isHex(c)).map((c) => c.toLowerCase()))];
+    if (Array.isArray(pl) && clean(pl).length) S.palettes[k] = clean(pl).slice(0, PALETTE_MAX);
+    if (Array.isArray(hs)) S.colorHist[k] = clean(hs).slice(0, HIST_MAX);
+  }
   if (prefs.lasso) {
     if (prefs.lasso.mode === 'rect' || prefs.lasso.mode === 'free') S.lasso.mode = prefs.lasso.mode;
     if (prefs.lasso.pick) S.lasso.pick = { ...S.lasso.pick, ...prefs.lasso.pick };
@@ -154,7 +162,7 @@ async function init() {
 }
 
 function savePrefs() {
-  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lasso: S.lasso });
+  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist });
 }
 
 function route() {
@@ -810,7 +818,7 @@ function refreshToolbar() {
 function onColorSlot(b, i) {
   const k = inkTool();
   if (S.tool === 'lasso') {
-    if (S.sel) recolorSelection(S.slots.pen.colors[i]);
+    if (S.sel) { recolorSelection(S.slots.pen.colors[i]); useColor('pen', S.slots.pen.colors[i]); savePrefs(); }
     return;
   }
   if (S.tool === 'eraser') return;
@@ -818,6 +826,7 @@ function onColorSlot(b, i) {
   closePopover();
   S[k].ci = i;
   S[k].color = S.slots[k].colors[i];
+  useColor(k, S[k].color);
   savePrefs();
   refreshToolbar();
 }
@@ -848,37 +857,116 @@ const COLOR_NAMES = {
 };
 const colorName = (c) => COLOR_NAMES[c] || c;
 
+// 色を選ぶ: プリセット(並びを編集できる)/ カスタム(色の表・HEX・スポイト)/ 履歴(最近使った色)
+const HIST_MAX = 12, PALETTE_MAX = 40;
+const isHex = (c) => /^#[0-9a-f]{6}$/i.test(c);
+function hsl(h, s, l) {
+  const k = (n) => (n + h / 30) % 12, a = s * Math.min(l, 1 - l);
+  const f = (n) => Math.round(255 * (l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1))));
+  return '#' + [f(0), f(8), f(4)].map((v) => v.toString(16).padStart(2, '0')).join('');
+}
+// カスタムの色の表: 灰色の列 + 12色相 × 明るさ8段
+const COLOR_TABLE = (() => {
+  const rows = [];
+  for (let r = 0; r < 8; r++) {
+    const l = 0.18 + r * 0.095;
+    const row = [hsl(0, 0, Math.min(1, r / 7))];
+    for (let h = 0; h < 12; h++) row.push(hsl(h * 30, 0.85, l));
+    rows.push(row);
+  }
+  return rows;
+})();
+function useColor(k, c) {
+  const h = S.colorHist[k].filter((x) => x !== c);
+  h.unshift(c);
+  S.colorHist[k] = h.slice(0, HIST_MAX);
+}
 function colorPopover(anchor, k, i) {
   openPopover(anchor, (body, close) => {
-    body.classList.add('palette');
-    const pal = k === 'marker' ? MARKER_PALETTE : PEN_PALETTE;
-    const grid = document.createElement('div');
-    grid.className = 'pal-grid';
-    const pick = (c) => {
+    body.classList.add('palette', 'color-pop');
+    let tab = 'preset', editing = false;
+    body.innerHTML = `<div class="cp-head"><span class="cp-title">${k === 'marker' ? '蛍光ペンの色' : 'ペンの色'}</span><button type="button" class="cp-edit link">編集</button></div>
+      <div class="seg lasso-mode cp-tabs" role="tablist"></div><div class="cp-body"></div>`;
+    const tabs = body.querySelector('.cp-tabs'), main = body.querySelector('.cp-body'), editBtn = body.querySelector('.cp-edit');
+    const pick = (c, keep) => {
       S.slots[k].colors[i] = c;
       S[k].ci = i;
       S[k].color = c;
-      for (const x of grid.children) x.classList.toggle('on', x.dataset.c === c);
+      useColor(k, c);
       savePrefs();
       refreshToolbar();
+      // カスタムでは開いたまま(中身は作り直さない。作り直すと、続けて押した色が効かないことがある)
+      if (!keep) close();
     };
-    for (const c of pal) {
+    const dot = (c, on) => {
+      const name = editing ? `${colorName(c)}をプリセットから外す` : colorName(c);
+      return `<button type="button" class="pal-c${on ? ' on' : ''}" data-c="${c}" style="--c:${c}" title="${name}" aria-label="${name}" aria-pressed="${on}"></button>`;
+    };
+    const render = () => {
+      for (const b of tabs.children) { b.classList.toggle('on', b.dataset.t === tab); b.setAttribute('aria-selected', b.dataset.t === tab); }
+      body.classList.toggle('wide', tab === 'custom');
+      editBtn.hidden = tab !== 'preset';
+      editBtn.textContent = editing ? '完了' : '編集';
+      const cur = S[k].color;
+      if (tab === 'preset') {
+        const pal = S.palettes[k];
+        main.innerHTML = `<div class="pal-grid${editing ? ' editing' : ''}">${pal.map((c) => dot(c, c === cur)).join('')}</div>`
+          + (editing ? '<p class="menu-note">色を押すとプリセットから外します。</p><button type="button" class="cp-reset link">最初の色に戻す</button>' : '');
+        main.querySelectorAll('.pal-c').forEach((b) => (b.onclick = () => {
+          if (!editing) return pick(b.dataset.c);
+          if (S.palettes[k].length <= 1) return toast('プリセットには1色以上残してください');
+          S.palettes[k] = S.palettes[k].filter((x) => x !== b.dataset.c);
+          savePrefs();
+          render();
+        }));
+        const rs = main.querySelector('.cp-reset');
+        if (rs) rs.onclick = () => { S.palettes[k] = [...(k === 'marker' ? MARKER_PALETTE : PEN_PALETTE)]; savePrefs(); render(); };
+      } else if (tab === 'custom') {
+        main.innerHTML = `<div class="cp-table">${COLOR_TABLE.map((row) => row.map((c) => `<button type="button" class="cp-cell" data-c="${c}" style="--c:${c}" aria-label="${c}"></button>`).join('')).join('')}</div>
+          <div class="cp-row"><span class="cp-swatch" style="--c:${cur}"></span><label class="cp-hex">HEX <input type="text" maxlength="7" spellcheck="false" autocomplete="off" value="${isHex(cur) ? cur : ''}" aria-label="色の HEX"></label>
+          <label class="cp-native" title="ほかの色…"><input type="color" value="${isHex(cur) ? cur : '#000000'}" aria-label="ほかの色"></label>
+          ${'EyeDropper' in window ? `<button type="button" class="cp-drop icon-btn small" title="画面から色を取る(スポイト)" aria-label="スポイト">${icon('pen', 18)}</button>` : ''}</div>
+          <button type="button" class="cp-add">プリセットに追加</button>`;
+        let chosen = cur;
+        const sw = main.querySelector('.cp-swatch'), hex = main.querySelector('.cp-hex input'), nat = main.querySelector('.cp-native input');
+        const set = (c, apply) => {
+          chosen = c.toLowerCase();
+          sw.style.setProperty('--c', chosen);
+          if (document.activeElement !== hex) hex.value = chosen;
+          nat.value = chosen;
+          main.querySelectorAll('.cp-cell').forEach((x) => { x.classList.toggle('on', x.dataset.c === chosen); x.setAttribute('aria-pressed', x.dataset.c === chosen); });
+          if (apply) pick(chosen, true);
+        };
+        main.querySelectorAll('.cp-cell').forEach((b) => (b.onclick = () => set(b.dataset.c, true)));
+        // 「#」なし・3桁(#fa0 → #ffaa00)でもよい。Enter で決める
+        const parse = (v) => { v = v.trim().replace(/^#?/, '#'); if (/^#[0-9a-f]{3}$/i.test(v)) v = '#' + [...v.slice(1)].map((x) => x + x).join(''); return isHex(v) ? v : null; };
+        hex.oninput = () => { const v = parse(hex.value); if (v) set(v, false); };
+        hex.onchange = () => { const v = parse(hex.value); if (v) set(v, true); else hex.value = chosen; };
+        hex.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); hex.blur(); } };
+        nat.oninput = () => set(nat.value, false);
+        nat.onchange = () => set(nat.value, true);
+        const drop = main.querySelector('.cp-drop');
+        if (drop) drop.onclick = async () => { try { const r = await new window.EyeDropper().open(); set(r.sRGBHex, true); } catch {} };
+        main.querySelector('.cp-add').onclick = () => {
+          if (S.palettes[k].length >= PALETTE_MAX) toast(`プリセットは${PALETTE_MAX}色までです。編集で外してから追加してください`);
+          else if (!S.palettes[k].includes(chosen)) { S.palettes[k].push(chosen); savePrefs(); toast('プリセットに追加しました'); }
+          else toast('この色はもうプリセットにあります');
+        };
+        set(isHex(cur) ? cur : '#000000', false);
+      } else {
+        const h = S.colorHist[k];
+        main.innerHTML = h.length ? `<div class="pal-grid">${h.map((c) => dot(c, c === cur)).join('')}</div>` : '<p class="menu-note">まだありません。色を選ぶと、ここに並びます。</p>';
+        main.querySelectorAll('.pal-c').forEach((b) => (b.onclick = () => pick(b.dataset.c)));
+      }
+    };
+    for (const [t, label] of [['preset', 'プリセット'], ['custom', 'カスタム'], ['hist', '履歴']]) {
       const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'pal-c' + (c === S[k].color ? ' on' : '');
-      b.dataset.c = c;
-      b.style.setProperty('--c', c);
-      b.title = colorName(c);
-      b.setAttribute('aria-label', colorName(c));
-      b.onclick = () => { pick(c); close(); };
-      grid.appendChild(b);
+      b.type = 'button'; b.dataset.t = t; b.textContent = label; b.setAttribute('role', 'tab');
+      b.onclick = () => { tab = t; editing = false; render(); retargetPopover(anchor, anchor); }; // 高さが変わるので置き直す
+      tabs.appendChild(b);
     }
-    const custom = document.createElement('label');
-    custom.className = 'pal-custom';
-    custom.innerHTML = `<input type="color" value="${S[k].color.length === 7 ? S[k].color : '#000000'}"><span>ほかの色…</span>`;
-    custom.querySelector('input').oninput = (e) => pick(e.target.value);
-    custom.querySelector('input').onchange = () => close();
-    body.append(grid, custom);
+    editBtn.onclick = () => { editing = !editing; render(); };
+    render();
   });
 }
 
@@ -1590,7 +1678,7 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v29\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v30\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 図形補正の様子(最後の数本): オン/オフ、最後に止めていた時間と揺れ、整えた結果
 const debugShapes = [];
