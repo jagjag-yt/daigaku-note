@@ -50,7 +50,8 @@ const PEN_NIBS = {
 };
 const PEN_DEFAULTS = { nib: 'fountain', sens: 50, stab: 0, dash: '', shape: '' }; // shape: ドラッグで描く図形(空ならふつうに書く)
 
-const APP_VERSION = 'v43'; // sw.js の VERSION と合わせる
+const APP_VERSION = 'v44'; // sw.js の VERSION と合わせる
+const MAX_TABS = 12; // 開いておけるタブの数
 
 const S = {
   rec: null,
@@ -92,6 +93,7 @@ const S = {
   colorHist: { pen: [], marker: [], tape: [] }, // 最近使った色
   // ツールバー: 道具の並び・隠す道具・置く場所(top / bottom)
   tb: { order: ['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky', 'image', 'shapes'], hidden: [], pos: 'top' },
+  tabs: [], // 開いているノートのタブ: [{ id, title, page }](page は最後に見ていたページ)
   theme: 'system', // 画面の色: system(端末に合わせる)/ light / dark
   ctpl: [], // 自作テンプレート(本棚・ダイアログを開くときに読み直す)
   nn: { tpl: 'lines-b', size: 'a4', paper: 'white' }, // 新しいノートの用紙(前に選んだものを次も使う)
@@ -153,6 +155,11 @@ async function init() {
     if (Array.isArray(hs)) S.colorHist[k] = clean(hs).slice(0, HIST_MAX);
   }
   if (['system', 'light', 'dark'].includes(prefs.theme)) S.theme = prefs.theme;
+  if (Array.isArray(prefs.tabs)) {
+    const seen = new Set();
+    S.tabs = prefs.tabs.filter((t) => t && typeof t.id === 'string' && /^\w+$/.test(t.id) && !seen.has(t.id) && seen.add(t.id))
+      .slice(0, MAX_TABS).map((t) => ({ id: t.id, title: String(t.title || '').slice(0, 200), page: typeof t.page === 'string' ? t.page : null }));
+  }
   if (prefs.tb) {
     const all = S.tb.order;
     if (Array.isArray(prefs.tb.order)) S.tb.order = [...new Set(prefs.tb.order.filter((k) => all.includes(k)))].concat(all.filter((k) => !prefs.tb.order.includes(k))); // 新しく増えた道具は最後に
@@ -217,7 +224,7 @@ async function init() {
 }
 
 function savePrefs() {
-  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lib: { sort: S.lib.sort, view: S.lib.view }, nn: S.nn, theme: S.theme, tb: S.tb, tape: S.tape, markerMode: S.markerMode, straight: S.straight, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text, sticky: S.sticky });
+  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lib: { sort: S.lib.sort, view: S.lib.view }, nn: S.nn, theme: S.theme, tb: S.tb, tabs: S.tabs, tape: S.tape, markerMode: S.markerMode, straight: S.straight, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text, sticky: S.sticky });
 }
 
 function route() {
@@ -643,6 +650,7 @@ function setSyncStatus(msg) {
 // 他の端末の変更が届いたとき
 async function onRemoteChange(noteIds) {
   for (const n of noteIds) search.markNoteDirty(n);
+  if (S.tabs.length) { const at = Date.now(); reconcileTabs(buildLibrary(await db.noteLevelOps()), at); renderTabs(); } // ほかの端末での名前の変更・削除をタブに映す
   if (S.note && noteIds.has(S.note.id)) {
     // 書いている途中なら先に確定する(描き直すと書いている欄が消えるため)
     if (S.edit) await commitText();
@@ -843,8 +851,10 @@ async function showLibrary() {
   $('#library').hidden = false;
   $('#editor').hidden = true;
   document.title = '大学ノート';
+  const readAt = Date.now();
   const [ops, metas] = await Promise.all([db.noteLevelOps(), db.allNoteMeta()]);
   const lib = buildLibrary(ops);
+  reconcileTabs(lib, readAt);
   const upd = new Map(metas.map((m) => [m.id, m.updatedAt]));
   const f = S.lib.filter, trash = f === 'trash';
   const fs = foldersOf(lib);
@@ -1895,6 +1905,8 @@ async function renameNote() {
   await commit([mk('note.rename', { title })]);
   $('#title').textContent = S.note.title;
   document.title = S.note.title + ' - 大学ノート';
+  const tab = S.tabs.find((x) => x.id === S.note.id);
+  if (tab) { tab.title = S.note.title.slice(0, 200); savePrefs(); renderTabs(); }
 }
 
 function bindEditor() {
@@ -2008,7 +2020,7 @@ async function openNote(id, pageId) {
     const ops = await db.opsForNote(id);
     const note = emptyNote(id);
     for (const op of ops) applyOp(note, op);
-    if (!note.titleS || note.deleted || note.purged) { location.hash = '#/'; return; }
+    if (!note.titleS || note.deleted || note.purged) { dropTab(id); location.hash = '#/'; return; }
     if (!accountUI.loggedIn()) return; // 読み込んでいるあいだにログインが切れた(ログインのページを出したまま)
     S.note = note;
     S.undo = [];
@@ -2025,13 +2037,90 @@ async function openNote(id, pageId) {
     S.fit = true;
     renderPages();
     $('#scroller').scrollTop = 0;
+    // タブで戻ってきたときは、最後に見ていたページから
+    const tab = touchTab(note);
+    if (!pageId && tab.page && S.views.has(tab.page)) S.views.get(tab.page).el.scrollIntoView({ block: 'start' });
     refreshToolbar();
     onScroll();
   }
+  renderTabs();
   if (pageId) S.views.get(pageId)?.el.scrollIntoView({ block: 'start' });
 }
 
+// ---------- タブ(開いたノート) ----------
+function touchTab(note) {
+  let t = S.tabs.find((x) => x.id === note.id);
+  if (!t) {
+    t = { id: note.id, title: note.title.slice(0, 200), page: null };
+    S.tabs.push(t);
+    // 多すぎたら、いま開いたもの以外で古いものから閉じる
+    while (S.tabs.length > MAX_TABS) S.tabs.splice(S.tabs.findIndex((x) => x !== t), 1);
+  }
+  t.title = note.title.slice(0, 200);
+  t.opened = Date.now(); // reconcileTabs 用(保存はされるが、読み込みでは捨てる)
+  savePrefs();
+  return t;
+}
+// タブを、いまあるノートに合わせる(名前を直し、消えたノートのタブは閉じる)
+// readAt: 一覧を読み始めた時刻。そのあとで開いたタブ(読んだ一覧にまだ無い新しいノート)は外さない
+function reconcileTabs(lib, readAt = 0) {
+  let changed = false;
+  S.tabs = S.tabs.filter((t) => {
+    const n = lib.get(t.id);
+    if (!n && (t.opened || 0) >= readAt) return true;
+    if (!n || !n.titleS || n.deleted || n.purged) { changed = true; return false; }
+    const title = n.title.slice(0, 200);
+    if (t.title !== title) { t.title = title; changed = true; }
+    return true;
+  });
+  if (changed) savePrefs();
+}
+function dropTab(id) {
+  const i = S.tabs.findIndex((x) => x.id === id);
+  if (i < 0) return;
+  S.tabs.splice(i, 1);
+  savePrefs();
+  renderTabs();
+}
+// 今のノートの、見ているページを覚える(タブで戻ったとき用)
+function rememberTabPage() {
+  const t = S.note && S.tabs.find((x) => x.id === S.note.id);
+  const pg = t && currentPage();
+  if (pg) { t.page = pg.id; savePrefs(); }
+}
+function renderTabs() {
+  const bar = $('#tabs');
+  bar.hidden = S.tabs.length < 2 || !S.note;
+  bar.innerHTML = '';
+  if (bar.hidden) return;
+  for (const t of S.tabs) {
+    const on = S.note && t.id === S.note.id;
+    const el = document.createElement('div');
+    el.className = 'tab' + (on ? ' on' : '');
+    el.innerHTML = `<button type="button" class="tab-go"${on ? ' aria-current="page"' : ''}><span class="tab-name"></span></button><button type="button" class="tab-x icon-btn small" title="タブを閉じる">${icon('close', 14)}</button>`;
+    el.querySelector('.tab-name').textContent = t.title || '無題';
+    el.querySelector('.tab-go').title = t.title;
+    el.querySelector('.tab-x').setAttribute('aria-label', `「${t.title}」のタブを閉じる`);
+    el.querySelector('.tab-go').onclick = () => { if (!on) location.hash = '#/note/' + t.id; };
+    el.querySelector('.tab-x').onclick = () => closeTab(t.id);
+    bar.appendChild(el);
+  }
+  bar.querySelector('.tab.on')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+function closeTab(id) {
+  const i = S.tabs.findIndex((x) => x.id === id);
+  if (i < 0) return;
+  const cur = S.note && S.note.id === id;
+  S.tabs.splice(i, 1);
+  savePrefs();
+  if (cur) {
+    const next = S.tabs[i] || S.tabs[i - 1];
+    location.hash = next ? '#/note/' + next.id : '#/'; // 今のタブを閉じたら、となりのタブへ(無ければ本棚)
+  } else renderTabs();
+}
+
 function closeEditor() {
+  rememberTabPage();
   S.revealed.clear();
   if (S.edit) commitText();
   if (S.io) S.io.disconnect();
