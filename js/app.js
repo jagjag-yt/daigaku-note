@@ -5,7 +5,7 @@ import {
 import { drawStroke, recognizeShape, strokeInLasso, geometry, strokeSvg, pointInPolygon } from './ink.js';
 import { isItem, itemSvg, drawItem, itemInLasso, onImageReady, releaseImages, itemRect, cornerPts, textHeight, fontFamily, LINE_HEIGHT } from './items.js';
 import { TEMPLATES, SIZES, templatePrims, sizeById } from './templates.js';
-import { importPdf, renderPdfPage, exportPdf } from './pdf.js';
+import { importPdf, renderPdfPage, exportPdf, sha256 } from './pdf.js';
 import { buildSyncFile, importSyncFile } from './sync.js';
 import * as search from './search.js';
 import * as dav from './webdav.js';
@@ -1245,6 +1245,8 @@ function moreMenu(anchor) {
     { icon: 'file', label: '貼り付け', id: 'paste', disabled: !S.clip, onClick: pasteHere },
     '-',
     { icon: 'rename', label: '名前を変更', onClick: renameNote },
+    // 図形補正のボタンはスマホ幅ではツールバーに出さないので、ここからも切り替えられるようにする
+    { icon: 'shapes', label: '図形補正', id: 'shapes-menu', on: S.shapes, onClick: () => $('#shapes').click() },
     { icon: 'finger', label: '指で書く', id: 'finger', on: S.fingerDraw, onClick: () => {
       S.fingerDraw = !S.fingerDraw;
       savePrefs();
@@ -1294,6 +1296,33 @@ function bindEditor() {
     $('#sticky-opts').appendChild(b);
   }
   $('#text-color').onclick = (e) => textColorPopover(e.currentTarget);
+  // 画像: 道具ではなく、押したらファイルを選ぶ(スマホでは写真・カメラも選べる)
+  $('#tool-image').onclick = () => { if (S.edit) commitText(); $('#img-input').click(); }; // 選ぶ画面はすぐ開く(待つと開けないブラウザがある)
+  $('#img-input').onchange = async (e) => {
+    const files = [...e.target.files];
+    e.target.value = '';
+    if (files.length) await insertImages(files);
+  };
+  // 貼り付け(コピーした画像)とドラッグ&ドロップでも入れる
+  // Ctrl+V: コピーした画像(ほかのアプリから)があればそれを、なければこのアプリでコピーした線などを貼る
+  document.addEventListener('paste', (e) => {
+    if ($('#editor').hidden || S.edit || e.target.closest?.('input, textarea, [contenteditable]')) return;
+    clearTimeout(pasteFallback);
+    if (Date.now() - fallbackAt < 1000) return; // 待ちきれずにもう貼ったあとに届いた(二重に貼らない)
+    const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
+    if (files.length) { e.preventDefault(); insertImages(files); return; }
+    if (S.clip) { e.preventDefault(); pasteHere(); }
+  });
+  $('#scroller').addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.items || [])].some((it) => it.type.startsWith('image/'))) e.preventDefault(); });
+  $('#scroller').addEventListener('drop', async (e) => {
+    const files = [...(e.dataTransfer?.files || [])].filter((f) => f.type.startsWith('image/'));
+    if (!files.length) return;
+    e.preventDefault();
+    if (S.edit) await commitText();
+    const pageEl = e.target.closest?.('.page');
+    const v = pageEl && S.views.get(pageEl.dataset.id);
+    insertImages(files, v && v.ready ? { v, at: pagePoint(v, e) } : null);
+  });
   $('#text-style').onclick = (e) => textStylePopover(e.currentTarget);
   $('#shapes').onclick = () => {
     S.shapes = !S.shapes;
@@ -1324,7 +1353,9 @@ function bindEditor() {
     else if (mod && k === 'c' && S.sel) { e.preventDefault(); copySelection(); }
     else if (mod && k === 'x' && S.sel) { e.preventDefault(); cutSelection(); }
     else if (mod && k === 'd' && S.sel) { e.preventDefault(); duplicateSelection(); }
-    else if (mod && k === 'v' && S.clip) { e.preventDefault(); pasteHere(); }
+    // Ctrl+V は paste イベントで受ける(ほかのアプリでコピーした画像も貼れるように)。
+    // paste が届かないブラウザ(文字の入力欄がないと出さないもの)のために、少し待って届かなければ自分で貼る
+    else if (mod && k === 'v' && S.clip) { clearTimeout(pasteFallback); pasteFallback = setTimeout(() => { if (S.clip && !S.edit) { fallbackAt = Date.now(); pasteHere(); } }, 80); }
     else if (mod) return;
     else if (k === 'p') setTool('pen');
     else if (k === 'h') setTool('marker');
@@ -1682,6 +1713,7 @@ let active = null; // 書いている最中の線 / 消している最中 / 投�
 const touches = new Map();
 let pinch = null, inertia = null, lastPenTime = 0, liveFrame = 0;
 let tapStart = null; // テキストの道具で指で押したところ
+let pasteFallback = 0, fallbackAt = 0;
 const isTouchEv = (e) => e.pointerType === 'touch';
 // ペンを離した直後の線。iPad では手のひらが触れたときなどに、書いている途中で
 // ペンの入力がいったん途切れる(pointercancel / pointerup)ことがある。すぐに同じ場所から
@@ -1732,7 +1764,7 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v32\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v33\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 図形補正の様子(最後の数本): オン/オフ、最後に止めていた時間と揺れ、整えた結果
 const debugShapes = [];
@@ -2618,6 +2650,84 @@ function textStylePopover(anchor) {
     size.oninput = () => { setTextProp({ size: +size.value }); show(); };
     show();
   }, { onClose: () => { if (S.edit) S.edit.ta.focus(); else savePrefs(); } });
+}
+
+// ---------- 画像を入れる ----------
+const IMG_MAX_PX = 2400; // これより大きい写真は縮めて保存する(同期の容量と読み込みの速さのため)
+// 画像を読み込み、必要なら縮めて、この端末に保存する。{ hash, mime, w, h }(w・h は画素)
+const IMG_MAX_BYTES = 30 * 1024 * 1024; // これより大きいファイルは読み込まない(端末のメモリが足りなくなるのを避ける)
+const SHOWABLE = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+async function storeImage(file) {
+  if (file.size > IMG_MAX_BYTES) throw new Error(`画像が大きすぎます(${Math.round(file.size / 1048576)}MB)。30MB までにしてください`);
+  let bmp;
+  try { bmp = await createImageBitmap(file); } catch { throw new Error('画像を読み込めませんでした'); }
+  let { width: w, height: h } = bmp;
+  let blob = file, mime = file.type;
+  try {
+    const big = Math.max(w, h) > IMG_MAX_PX;
+    // 大きすぎるものと、ブラウザでそのまま表示できない形式(HEIC など)は、キャンバスで描き直して保存する。
+    // 透明がありうる形式(PNG・GIF・WebP)は PNG に、それ以外は JPEG にする。GIF・WebP はそのままなら動きも残る
+    if (big || !SHOWABLE.includes(mime)) {
+      const k = big ? IMG_MAX_PX / Math.max(w, h) : 1;
+      w = Math.round(w * k); h = Math.round(h * k);
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(bmp, 0, 0, w, h);
+      mime = ['image/png', 'image/gif', 'image/webp'].includes(mime) ? 'image/png' : 'image/jpeg';
+      blob = await new Promise((res) => c.toBlob(res, mime, 0.9));
+      if (!blob) throw new Error('画像を保存できませんでした');
+    }
+  } finally {
+    bmp.close?.();
+  }
+  const buf = await blob.arrayBuffer();
+  const hash = await sha256(buf);
+  if (!(await db.hasFile(hash))) await db.putFile({ hash, name: file.name || `image.${mime.split('/')[1]}`, type: mime, data: new Blob([buf], { type: mime }) });
+  return { hash, mime, w, h };
+}
+
+// 画像をページに置く。place を省くと、いま見ているページの見えている所の真ん中に置く
+async function insertImages(files, place) {
+  if (!S.note) return;
+  const v = place?.v || S.views.get(currentPage()?.id);
+  if (!v) return;
+  toast(files.length > 1 ? `${files.length}枚の画像を入れています…` : '画像を入れています…', 30000);
+  let cx, cy;
+  if (place?.at) [cx, cy] = place.at;
+  else {
+    // 見えている範囲の真ん中(ページの中に収める)
+    const sc = $('#scroller').getBoundingClientRect(), r = v.el.getBoundingClientRect();
+    cx = Math.min(Math.max(((sc.left + sc.right) / 2 - r.left) / S.zoom, 0), v.pg.w);
+    cy = Math.min(Math.max(((sc.top + sc.bottom) / 2 - r.top) / S.zoom, 0), v.pg.h);
+  }
+  const ops = [], ids = new Set();
+  let n = 0, failed = '';
+  for (const f of files) {
+    let im;
+    try { im = await storeImage(f); } catch (e) { failed = e.message || '画像を入れられませんでした'; continue; }
+    // 大きさ: ページの幅の 60% まで(小さい画像は 1px = 0.75pt の原寸)
+    const maxW = v.pg.w * 0.6, maxH = v.pg.h * 0.6;
+    const k = Math.min(1, maxW / (im.w * 0.75), maxH / (im.h * 0.75));
+    const w = im.w * 0.75 * k, h = im.h * 0.75 * k;
+    const x = Math.max(0, Math.min(cx - w / 2 + n * 16, v.pg.w - w)), y = Math.max(0, Math.min(cy - h / 2 + n * 16, v.pg.h - h));
+    const d = { id: newId(), pageId: v.pg.id, tool: 'image', hash: im.hash, mime: im.mime, pts: cornerPts(x, y, w, h), width: 0, color: '#000000' };
+    ops.push(mk('item.add', { s: d }));
+    ids.add(d.id);
+    n++;
+  }
+  if (!ops.length) { toast(failed || '画像を入れられませんでした', 5000); return; }
+  pushUndo({ undo: [['stroke.del', { ids: [...ids] }]], redo: [['stroke.undel', { ids: [...ids] }]], pages: [v.pg.id] });
+  await commit(ops);
+  paintInk(v);
+  // 一部だけ入れられなかったときは、その理由を残して見せる
+  if (failed) toast(`入れられなかった画像があります: ${failed}`, 6000);
+  else $('#toast').hidden = true;
+  // 入れた画像を選んだ状態にして、すぐ動かす・大きさを変えられるようにする
+  S.tool = 'lasso';
+  savePrefs();
+  S.sel = { pageId: v.pg.id, ids };
+  refreshToolbar();
+  drawSelection();
 }
 
 // ---------- 投げ縄の選択 ----------

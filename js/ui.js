@@ -12,6 +12,7 @@ const P = {
   lasso: '<path d="M7.5 15.5C4.5 14.3 3 12.4 3 10.4 3 6.8 7 4 12 4s9 2.8 9 6.4-4 6.4-9 6.4c-1 0-2-.1-3-.3" stroke-dasharray="2.6 2.4"/><path d="M8.6 14.8c-1.5.6-2 2-1.2 3.1.9 1.1 2.4.6 2.4-.7 0-1.3-1-1.7-2.4-.9-1.6.9-2.7 2.6-3.1 4.2"/>',
   text: '<path d="M5 6V4.5h14V6M12 4.5v15M9 19.5h6"/>',
   sticky: '<path d="M5 4.5h14v10l-5 5H5z"/><path d="M14 19.5v-5h5"/>',
+  image: '<rect x="3.5" y="5" width="17" height="14" rx="1.5"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17.5l5-5 3.5 3.5 2.5-2.5 5 4.5"/>',
   shapes: '<circle cx="8" cy="8.5" r="4.2"/><path d="M13 20.5l4-7 4 7z"/><rect x="3.5" y="15" width="5.5" height="5.5" rx=".6"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   chevron: '<path d="M7 10l5 5 5-5"/>',
