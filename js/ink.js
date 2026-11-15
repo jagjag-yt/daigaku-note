@@ -165,7 +165,7 @@ export function geometry(d) {
 // SVG の要素(文字列)
 export function strokeSvg(id, d, geo, off = [0, 0]) {
   const tf = off[0] || off[1] ? ` transform="translate(${off[0]} ${off[1]})"` : '';
-  const mk = d.tool === 'marker' ? ' class="marker"' : d.nib === 'pencil' ? ' class="pencil"' : '';
+  const mk = d.tool === 'marker' ? ' class="marker"' : d.tool === 'tape' ? ' class="tape"' : d.nib === 'pencil' ? ' class="pencil"' : '';
   if (geo.kind === 'fill') return `<path data-id="${id}"${mk}${tf} d="${geo.d}" fill="${d.color}"/>`;
   const da = dashArray(d, geo.w);
   const dash = da ? ` stroke-dasharray="${da.map((v) => +v.toFixed(3)).join(' ')}"` : '';

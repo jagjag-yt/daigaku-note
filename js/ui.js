@@ -13,6 +13,7 @@ const P = {
   text: '<path d="M5 6V4.5h14V6M12 4.5v15M9 19.5h6"/>',
   sticky: '<path d="M5 4.5h14v10l-5 5H5z"/><path d="M14 19.5v-5h5"/>',
   image: '<rect x="3.5" y="5" width="17" height="14" rx="1.5"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17.5l5-5 3.5 3.5 2.5-2.5 5 4.5"/>',
+  tape: '<path d="M4 9l12-5 4 9-12 5z"/><path d="M7 8l1 2.5M10.5 6.5l1 2.5M14 5l1 2.5"/>',
   shapes: '<circle cx="8" cy="8.5" r="4.2"/><path d="M13 20.5l4-7 4 7z"/><rect x="3.5" y="15" width="5.5" height="5.5" rx=".6"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   chevron: '<path d="M7 10l5 5 5-5"/>',
