@@ -653,3 +653,12 @@ dialog::backdrop { background: rgba(15,23,42,.35); }
 .card.in-trash .cover { opacity: .7; border: none; padding: 0; cursor: pointer; font: inherit; }
 .trash-note { margin: 0; font-size: 13px; color: var(--muted); }
 button.hit { width: 100%; text-align: left; font: inherit; cursor: pointer; }
+/* フォルダ */
+.crumbs { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; font-size: 15px; padding: 4px 0 0; min-width: 0; }
+.crumb { color: var(--accent); text-decoration: none; padding: 4px 2px; max-width: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.crumb[aria-current] { color: var(--text); font-weight: 700; }
+.crumb-sep { color: var(--muted); }
+.folder-cover { display: flex; align-items: center; justify-content: center; background: var(--field); color: var(--accent); border-radius: 12px; }
+.folder-cover svg { fill: color-mix(in srgb, var(--accent) 18%, transparent); }
+.grid.list .folder-cover svg { width: 28px; height: 28px; }
+.folder-pick { max-height: min(60vh, 420px); overflow: auto; }

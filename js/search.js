@@ -24,7 +24,9 @@ export function markDirty(noteId, pageId) {
 
 export async function markNoteDirty(noteId) {
   const note = buildNote(noteId, await db.opsForNote(noteId));
-  for (const p of pagesOf(note)) queue.add(`${noteId}/${p.id}`);
+  const pages = pagesOf(note);
+  if (!pages.length) return; // ページの無いもの(フォルダなど)は何もしない
+  for (const p of pages) queue.add(`${noteId}/${p.id}`);
   db.setMeta('ocrQueue', [...queue]);
   schedule();
 }
