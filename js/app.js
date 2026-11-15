@@ -50,7 +50,7 @@ const PEN_NIBS = {
 };
 const PEN_DEFAULTS = { nib: 'fountain', sens: 50, stab: 0, dash: '', shape: '' }; // shape: ドラッグで描く図形(空ならふつうに書く)
 
-const APP_VERSION = 'v46'; // sw.js の VERSION と合わせる
+const APP_VERSION = 'v47'; // sw.js の VERSION と合わせる
 const MAX_TABS = 12; // 開いておけるタブの数
 const DEFAULT_HIDDEN = ['laser']; // 最初は隠しておく道具(設定やその他のメニューから使う)
 
@@ -94,6 +94,7 @@ const S = {
   colorHist: { pen: [], marker: [], tape: [] }, // 最近使った色
   // ツールバー: 道具の並び・隠す道具・置く場所(top / bottom)
   tb: { order: ['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky', 'image', 'laser', 'shapes'], hidden: ['laser'], pos: 'top' },
+  zw: null, // 拡大ウインドウ { pageId, x, y, w }(ページの座標の枠)。null は閉じている
   ruler: null, // 定規 { x, y, a }(画面上の中心と角度)。null はしまっている
   tabs: [], // 開いているノートのタブ: [{ id, title, page }](page は最後に見ていたページ)
   theme: 'system', // 画面の色: system(端末に合わせる)/ light / dark
@@ -1732,6 +1733,7 @@ function moreMenu(anchor) {
     { icon: 'rename', label: '名前を変更', onClick: renameNote },
     { icon: 'laser', label: 'レーザーポインター', id: 'laser-menu', on: S.tool === 'laser', onClick: () => setTool(S.tool === 'laser' ? (S.prevTool && S.prevTool !== 'laser' ? S.prevTool : 'pen') : 'laser') },
     { icon: 'ruler', label: '定規', id: 'ruler-menu', on: !!S.ruler, onClick: () => toggleRuler() },
+    { icon: 'zoomwin', label: '拡大ウインドウ', id: 'zw-menu', on: !!S.zw, onClick: () => toggleZoomWin() },
     { icon: 'timer', label: 'タイマー', id: 'timer-menu', on: !$('#timer').hidden, onClick: () => toggleTimer() },
     { icon: 'settings', label: '設定…', id: 'open-settings', onClick: openSettings },
     // 図形補正のボタンはスマホ幅ではツールバーに出さないので、ここからも切り替えられるようにする
@@ -1922,6 +1924,7 @@ function bindEditor() {
   for (const t of ['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky', 'laser']) $('#tool-' + t).onclick = () => setTool(t);
   bindRuler();
   bindTimer();
+  bindZoomWin();
   for (const c of STICKY_COLORS) {
     const b = document.createElement('button');
     b.className = 'swatch sticky-c';
@@ -2132,6 +2135,7 @@ function closeTab(id) {
 
 function closeEditor() {
   rememberTabPage();
+  if (S.zw) closeZoomWin();
   S.ruler = null; // 定規はノートを閉じたらしまう
   $('#ruler').hidden = true;
   S.revealed.clear();
@@ -2225,6 +2229,7 @@ function layoutPages() {
   clearTimeout(bgTimer);
   bgTimer = setTimeout(() => { for (const v of S.views.values()) if (v.visible && v.bgZoom !== S.zoom) paintBg(v); }, 250);
   drawSelection();
+  if (S.zw) zwPlace();
   styleTextEditor(); // 書いている途中のテキストボックスも拡大率に合わせる
   refreshToolbar();
 }
@@ -2304,7 +2309,7 @@ function paintBg(v) {
     const ctx = c.getContext('2d');
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, c.width, c.height);
-    renderPdfPage(c, bg.hash, bg.page, v.holder, bg.rot || 0).catch((e) => {
+    renderPdfPage(c, bg.hash, bg.page, v.holder, bg.rot || 0).then(() => { if (S.zw && S.zw.pageId === v.pg.id) zwPaintBg(); }).catch((e) => {
       ctx.fillStyle = '#999';
       ctx.font = `${14 * c.width / v.pg.w}px sans-serif`;
       ctx.fillText(e.message, 20, 40);
@@ -2313,6 +2318,7 @@ function paintBg(v) {
     v.bg.width = v.bg.height = 0;
     v.el.style.background = paperColor(bg);
     v.tpl.innerHTML = templateSvg(bg, v.pg.w, v.pg.h);
+    if (S.zw && S.zw.pageId === v.pg.id) zwPaintBg();
   }
 }
 
@@ -2405,6 +2411,7 @@ function geoOf(e) {
 
 // hidden: 消しゴムで消している最中の線 / moving: { ids:Set, dx, dy } 投げ縄で動かしている最中の線
 function paintInk(v, hidden, moving) {
+  if (S.zw && S.zw.pageId === v.pg.id) zwPaint(true);
   if (!v.ready) return;
   if ((hidden || moving) && v.els.size) {
     // 描き直さず、該当する線だけ隠す・ずらす
@@ -2447,6 +2454,168 @@ function laserFade(a) {
     g.style.opacity = '0';
     setTimeout(() => { if (g.isConnected && !(active && active.v === a.v)) paintLive(a.v, ''); }, 650);
   }, 700);
+}
+
+// ---------- 拡大ウインドウ(下の大きな枠に書くと、ページの小さな枠に入る) ----------
+const ZW = { k: 0, frame: 0, maxX: 0 };
+function zwHeight() { // 枠の高さ(ページの座標)= 幅 × 書く場所の縦横比
+  const pad = $('#zoom-win .zw-pad');
+  return S.zw.w * (pad.clientHeight / Math.max(1, pad.clientWidth));
+}
+function toggleZoomWin(on = !S.zw) {
+  if (!on) return closeZoomWin();
+  const pg = currentPage();
+  if (!pg) return;
+  $('#zoom-win').hidden = false;
+  // 最初の枠: 見ている所のあたりの左端から、ページ幅の 4 割
+  const v = S.views.get(pg.id), sc = $('#scroller').getBoundingClientRect(), r = v.el.getBoundingClientRect();
+  const w = pg.w * 0.4;
+  S.zw = { pageId: pg.id, x: 24, y: 0, w };
+  const visTop = Math.max(0, (sc.top - r.top) / S.zoom);
+  S.zw.y = Math.min(Math.max(visTop + 40, 22 * (72 / 25.4) - 20), pg.h - zwHeight() - 8);
+  keepPosition(() => { if (S.fit) S.zoom = fitZoom(); layoutPages(); });
+  zwPlace(true);
+}
+function closeZoomWin() {
+  S.zw = null;
+  $('#zoom-win').hidden = true;
+  document.querySelector('.zw-target')?.remove();
+  if (S.note) keepPosition(() => layoutPages());
+}
+// 枠を動かして、ページの中に収め、ページの上の印と拡大ウインドウを描き直す。show: 枠が見えるようにスクロール
+function zwPlace(show) {
+  if (!S.zw || !S.note) return;
+  const v = S.views.get(S.zw.pageId);
+  if (!v) return closeZoomWin();
+  const h = zwHeight();
+  S.zw.w = Math.min(S.zw.w, v.pg.w);
+  S.zw.x = Math.min(Math.max(0, S.zw.x), v.pg.w - S.zw.w);
+  S.zw.y = Math.min(Math.max(0, S.zw.y), Math.max(0, v.pg.h - h));
+  let t = v.el.querySelector('.zw-target');
+  if (!t) {
+    document.querySelector('.zw-target')?.remove();
+    t = document.createElement('div');
+    t.className = 'zw-target';
+    v.el.appendChild(t);
+  }
+  Object.assign(t.style, { left: S.zw.x * S.zoom + 'px', top: S.zw.y * S.zoom + 'px', width: S.zw.w * S.zoom + 'px', height: h * S.zoom + 'px' });
+  if (show) t.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  zwPaintBg();
+  zwPaint(true);
+}
+// 拡大ウインドウの背景(PDF はページの背景のキャンバスから切り出す。罫線は SVG を写す)
+function zwPaintBg() {
+  const v = S.views.get(S.zw.pageId), pad = $('#zoom-win .zw-pad'), c = pad.querySelector('.zw-bg');
+  const h = zwHeight();
+  pad.querySelector('.zw-svg').setAttribute('viewBox', `${S.zw.x} ${S.zw.y} ${S.zw.w} ${h}`);
+  pad.style.background = v.el.style.background || '#fff';
+  pad.querySelector('.zw-tpl').innerHTML = v.tpl.innerHTML;
+  c.width = pad.clientWidth * devicePixelRatio;
+  c.height = pad.clientHeight * devicePixelRatio;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
+  if (v.bg.width) {
+    const k = v.bg.width / v.pg.w;
+    ctx.drawImage(v.bg, S.zw.x * k, S.zw.y * k, S.zw.w * k, h * k, 0, 0, c.width, c.height);
+  }
+}
+// inkChanged: 線の層が変わった(書き終えた・消したなど)。書いている途中は live の層だけ写す(線の多いページでも軽く)
+function zwPaint(inkChanged) {
+  if (!S.zw) return;
+  if (inkChanged) ZW.inkDirty = true;
+  if (ZW.frame) return;
+  ZW.frame = requestAnimationFrame(() => {
+    ZW.frame = 0;
+    const v = S.zw && S.views.get(S.zw.pageId);
+    if (!v) return;
+    if (ZW.inkDirty || ZW.inkPage !== v.pg.id) { $('#zoom-win .zw-ink').innerHTML = v.strokes.innerHTML; ZW.inkDirty = false; ZW.inkPage = v.pg.id; }
+    $('#zoom-win .zw-live').innerHTML = v.live.innerHTML;
+  });
+}
+// 書く場所の上の点 → そのページの、画面上の位置(ふつうに書いたときと同じ処理に渡す)
+function zwEvent(e, v) {
+  const pad = $('#zoom-win .zw-pad').getBoundingClientRect(), r = v.el.getBoundingClientRect();
+  const h = zwHeight();
+  const map = (ev) => {
+    const px = S.zw.x + ((ev.clientX - pad.left) / pad.width) * S.zw.w;
+    const py = S.zw.y + ((ev.clientY - pad.top) / pad.height) * h;
+    return {
+      zw: true, type: ev.type, pointerId: ev.pointerId, pointerType: ev.pointerType, pressure: ev.pressure, button: ev.button, buttons: ev.buttons,
+      timeStamp: ev.timeStamp, tiltX: ev.tiltX, tiltY: ev.tiltY, shiftKey: ev.shiftKey,
+      clientX: r.left + px * S.zoom, clientY: r.top + py * S.zoom, target: v.el,
+      preventDefault() {}, stopPropagation() {},
+    };
+  };
+  const out = map(e);
+  const co = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+  out.getCoalescedEvents = () => (co.length ? co.map(map) : [out]);
+  return out;
+}
+function bindZoomWin() {
+  const box = $('#zoom-win'), pad = box.querySelector('.zw-pad');
+  const step = (dx, dy) => () => { const h = zwHeight(); S.zw.x += dx * S.zw.w * 0.6; S.zw.y += dy * h * 0.8; zwPlace(true); };
+  box.querySelector('.zw-left').onclick = step(-1, 0);
+  box.querySelector('.zw-right').onclick = step(1, 0);
+  box.querySelector('.zw-up').onclick = step(0, -1);
+  box.querySelector('.zw-down').onclick = step(0, 1);
+  box.querySelector('.zw-nl').onclick = () => zwNewLine();
+  box.querySelector('.zw-x').onclick = () => closeZoomWin();
+  let cur = null;
+  pad.addEventListener('pointerdown', (e) => {
+    if (!S.zw || cur) return;
+    if (e.pointerType === 'touch' && !S.fingerDraw) return; // 指で書かない設定のときは、指では書かない
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    const v = S.views.get(S.zw.pageId);
+    if (!v) return;
+    if (!v.ready) { zwPlace(true); return; } // 枠のページが画面の外で描かれていない: まず見せる
+    if (!['pen', 'marker', 'eraser', 'laser'].includes(S.tool)) setTool('pen'); // 拡大ウインドウでは書く道具だけ
+    e.preventDefault();
+    try { pad.setPointerCapture(e.pointerId); } catch {}
+    if (e.pointerType === 'pen') lastPenTime = Date.now(); // 直後の手のひらを無視するため
+    cur = { id: e.pointerId, v };
+    ZW.maxX = 0;
+    onDown(zwEvent(e, v));
+    if (active && active.id === e.pointerId) {
+      active.zw = true;
+      // ならす強さは、拡大して見せている倍率で決める(本体で書いたときと同じ効き方に)
+      if (active.d) active.d.sm = Math.round(Math.max(0.3, Math.min(1.5, 2.5 / (pad.clientWidth / S.zw.w))) * 100) / 100;
+    }
+  });
+  pad.addEventListener('pointermove', (e) => {
+    if (!cur || e.pointerId !== cur.id) return;
+    if (e.pointerType === 'pen') lastPenTime = Date.now();
+    const r = pad.getBoundingClientRect();
+    ZW.maxX = Math.max(ZW.maxX, (e.clientX - r.left) / r.width);
+    onMove(zwEvent(e, cur.v));
+  });
+  const up = async (e) => {
+    if (!cur || e.pointerId !== cur.id) return;
+    const v = cur.v;
+    cur = null;
+    await onUp(zwEvent(e, v));
+    zwPaint(true);
+    // 右の端(印のある所)まで書いたら、枠を右へ送る。ページの右端なら改行
+    if (S.zw && S.tool !== 'eraser' && ZW.maxX > 0.78) {
+      if (S.zw.x + S.zw.w >= v.pg.w - 1) zwNewLine();
+      else { S.zw.x += S.zw.w * 0.55; zwPlace(true); }
+    }
+  };
+  pad.addEventListener('pointerup', up);
+  pad.addEventListener('pointercancel', up);
+  window.addEventListener('pointerup', (e) => { if (cur && e.pointerId === cur.id) up(e); }, true); // 念のため(つかみが外れたとき)
+  window.addEventListener('resize', () => { if (S.zw) zwPlace(); });
+}
+// 改行: 左端に戻して、1 行(枠の高さの 8 割)下へ。ページの下まで来たら次のページへ
+function zwNewLine() {
+  const v = S.views.get(S.zw.pageId), h = zwHeight();
+  S.zw.x = 24;
+  S.zw.y += h * 0.8;
+  if (S.zw.y + h > v.pg.h) {
+    const pages = pagesOf(S.note), next = pages[pages.indexOf(v.pg) + 1];
+    if (next) { S.zw.pageId = next.id; S.zw.y = 22 * (72 / 25.4) - 20; }
+    else S.zw.y = v.pg.h - h;
+  }
+  zwPlace(true);
 }
 
 // ---------- タイマー(どの画面でも前に出る小さな窓。ドラッグで動かす) ----------
@@ -2678,6 +2847,7 @@ function bindRuler() {
 
 function paintLive(v, svg) {
   v.live.innerHTML = svg || '';
+  if (S.zw && S.zw.pageId === v.pg.id) zwPaint(); // 拡大ウインドウにも書いている途中の線を見せる
 }
 
 // ---------- 入力(ペン・マウス・指) ----------
@@ -2867,7 +3037,7 @@ function onDown(e) {
         penPending = null;
         e.preventDefault();
         lastPenTime = Date.now();
-        try { $('#scroller').setPointerCapture(e.pointerId); } catch {}
+        if (!e.zw) try { $('#scroller').setPointerCapture(e.pointerId); } catch {} // 拡大ウインドウからの入力は、ウインドウ側でつかんでいる
         active = pp.a;
         active.id = e.pointerId;
         addPoint(e);
@@ -2884,7 +3054,7 @@ function onDown(e) {
   if (!v || !v.ready) return;
   e.preventDefault();
   stopInertia();
-  try { $('#scroller').setPointerCapture(e.pointerId); } catch {}
+  if (!e.zw) try { $('#scroller').setPointerCapture(e.pointerId); } catch {}
   if (e.pointerType === 'pen') lastPenTime = Date.now();
   const [x, y] = pagePoint(v, e);
   const eraser = S.tool === 'eraser' || (e.buttons & 32) || e.button === 5;
@@ -3124,7 +3294,7 @@ function addPoint(e, main = e) {
 // 止まり始めた位置から HOLD_PX 以上動いたときだけ待ち直す
 const HOLD_MS = 500, HOLD_PX = 5, UNSHAPE_PX = 14; // 画面上の px
 function holdCheck(a, e) {
-  if (!S.shapes || a.ruler) return; // 定規に沿わせた線は、もうまっすぐなので整えない
+  if (!S.shapes || a.ruler || a.zw) return; // 拡大ウインドウの線は、画面の px で止まったかを測れないので整えない // 定規に沿わせた線は、もうまっすぐなので整えない
   if (a.holdAt) {
     const dd = Math.hypot(e.clientX - a.holdAt[0], e.clientY - a.holdAt[1]);
     if (dd < HOLD_PX) { if (debugOn) a.holdMax = Math.max(a.holdMax || 0, dd); return; }
