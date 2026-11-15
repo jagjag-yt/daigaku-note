@@ -50,6 +50,8 @@ const PEN_NIBS = {
 };
 const PEN_DEFAULTS = { nib: 'fountain', sens: 50, stab: 0, dash: '', shape: '' }; // shape: ドラッグで描く図形(空ならふつうに書く)
 
+const APP_VERSION = 'v42'; // sw.js の VERSION と合わせる
+
 const S = {
   rec: null,
   note: null,
@@ -88,6 +90,7 @@ const S = {
   edit: null, // 書いている途中のテキストボックス { v, id(書き直しのとき), d, ta }
   palettes: { pen: [...PEN_PALETTE], marker: [...MARKER_PALETTE], tape: [...TAPE_PALETTE] }, // 色のプリセット(編集できる)
   colorHist: { pen: [], marker: [], tape: [] }, // 最近使った色
+  theme: 'system', // 画面の色: system(端末に合わせる)/ light / dark
   ctpl: [], // 自作テンプレート(本棚・ダイアログを開くときに読み直す)
   nn: { tpl: 'lines-b', size: 'a4', paper: 'white' }, // 新しいノートの用紙(前に選んだものを次も使う)
   sbView: 'pages', // ページ一覧の種類: pages / marks(しおり)/ outline(目次)
@@ -147,6 +150,8 @@ async function init() {
     if (Array.isArray(pl) && clean(pl).length) S.palettes[k] = clean(pl).slice(0, PALETTE_MAX);
     if (Array.isArray(hs)) S.colorHist[k] = clean(hs).slice(0, HIST_MAX);
   }
+  if (['system', 'light', 'dark'].includes(prefs.theme)) S.theme = prefs.theme;
+  applyTheme();
   if (prefs.nn) {
     if (TEMPLATES.some((t) => t.id === prefs.nn.tpl) || /^c:\w+$/.test(prefs.nn.tpl || '')) S.nn.tpl = prefs.nn.tpl; // c:<id> は自作(無くなっていたら開くときに B罫へ)
     if (SIZES.some((t) => t.id === prefs.nn.size)) S.nn.size = prefs.nn.size;
@@ -190,6 +195,7 @@ async function init() {
   fillSelects();
   bindLibrary();
   bindLibBar();
+  $('#settings-btn').onclick = openSettings;
   buildToolbar();
   bindEditor();
   bindNative();
@@ -202,7 +208,7 @@ async function init() {
 }
 
 function savePrefs() {
-  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lib: { sort: S.lib.sort, view: S.lib.view }, nn: S.nn, tape: S.tape, markerMode: S.markerMode, straight: S.straight, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text, sticky: S.sticky });
+  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lib: { sort: S.lib.sort, view: S.lib.view }, nn: S.nn, theme: S.theme, tape: S.tape, markerMode: S.markerMode, straight: S.straight, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text, sticky: S.sticky });
 }
 
 function route() {
@@ -1701,6 +1707,7 @@ function moreMenu(anchor) {
     { icon: 'file', label: '貼り付け', id: 'paste', disabled: !S.clip, onClick: pasteHere },
     '-',
     { icon: 'rename', label: '名前を変更', onClick: renameNote },
+    { icon: 'settings', label: '設定…', id: 'open-settings', onClick: openSettings },
     // 図形補正のボタンはスマホ幅ではツールバーに出さないので、ここからも切り替えられるようにする
     { icon: 'shapes', label: '図形補正', id: 'shapes-menu', on: S.shapes, onClick: () => $('#shapes').click() },
     { icon: 'finger', label: '指で書く', id: 'finger', on: S.fingerDraw, onClick: () => {
@@ -1714,6 +1721,74 @@ function moreMenu(anchor) {
       toast(S.pressure ? '筆圧で線の太さが変わるようにしました(ペンのみ)' : '筆圧を使わず、一定の太さで書くようにしました');
     } },
   ], close), { align: 'end' });
+}
+
+// ---------- 設定 ----------
+const darkMQ = window.matchMedia ? matchMedia('(prefers-color-scheme: dark)') : null;
+function applyTheme() {
+  const root = document.documentElement;
+  if (S.theme === 'system') delete root.dataset.theme;
+  else root.dataset.theme = S.theme;
+  try { localStorage.setItem('daigaku-note-theme', S.theme); } catch {}
+  const dark = S.theme === 'dark' || (S.theme === 'system' && darkMQ?.matches);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#16181d' : '#2f5d9e');
+}
+darkMQ?.addEventListener?.('change', () => { if (S.theme === 'system') applyTheme(); });
+
+function openSettings() {
+  closePopover();
+  const body = $('#settings-body');
+  body.innerHTML = '';
+  const section = (title) => {
+    const h = document.createElement('h3');
+    h.className = 'set-cap';
+    h.textContent = title;
+    body.appendChild(h);
+  };
+  // 選ぶもの(ラジオ)
+  const choice = (label, name, options, value, onChange) => {
+    const row = document.createElement('div');
+    row.className = 'set-row';
+    row.innerHTML = `<span class="set-label" id="set-${name}"></span><div class="seg" role="radiogroup" aria-labelledby="set-${name}"></div>`;
+    row.querySelector('.set-label').textContent = label;
+    const seg = row.querySelector('.seg');
+    for (const [v, text] of options) {
+      const l = document.createElement('label');
+      l.innerHTML = `<input type="radio" name="set-${name}" value="${v}"${v === value ? ' checked' : ''}><span></span>`;
+      l.querySelector('span').textContent = text;
+      l.querySelector('input').onchange = () => onChange(v);
+      seg.appendChild(l);
+    }
+    body.appendChild(row);
+  };
+  // 入れる・切る(スイッチ)
+  const toggle = (label, hint, get, set, id) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'set-row set-switch';
+    b.id = id;
+    b.setAttribute('role', 'switch');
+    b.innerHTML = `<span class="set-text"><span class="set-label"></span><span class="set-hint"></span></span><span class="switch" aria-hidden="true"></span>`;
+    b.querySelector('.set-label').textContent = label;
+    b.querySelector('.set-hint').textContent = hint;
+    const show = () => { b.setAttribute('aria-checked', !!get()); b.querySelector('.switch').classList.toggle('on', !!get()); };
+    b.onclick = () => { set(!get()); savePrefs(); show(); };
+    show();
+    body.appendChild(b);
+  };
+  section('画面');
+  choice('画面の色', 'theme', [['system', '端末に合わせる'], ['light', 'ライト'], ['dark', 'ダーク']], S.theme, (v) => { S.theme = v; applyTheme(); savePrefs(); });
+  section('書く');
+  toggle('指で書く', '切ると、指はスクロールと拡大だけになり、書くのはペンだけ', () => S.fingerDraw, (v) => { S.fingerDraw = v; }, 'set-finger');
+  toggle('筆圧で太さを変える', 'ペンで書いたときだけ', () => S.pressure, (v) => { S.pressure = v; }, 'set-pressure');
+  toggle('図形補正', '書いてから少し止めると、まっすぐな線や図形に直す', () => S.shapes, (v) => { S.shapes = v; refreshToolbar(); }, 'set-shapes');
+  toggle('消したら前の道具に戻す', '消しゴムで1回消したら、その前に使っていた道具に戻る', () => S.eraser.back, (v) => { S.eraser.back = v; }, 'set-eraser-back');
+  section('このアプリについて');
+  const ver = document.createElement('p');
+  ver.className = 'set-hint set-about';
+  ver.textContent = `大学ノート ${APP_VERSION}`;
+  body.appendChild(ver);
+  showDialog($('#settings-dialog'));
 }
 
 async function exportCurrentPdf() {
@@ -2228,7 +2303,7 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v35\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = APP_VERSION + '\n' +Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 図形補正の様子(最後の数本): オン/オフ、最後に止めていた時間と揺れ、整えた結果
 const debugShapes = [];
