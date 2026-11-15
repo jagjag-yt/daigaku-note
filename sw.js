@@ -4,7 +4,7 @@ const VERSION = 'daigaku-note-v27';
 const ASSETS = [
   './', 'index.html', 'style.css', 'manifest.webmanifest',
   'js/app.js', 'js/db.js', 'js/model.js', 'js/pdf.js', 'js/sync.js',
-  'js/ink.js', 'js/ui.js', 'js/templates.js', 'js/search.js', 'js/webdav.js', 'js/goodnotes.js', 'js/items.js', 'js/native.js', 'js/account.js', 'js/account-ui.js',
+  'js/ink.js', 'js/ui.js', 'js/templates.js', 'js/search.js', 'js/webdav.js', 'js/goodnotes.js', 'js/items.js', 'js/native.js', 'js/account.js', 'js/account-ui.js', 'js/transform.js',
   'vendor/pdf.min.mjs', 'vendor/pdf.worker.min.mjs', 'vendor/pdf-lib.min.js',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
