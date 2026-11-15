@@ -527,22 +527,25 @@ dialog::backdrop { background: rgba(15,23,42,.35); }
   .sel-bar .sel-label { display: none; }
   .lib-row .search-box { order: 3; flex: 1 1 100%; margin-bottom: 4px; }
   .ed-row.toolbar { gap: 2px; }
-  .tool { width: 38px; }
+  .tool { width: 32px; }
   .swatch { width: 32px; min-width: 32px; }
   .width:not(.on) { display: none; }
   .tb-sep { margin: 0 1px; }
-  #colors.eraser-mode .chip { width: 96px; font-size: 12px; padding: 0 4px; }
+  /* 道具が増えたので、色は選んでいるものだけを出す(押すと色のパネル)。投げ縄のときは3色を出し、太さを隠す */
+  #colors { min-width: 0; }
+  #colors:not(.lasso-on) .swatch:not(.on) { display: none; }
+  #colors.lasso-on ~ #sep-widths, #colors.lasso-on ~ #widths { display: none; }
+  #colors.eraser-mode .chip { width: 72px; font-size: 11px; padding: 0 4px; }
   #colors.eraser-mode .chip .ic { display: none; }
-  #colors { min-width: 96px; }
 }
 @media (max-width: 360px) {
   .tpl-opt { font-size: 10px; }
   #colors { min-width: 0; }
-  .tool { width: 34px; }
+  .tool { width: 32px; }
   .swatch { width: 28px; min-width: 28px; }
   .swatch::before { width: 20px; height: 20px; }
   .width { width: 32px; min-width: 32px; }
-  #colors.eraser-mode .chip { width: 84px; font-size: 11px; }
+  #colors.eraser-mode .chip { width: 58px; font-size: 11px; }
 }
 @media (max-height: 500px) and (orientation: landscape) {
   .ed-row { min-height: 40px; }
@@ -594,3 +597,19 @@ dialog::backdrop { background: rgba(15,23,42,.35); }
 .cp-native input { width: 34px; height: 34px; padding: 0; border: none; background: none; cursor: pointer; }
 .cp-add { margin-top: 10px; width: 100%; }
 .cp-reset { margin-top: 4px; }
+
+/* テキストボックスを書く欄(ページの上に重ねる) */
+.text-editor { position: absolute; z-index: 4; margin: 0; border: none; outline: 1.5px dashed var(--accent); outline-offset: 2px; resize: none; overflow: hidden; box-sizing: border-box; white-space: pre-wrap; overflow-wrap: break-word; min-height: 1em; }
+#text-opts { gap: 6px; align-items: center; }
+#text-opts .text-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--text); font-size: 14px; }
+#text-opts .tc-aa { font-weight: 600; }
+#text-opts .tc-size { color: var(--muted); font-variant-numeric: tabular-nums; }
+.text-pop { width: 280px; max-width: calc(100vw - 24px); padding: 10px 0 8px; }
+.text-pop .lasso-mode { padding: 0 10px 6px; }
+.text-pop .pp-row { display: grid; grid-template-columns: 56px 1fr 44px; align-items: center; gap: 6px; padding: 4px 10px; font-size: 13px; }
+.text-pop .pp-row output { font-size: 12px; color: var(--muted); text-align: right; }
+.text-pop .tp-bgs { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 10px 4px; }
+.text-pop .tp-bg { width: 32px; height: 32px; min-height: 32px; padding: 0; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); }
+.text-pop .tp-bg.on { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cp-more { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; color: var(--accent); cursor: pointer; }
+.cp-more input { width: 34px; height: 34px; padding: 0; border: none; background: none; cursor: pointer; }

@@ -1,11 +1,13 @@
-// 画像とテキストボックス(ここでは「部品」と呼ぶ)。いまは GoodNotes から取り込んだものだけが対象。
+// 画像とテキストボックス(ここでは「部品」と呼ぶ)。GoodNotes から取り込んだものと、テキストの道具で置いたもの。
 //
 // 部品は item.add の op で足し(中身は線と同じ形)、tool が 'image' / 'text' のものを部品として扱う。
 // pts には四隅 (x, y, 0) を入れておくので、投げ縄での選択・移動・複製・削除・元に戻す・ページの複製は
 // 線と同じ仕組み(stroke.tf / stroke.del など)のまま動く。部品を知らない古い版のアプリは item.add を無視する。
 //   画像:          { tool: 'image', hash, mime, pts, width: 0, color }
 //   テキストボックス・付箋: { tool: 'text', text, size, font, color, fill, border: { w, color }, radius,
-//                         pad(左右の余白), padT(上の余白), wrap(幅で折り返すか), foot(付箋の下の小さな文字), pts, width: 0 }
+//                         pad(左右の余白), padT(上の余白), wrap(幅で折り返すか), foot(付箋の下の小さな文字), pts, width: 0,
+//                         bold, italic, underline, strike(true のときだけ), align('center' / 'right'。左揃えは付けない) }
+//   font は書体の名前。'serif'(明朝)・'mono'(等幅)はこのアプリの決まった書体の組を表す
 import * as db from './db.js';
 
 export const isItem = (d) => !!d && (d.tool === 'image' || d.tool === 'text');
@@ -33,8 +35,11 @@ export const FONT_STACK = "'Helvetica Neue', Helvetica, Arial, 'Hiragino Sans', 
 const LINE = 1.25; // 行の高さ(文字の大きさに対する倍率)
 const ASCENT = 0.92; // 行の上端から文字の基準線まで
 
-const fontFamily = (d) => (d.font && !/^\s*$/.test(d.font) ? `'${d.font.replace(/['"\\]/g, '')}', ` : '') + FONT_STACK;
-const fontOf = (d) => `${d.size}px ${fontFamily(d)}`;
+export const SERIF_STACK = "'Hiragino Mincho ProN', 'Yu Mincho', 'YuMincho', 'Noto Serif JP', 'Times New Roman', serif";
+export const MONO_STACK = "ui-monospace, 'SFMono-Regular', Menlo, Consolas, 'BIZ UDGothic', 'Noto Sans Mono CJK JP', monospace";
+export const fontFamily = (d) => (d.font === 'serif' ? SERIF_STACK : d.font === 'mono' ? MONO_STACK
+  : (d.font && !/^\s*$/.test(d.font) ? `'${d.font.replace(/['"\\]/g, '')}', ` : '') + FONT_STACK);
+export const fontOf = (d) => `${d.italic ? 'italic ' : ''}${d.bold ? 'bold ' : ''}${d.size}px ${fontFamily(d)}`;
 
 let measureCtx = null;
 function measurer() {
@@ -50,7 +55,7 @@ const layoutCache = new Map();
 // 行の配列 [{ s: 文字列, y: 基準線の y(部品の上端から) }]
 export function textLayout(d) {
   const r0 = itemRect(d);
-  const key = JSON.stringify([d.text, d.size, d.font, d.pad, d.padT, d.wrap, r0.w]);
+  const key = JSON.stringify([d.text, d.size, d.font, d.pad, d.padT, d.wrap, r0.w, !!d.bold, !!d.italic]);
   const cached = layoutCache.get(key);
   if (cached) return cached;
   const ctx = measurer();
@@ -77,10 +82,37 @@ export function textLayout(d) {
     }
     lines.push(line);
   }
-  const out = lines.map((s, i) => ({ s, y: top + d.size * (ASCENT + i * LINE) }));
+  // w: 行の幅(中央・右揃えと下線に使う)
+  const out = lines.map((s, i) => ({ s, y: top + d.size * (ASCENT + i * LINE), w: s ? ctx.measureText(s).width : 0 }));
   if (layoutCache.size > 2000) layoutCache.clear();
   layoutCache.set(key, out);
   return out;
+}
+
+// 文字が全部入る高さ(テキストの道具で置くとき・書き直したときに、枠の高さをこれに合わせる)
+export function textHeight(d) {
+  const n = Math.max(1, textLayout(d).length);
+  return (d.padT ?? d.pad) + n * d.size * LINE + d.pad;
+}
+export const LINE_HEIGHT = LINE;
+
+// 揃え: 行の書き始めの x
+function lineX(d, r) {
+  if (d.align === 'center') return r.x + r.w / 2;
+  if (d.align === 'right') return r.x + r.w - d.pad;
+  return r.x + d.pad;
+}
+// キャンバスで下線・取り消し線を引く(SVG は text-decoration で引く)
+function decorate(ctx, d, x0, y, w) {
+  if (!d.underline && !d.strike) return;
+  ctx.save();
+  ctx.strokeStyle = d.color;
+  ctx.lineWidth = Math.max(0.6, d.size / 16);
+  const left = d.align === 'center' ? x0 - w / 2 : d.align === 'right' ? x0 - w : x0;
+  const line = (yy) => { ctx.beginPath(); ctx.moveTo(left, yy); ctx.lineTo(left + w, yy); ctx.stroke(); };
+  if (d.underline) line(y + d.size * 0.12);
+  if (d.strike) line(y - d.size * 0.3);
+  ctx.restore();
 }
 
 // 付箋の左下に小さく出す名前
@@ -174,8 +206,11 @@ export function itemSvg(id, d, off = [0, 0]) {
     body = frameSvg(d, r);
     const lines = textLayout(d).filter((l) => l.s);
     if (lines.length) {
-      body += `<text font-family="${esc(fontFamily(d))}" font-size="${num(d.size)}" fill="${esc(d.color)}" xml:space="preserve">`
-        + lines.map((l) => `<tspan x="${num(r.x + d.pad)}" y="${num(r.y + l.y)}">${esc(l.s)}</tspan>`).join('') + '</text>';
+      const anchor = d.align === 'center' ? ' text-anchor="middle"' : d.align === 'right' ? ' text-anchor="end"' : '';
+      const deco = [d.underline && 'underline', d.strike && 'line-through'].filter(Boolean).join(' ');
+      const style = (d.bold ? ' font-weight="bold"' : '') + (d.italic ? ' font-style="italic"' : '') + (deco ? ` text-decoration="${deco}"` : '');
+      body += `<text font-family="${esc(fontFamily(d))}" font-size="${num(d.size)}" fill="${esc(d.color)}"${anchor}${style} xml:space="preserve">`
+        + lines.map((l) => `<tspan x="${num(lineX(d, r))}" y="${num(r.y + l.y)}">${esc(l.s)}</tspan>`).join('') + '</text>';
     }
     if (d.foot) {
       const f = footOf(d, r);
@@ -212,7 +247,14 @@ export function drawItem(ctx, d, off = [0, 0]) {
     ctx.fillStyle = d.color;
     ctx.font = fontOf(d);
     ctx.textBaseline = 'alphabetic';
-    for (const l of textLayout(d)) if (l.s) ctx.fillText(l.s, r.x + d.pad, r.y + l.y);
+    ctx.textAlign = d.align === 'center' ? 'center' : d.align === 'right' ? 'right' : 'left';
+    for (const l of textLayout(d)) {
+      if (!l.s) continue;
+      const x = lineX(d, r);
+      ctx.fillText(l.s, x, r.y + l.y);
+      decorate(ctx, d, x, r.y + l.y, l.w);
+    }
+    ctx.textAlign = 'left';
     if (d.foot) {
       const f = footOf(d, r);
       ctx.fillStyle = f.color;
