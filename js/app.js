@@ -50,7 +50,7 @@ const PEN_NIBS = {
 };
 const PEN_DEFAULTS = { nib: 'fountain', sens: 50, stab: 0, dash: '', shape: '' }; // shape: ドラッグで描く図形(空ならふつうに書く)
 
-const APP_VERSION = 'v42'; // sw.js の VERSION と合わせる
+const APP_VERSION = 'v43'; // sw.js の VERSION と合わせる
 
 const S = {
   rec: null,
@@ -90,6 +90,8 @@ const S = {
   edit: null, // 書いている途中のテキストボックス { v, id(書き直しのとき), d, ta }
   palettes: { pen: [...PEN_PALETTE], marker: [...MARKER_PALETTE], tape: [...TAPE_PALETTE] }, // 色のプリセット(編集できる)
   colorHist: { pen: [], marker: [], tape: [] }, // 最近使った色
+  // ツールバー: 道具の並び・隠す道具・置く場所(top / bottom)
+  tb: { order: ['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky', 'image', 'shapes'], hidden: [], pos: 'top' },
   theme: 'system', // 画面の色: system(端末に合わせる)/ light / dark
   ctpl: [], // 自作テンプレート(本棚・ダイアログを開くときに読み直す)
   nn: { tpl: 'lines-b', size: 'a4', paper: 'white' }, // 新しいノートの用紙(前に選んだものを次も使う)
@@ -151,6 +153,12 @@ async function init() {
     if (Array.isArray(hs)) S.colorHist[k] = clean(hs).slice(0, HIST_MAX);
   }
   if (['system', 'light', 'dark'].includes(prefs.theme)) S.theme = prefs.theme;
+  if (prefs.tb) {
+    const all = S.tb.order;
+    if (Array.isArray(prefs.tb.order)) S.tb.order = [...new Set(prefs.tb.order.filter((k) => all.includes(k)))].concat(all.filter((k) => !prefs.tb.order.includes(k))); // 新しく増えた道具は最後に
+    if (Array.isArray(prefs.tb.hidden)) S.tb.hidden = [...new Set(prefs.tb.hidden.filter((k) => all.includes(k) && k !== 'pen'))];
+    if (['top', 'bottom'].includes(prefs.tb.pos)) S.tb.pos = prefs.tb.pos;
+  }
   applyTheme();
   if (prefs.nn) {
     if (TEMPLATES.some((t) => t.id === prefs.nn.tpl) || /^c:\w+$/.test(prefs.nn.tpl || '')) S.nn.tpl = prefs.nn.tpl; // c:<id> は自作(無くなっていたら開くときに B罫へ)
@@ -196,6 +204,7 @@ async function init() {
   bindLibrary();
   bindLibBar();
   $('#settings-btn').onclick = openSettings;
+  applyToolbarLayout();
   buildToolbar();
   bindEditor();
   bindNative();
@@ -208,7 +217,7 @@ async function init() {
 }
 
 function savePrefs() {
-  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lib: { sort: S.lib.sort, view: S.lib.view }, nn: S.nn, theme: S.theme, tape: S.tape, markerMode: S.markerMode, straight: S.straight, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text, sticky: S.sticky });
+  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lib: { sort: S.lib.sort, view: S.lib.view }, nn: S.nn, theme: S.theme, tb: S.tb, tape: S.tape, markerMode: S.markerMode, straight: S.straight, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text, sticky: S.sticky });
 }
 
 function route() {
@@ -1206,6 +1215,7 @@ function buildToolbar() {
 }
 
 function refreshToolbar() {
+  syncHiddenTools();
   for (const t of ['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky']) {
     const b = $('#tool-' + t);
     b.classList.toggle('on', S.tool === t);
@@ -1723,6 +1733,38 @@ function moreMenu(anchor) {
   ], close), { align: 'end' });
 }
 
+// ---------- ツールバーの並び ----------
+const TOOL_INFO = {
+  pen: { id: 'tool-pen', icon: 'pen', label: 'ペン' },
+  marker: { id: 'tool-marker', icon: 'marker', label: '蛍光ペン' },
+  eraser: { id: 'tool-eraser', icon: 'eraser', label: '消しゴム' },
+  lasso: { id: 'tool-lasso', icon: 'lasso', label: '投げ縄' },
+  text: { id: 'tool-text', icon: 'text', label: 'テキスト' },
+  sticky: { id: 'tool-sticky', icon: 'sticky', label: '付箋' },
+  image: { id: 'tool-image', icon: 'image', label: '画像' },
+  shapes: { id: 'shapes', icon: 'shapes', label: '図形補正' },
+};
+// 隠した道具も、選んでいるあいだは見せる(何を選んでいるか分かるように)
+function syncHiddenTools() {
+  for (const k of S.tb.order) document.getElementById(TOOL_INFO[k].id)?.classList.toggle('tb-hidden', S.tb.hidden.includes(k) && S.tool !== k);
+}
+// 設定に合わせて、道具を並べ替え・隠し、ツールバーを上か下に置く
+function applyToolbarLayout() {
+  const box = $('#tool-list');
+  for (const k of S.tb.order) {
+    const b = document.getElementById(TOOL_INFO[k].id);
+    if (!b) continue;
+    box.appendChild(b);
+  }
+  syncHiddenTools();
+  const tb = document.querySelector('.ed-row.toolbar');
+  const bottom = S.tb.pos === 'bottom';
+  if (bottom && tb.parentElement.classList.contains('ed-top')) $('#editor').appendChild(tb);
+  else if (!bottom && !tb.parentElement.classList.contains('ed-top')) $('.ed-top').insertBefore(tb, $('#pdf-add-input'));
+  tb.classList.toggle('bottom', bottom);
+  $('#editor').classList.toggle('tb-bottom', bottom);
+}
+
 // ---------- 設定 ----------
 const darkMQ = window.matchMedia ? matchMedia('(prefers-color-scheme: dark)') : null;
 function applyTheme() {
@@ -1783,6 +1825,50 @@ function openSettings() {
   toggle('筆圧で太さを変える', 'ペンで書いたときだけ', () => S.pressure, (v) => { S.pressure = v; }, 'set-pressure');
   toggle('図形補正', '書いてから少し止めると、まっすぐな線や図形に直す', () => S.shapes, (v) => { S.shapes = v; refreshToolbar(); }, 'set-shapes');
   toggle('消したら前の道具に戻す', '消しゴムで1回消したら、その前に使っていた道具に戻る', () => S.eraser.back, (v) => { S.eraser.back = v; }, 'set-eraser-back');
+  section('ツールバー');
+  choice('置く場所', 'tbpos', [['top', '上'], ['bottom', '下']], S.tb.pos, (v) => { S.tb.pos = v; savePrefs(); applyToolbarLayout(); });
+  const list = document.createElement('div');
+  list.className = 'tb-list';
+  list.setAttribute('role', 'list');
+  list.setAttribute('aria-label', 'ツールバーの道具');
+  body.appendChild(list);
+  const renderList = () => {
+    list.innerHTML = '';
+    S.tb.order.forEach((k, i) => {
+      const row = document.createElement('div');
+      row.className = 'tb-row';
+      row.setAttribute('role', 'listitem');
+      const shown = !S.tb.hidden.includes(k);
+      row.innerHTML = `<span class="tb-ic">${icon(TOOL_INFO[k].icon, 20)}</span><span class="tb-name"></span>
+        <button type="button" class="icon-btn small tb-up" aria-label="${TOOL_INFO[k].label}を前へ" title="前へ"${i === 0 ? ' disabled' : ''}>${icon('up', 18)}</button>
+        <button type="button" class="icon-btn small tb-down" aria-label="${TOOL_INFO[k].label}を後ろへ" title="後ろへ"${i === S.tb.order.length - 1 ? ' disabled' : ''}>${icon('down', 18)}</button>
+        <button type="button" class="tb-show" role="switch" aria-checked="${shown}" aria-label="${TOOL_INFO[k].label}を出す"${k === 'pen' ? ' disabled title="ペンはいつも出します"' : ''}><span class="switch${shown ? ' on' : ''}" aria-hidden="true"></span></button>`;
+      row.querySelector('.tb-name').textContent = TOOL_INFO[k].label + (k === 'shapes' ? '(スマホの幅では、その他のメニューに出ます)' : '');
+      const move = (d) => {
+        const o = S.tb.order;
+        [o[i], o[i + d]] = [o[i + d], o[i]];
+        savePrefs(); applyToolbarLayout(); renderList();
+        const r = list.querySelectorAll('.tb-row')[i + d]; // 端まで動かしてその矢印が止まったら、もう一方の矢印へ
+        (r?.querySelector((d < 0 ? '.tb-up' : '.tb-down') + ':not(:disabled)') || r?.querySelector('.tb-up:not(:disabled), .tb-down:not(:disabled)'))?.focus();
+      };
+      row.querySelector('.tb-up').onclick = () => move(-1);
+      row.querySelector('.tb-down').onclick = () => move(1);
+      row.querySelector('.tb-show').onclick = () => {
+        if (k === 'pen') return;
+        S.tb.hidden = shown ? [...S.tb.hidden, k] : S.tb.hidden.filter((x) => x !== k);
+        savePrefs(); applyToolbarLayout(); renderList();
+        list.querySelectorAll('.tb-row')[i]?.querySelector('.tb-show')?.focus();
+      };
+      list.appendChild(row);
+    });
+  };
+  renderList();
+  const reset = document.createElement('button');
+  reset.type = 'button';
+  reset.className = 'link-btn tb-reset';
+  reset.textContent = 'ツールバーを元に戻す';
+  reset.onclick = () => { S.tb = { order: Object.keys(TOOL_INFO), hidden: [], pos: 'top' }; savePrefs(); applyToolbarLayout(); openSettings(); };
+  body.appendChild(reset);
   section('このアプリについて');
   const ver = document.createElement('p');
   ver.className = 'set-hint set-about';
