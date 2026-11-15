@@ -807,3 +807,5 @@ body:has(#editor.tb-bottom:not([hidden])) #toast { bottom: calc(72px + var(--sa-
 .present-bar .icon-btn { color: #fff; }
 .present-bar .icon-btn.on { background: rgba(255,255,255,.18); }
 .pr-no { font-size: 13px; min-width: 52px; text-align: center; font-variant-numeric: tabular-nums; }
+/* 印刷用の見えない枠 */
+.print-frame { position: fixed; right: 0; bottom: 0; width: 1px; height: 1px; border: 0; opacity: 0; pointer-events: none; }

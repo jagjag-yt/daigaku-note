@@ -3,7 +3,7 @@ import {
   Recorder, emptyNote, applyOp, customTemplates, foldersOf, folderOfNote, folderTree, pagesOf, strokesOf, buildLibrary, newId, strokeHit, styleOf, bgOf, PAGE_A4, addType,
 } from './model.js';
 import { drawStroke, recognizeShape, strokeInLasso, geometry, strokeSvg, pointInPolygon } from './ink.js';
-import { isItem, itemSvg, drawItem, itemInLasso, onImageReady, releaseImages, itemRect, cornerPts, textHeight, fontFamily, LINE_HEIGHT } from './items.js';
+import { isItem, itemSvg, drawItem, itemInLasso, onImageReady, releaseImages, imageElement, itemRect, cornerPts, textHeight, fontFamily, fontOf, LINE_HEIGHT } from './items.js';
 import { TEMPLATES, SIZES, PAPERS, templatePrims, sizeById, paperColor } from './templates.js';
 import { importPdf, renderPdfPage, exportPdf, sha256, imageToPdf } from './pdf.js';
 import { buildSyncFile, importSyncFile } from './sync.js';
@@ -50,7 +50,7 @@ const PEN_NIBS = {
 };
 const PEN_DEFAULTS = { nib: 'fountain', sens: 50, stab: 0, dash: '', shape: '' }; // shape: ドラッグで描く図形(空ならふつうに書く)
 
-const APP_VERSION = 'v48'; // sw.js の VERSION と合わせる
+const APP_VERSION = 'v49'; // sw.js の VERSION と合わせる
 const MAX_TABS = 12; // 開いておけるタブの数
 const DEFAULT_HIDDEN = ['laser']; // 最初は隠しておく道具(設定やその他のメニューから使う)
 
@@ -1729,6 +1729,7 @@ function moreMenu(anchor) {
     { icon: 'bookmark', label: currentPage()?.mark ? 'このページのしおりを外す' : 'このページにしおりを付ける', id: 'mark-page', onClick: () => { const pg = currentPage(); if (pg) toggleMark(pg); } },
     { icon: 'pdf', label: 'PDF のページを追加…', id: 'add-pdf', onClick: () => $('#pdf-add-input').click() },
     { icon: 'export', label: 'PDF に書き出す', id: 'export-pdf', onClick: exportCurrentPdf },
+    { icon: 'print', label: '印刷…', id: 'print-note', onClick: () => printNote() },
     { icon: 'file', label: '貼り付け', id: 'paste', disabled: !S.clip, onClick: pasteHere },
     '-',
     { icon: 'rename', label: '名前を変更', onClick: renameNote },
@@ -1908,6 +1909,117 @@ async function exportCurrentPdf() {
     else if (r === 'cancelled') $('#toast').hidden = true; // 失敗なら download() のエラーを出したままにする
   } catch (e) {
     toast('PDFを書き出せませんでした: ' + e.message, 6000);
+  }
+}
+
+// ページだけを PDF に書き出す(ファイル名にページ番号を付ける)。書き出しの途中でノートを閉じても大丈夫なように、最初にノートを取っておく
+async function exportPagesPdf(pgs) {
+  const note = S.note;
+  const all = pagesOf(note), nos = pgs.map((p) => all.indexOf(p) + 1);
+  try {
+    toast('PDFを作成しています…', 60000);
+    const bytes = await exportPdf(note, pgs.map((p) => p.id));
+    const r = await download(new Blob([bytes], { type: 'application/pdf' }), `${safeName(note.title)}-p${nos.join('_')}.pdf`);
+    if (r === 'saved') toast('PDFを書き出しました');
+    else if (r === 'cancelled') $('#toast').hidden = true;
+  } catch (e) {
+    toast('PDFを書き出せませんでした: ' + e.message, 6000);
+  }
+}
+
+// ページを画像にする。背景(PDF・罫線・紙の色)・画像・テキスト・手書きを、1pt = 3px(長い辺 3600px まで)で描く
+async function pageCanvas(note, pg) {
+  const k = Math.min(3, 3600 / Math.max(pg.w, pg.h));
+  const c = document.createElement('canvas');
+  c.width = Math.round(pg.w * k);
+  c.height = Math.round(pg.h * k);
+  const ctx = c.getContext('2d');
+  const bg = bgOf(pg);
+  ctx.fillStyle = paperColor(bg);
+  ctx.fillRect(0, 0, c.width, c.height);
+  if (bg?.type === 'pdf') await renderPdfPage(c, bg.hash, bg.page, null, bg.rot || 0);
+  const list = layered(strokesOf(note, pg.id));
+  // 画像は読み込み終わるのを待つ(最大 5 秒)。文字はフォントを読み終えてから
+  const hashes = [...new Set(list.filter((e) => e.data.tool === 'image' && e.data.hash).map((e) => e.data.hash))];
+  const until = Date.now() + 5000;
+  while (hashes.some((h) => !imageElement(h)) && Date.now() < until) {
+    if (S.note !== note) throw new Error('書き出しの途中でノートを閉じました');
+    await new Promise((r) => setTimeout(r, 60));
+  }
+  // 文字に使う書体を読み込んでから描く(まだ画面で使っていない書体は、読み込まれていないことがある)
+  const fonts = [...new Set(list.filter((e) => e.data.tool === 'text').map((e) => fontOf(styleOf(e))))];
+  await Promise.all(fonts.map((f) => document.fonts?.load(f).catch(() => {})));
+  await document.fonts?.ready;
+  if (S.note !== note) throw new Error('書き出しの途中でノートを閉じました'); // 画像を手放したあとなので、欠けたまま書き出さない
+  const c2 = scaledCtx(c, pg);
+  if (bg?.type === 'blank') paintTemplate(c2, bg, pg.w, pg.h);
+  for (const e of list) {
+    if (isItem(e.data)) drawItem(c2, styleOf(e), e.off);
+    else drawStroke(c2, styleOf(e), e.off, geoOf(e));
+  }
+  return c;
+}
+async function exportPagePng(pg) {
+  const note = S.note, no = pagesOf(note).indexOf(pg) + 1;
+  try {
+    toast('画像を作成しています…', 60000);
+    const c = await pageCanvas(note, pg);
+    const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+    if (!blob) throw new Error('画像を作れませんでした');
+    const r = await download(blob, `${safeName(note.title)}-p${no}.png`, 'image/png');
+    if (r === 'saved') toast('画像を書き出しました');
+    else if (r === 'cancelled') $('#toast').hidden = true;
+  } catch (e) {
+    toast('画像を書き出せませんでした: ' + e.message, 6000);
+  }
+}
+
+// 印刷: PDF を作って印刷の画面を出す。
+// パソコンの Chrome・Edge は、見えない枠に PDF を読み込んでそのまま印刷の画面を出す。
+// それ以外(Safari・iPad・スマホ)は、押した直後に開いた新しいタブに PDF を出して、そこから印刷してもらう(ポップアップを止められないように)。
+// アプリ版は、PDF を保存・共有の画面に出す
+let printFrame = null;
+async function printNote(pageIds = null) {
+  const note = S.note;
+  const ua = navigator.userAgent;
+  const frameOk = !native.isNative && /Chrome\//.test(ua) && !/Mobile|Android|iPad|iPhone/.test(ua) && !(navigator.maxTouchPoints > 1 && /Macintosh/.test(ua));
+  const win = !native.isNative && !frameOk ? window.open('', '_blank') : null;
+  try {
+    toast('印刷の準備をしています…', 60000);
+    const bytes = await exportPdf(note, pageIds);
+    const blob = new Blob([bytes], { type: 'application/pdf' });
+    if (native.isNative) {
+      $('#toast').hidden = true;
+      const r = await download(blob, `${safeName(note.title)}.pdf`);
+      if (r === 'saved') toast('共有の画面から「プリント」を選んでください', 6000);
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    if (!frameOk) {
+      if (win) { win.location.href = url; setTimeout(() => URL.revokeObjectURL(url), 10 * 60 * 1000); toast('開いた PDF から印刷してください', 6000); }
+      else { URL.revokeObjectURL(url); toast('新しいタブを開けませんでした。「PDF に書き出す」で保存してから印刷してください', 8000); }
+      return; // 新しいタブで読み終わるまで、URL は 10 分残す
+    }
+    printFrame?.remove(); // 前の印刷の枠を片付ける
+    const f = (printFrame = document.createElement('iframe'));
+    f.className = 'print-frame';
+    f.setAttribute('aria-hidden', 'true');
+    f.src = url;
+    document.body.appendChild(f);
+    const cleanup = () => { if (printFrame === f) printFrame = null; f.remove(); URL.revokeObjectURL(url); };
+    try {
+      await new Promise((res, rej) => {
+        const t = setTimeout(() => rej(new Error('PDF を読み込めませんでした')), 15000);
+        f.onload = () => { clearTimeout(t); res(); };
+      });
+      $('#toast').hidden = true;
+      f.contentWindow.focus();
+      f.contentWindow.print();
+    } catch (e) { cleanup(); throw e; }
+    setTimeout(() => { if (printFrame === f) cleanup(); }, 10 * 60 * 1000); // 印刷の画面を閉じるまで待てないので、十分あとで片付ける
+  } catch (e) {
+    win?.close();
+    toast('印刷できませんでした: ' + e.message, 6000);
   }
 }
 
@@ -4735,6 +4847,10 @@ function pageMenu(anchor, pg) {
     { icon: 'bookmark', label: pg.mark ? 'しおりを外す' : 'しおりを付ける', attrs: { 'data-a': 'mark' }, onClick: () => toggleMark(pg) },
     { icon: 'outline', label: pg.title ? '目次の見出しを変更…' : '目次に追加…', attrs: { 'data-a': 'title' }, onClick: () => editPageTitle(pg) },
     ...(pg.title ? [{ icon: 'close', label: '目次から外す', attrs: { 'data-a': 'untitle' }, onClick: () => setPageTitle(pg, '') }] : []),
+    '-',
+    { icon: 'export', label: 'このページを PDF に書き出す', attrs: { 'data-a': 'pdf1' }, onClick: () => exportPagesPdf([pg]) },
+    { icon: 'image', label: 'このページを画像(PNG)に書き出す', attrs: { 'data-a': 'png1' }, onClick: () => exportPagePng(pg) },
+    { icon: 'print', label: 'このページを印刷…', attrs: { 'data-a': 'print1' }, onClick: () => printNote([pg.id]) },
     '-',
     { icon: 'copy', label: '別のノートにコピー…', attrs: { 'data-a': 'copyto' }, onClick: () => sendPage(anchor, pg, false) },
     { icon: 'move', label: '別のノートに移動…', attrs: { 'data-a': 'moveto' }, disabled: pages.length <= 1, onClick: () => sendPage(anchor, pg, true) },
