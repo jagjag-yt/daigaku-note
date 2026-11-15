@@ -810,7 +810,7 @@ function refreshToolbar() {
   // 色: 消しゴムでは出さない(場所は残して、道具のボタンが横に動かないようにする)。
   // 投げ縄では、選んだ線の色を変えるのに使う(選んでいないときは押せない)
   $('#colors').classList.toggle('eraser-mode', eraser);
-  $('#colors').classList.toggle('lasso-mode', lasso); // スマホ幅では、投げ縄のときだけ3色を並べる(ふだんは選んでいる色だけ)
+  $('#colors').classList.toggle('lasso-on', lasso); // スマホ幅では、投げ縄のときだけ3色を並べる(ふだんは選んでいる色だけ)
   $('#sep-widths').classList.toggle('invisible', lasso);
   $('#widths').classList.toggle('invisible', lasso);
   [...$('#colors').querySelectorAll('.swatch')].forEach((b, i) => {

@@ -532,8 +532,9 @@ dialog::backdrop { background: rgba(15,23,42,.35); }
   .width:not(.on) { display: none; }
   .tb-sep { margin: 0 1px; }
   /* 道具が増えたので、色は選んでいるものだけを出す(押すと色のパネル)。投げ縄のときは3色を出し、太さを隠す */
-  #colors:not(.lasso-mode) .swatch:not(.on) { display: none; }
-  #colors.lasso-mode ~ #sep-widths, #colors.lasso-mode ~ #widths { display: none; }
+  #colors { min-width: 0; }
+  #colors:not(.lasso-on) .swatch:not(.on) { display: none; }
+  #colors.lasso-on ~ #sep-widths, #colors.lasso-on ~ #widths { display: none; }
   #colors.eraser-mode .chip { width: 72px; font-size: 11px; padding: 0 4px; }
   #colors.eraser-mode .chip .ic { display: none; }
 }
@@ -544,7 +545,7 @@ dialog::backdrop { background: rgba(15,23,42,.35); }
   .swatch { width: 28px; min-width: 28px; }
   .swatch::before { width: 20px; height: 20px; }
   .width { width: 32px; min-width: 32px; }
-  #colors.eraser-mode .chip { width: 64px; font-size: 11px; }
+  #colors.eraser-mode .chip { width: 58px; font-size: 11px; }
 }
 @media (max-height: 500px) and (orientation: landscape) {
   .ed-row { min-height: 40px; }
