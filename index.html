@@ -131,6 +131,7 @@
           <button id="tool-text" class="tool" data-icon="text" data-icon-size="24" title="テキスト (T): 押した所に文字を打つ。文字を押すと書き直す" aria-label="テキスト"></button>
           <button id="tool-sticky" class="tool" data-icon="sticky" data-icon-size="24" title="付箋 (N): 押した所に付箋を貼る" aria-label="付箋"></button>
           <button id="tool-image" class="tool" data-icon="image" data-icon-size="24" title="画像を入れる(写真・ファイル・カメラ。貼り付け・ドラッグでも入る)" aria-label="画像を入れる"></button>
+          <button id="tool-laser" class="tool" data-icon="laser" data-icon-size="24" title="レーザーポインター: なぞった所が光って、すぐ消える(保存しない)" aria-label="レーザーポインター"></button>
           <button id="shapes" class="tool" data-icon="shapes" data-icon-size="24" title="図形補正: 書き終えると、直線・折れ線・弧・円・三角形・四角形などに整えます(ペンを止めると、離す前に確かめられます)" aria-label="図形補正"></button>
         </div>
         <div class="tb-sep"></div>
@@ -154,6 +155,11 @@
       </aside>
       <div id="sb-scrim" class="sb-scrim" hidden></div>
       <div id="scroller"><div id="pages"></div></div>
+      <div id="ruler" class="ruler" hidden role="group" aria-label="定規(ドラッグで動かす。右端の丸で回す)">
+        <div class="ruler-scale"></div><span class="ruler-deg"></span>
+        <button type="button" class="ruler-rot" aria-label="定規を回す" title="回す(0°・45°・90° に吸い付く)"></button>
+        <button type="button" class="ruler-x icon-btn small" data-icon="close" data-icon-size="16" aria-label="定規をしまう" title="しまう"></button>
+      </div>
       <button id="page-ind" class="page-ind" title="ページを指定して移動"></button>
     </div>
   </section>

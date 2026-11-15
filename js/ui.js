@@ -21,6 +21,8 @@ const P = {
   rotate: '<path d="M19 12a7 7 0 11-2.05-4.95"/><path d="M19.5 4v4h-4"/>',
   rotateL: '<path d="M5 12a7 7 0 102.05-4.95"/><path d="M4.5 4v4h4"/>',
   settings: '<circle cx="12" cy="12" r="3"/><path d="M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M5.6 18.4l1.6-1.6M16.8 7.2l1.6-1.6"/><circle cx="12" cy="12" r="6.2"/>',
+  laser: '<circle cx="7" cy="17" r="2.6"/><path d="M9 15l9-9M14 5h5v5"/>',
+  ruler: '<rect x="3" y="8" width="18" height="8" rx="1.5" transform="rotate(-30 12 12)"/><path d="M8.6 9.8l1 1.7M11.6 8.1l1 1.7M14.6 6.4l1 1.7" transform="rotate(0)"/>',
   list: '<path d="M8 6.5h12M8 12h12M8 17.5h12"/><circle cx="4.5" cy="6.5" r="1" fill="currentColor"/><circle cx="4.5" cy="12" r="1" fill="currentColor"/><circle cx="4.5" cy="17.5" r="1" fill="currentColor"/>',
   grid: '<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
   star: '<path d="M12 4l2.4 5 5.4.6-4 3.7 1.1 5.4L12 16l-4.9 2.7 1.1-5.4-4-3.7 5.4-.6z"/>',
