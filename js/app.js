@@ -14,6 +14,7 @@ import { icon, fillIcons, openPopover, closePopover, menu, retargetPopover, popo
 import * as native from './native.js';
 import * as TF from './transform.js';
 import * as ER from './erase.js';
+import { SHAPES, shapePts, tooSmall } from './shapes.js';
 
 const $ = (s) => document.querySelector(s);
 // 色と太さは道具ごとに3つずつ「よく使うもの」として並べる。選んでいるものをもう一度押すと入れ替えられる
@@ -43,7 +44,7 @@ const PEN_NIBS = {
   brush: { label: '筆ペン', note: '筆圧で太さが大きく変わる' },
   pencil: { label: '鉛筆', note: '少し薄く、太さの変化は小さめ' },
 };
-const PEN_DEFAULTS = { nib: 'fountain', sens: 50, stab: 0, dash: '' };
+const PEN_DEFAULTS = { nib: 'fountain', sens: 50, stab: 0, dash: '', shape: '' }; // shape: ドラッグで描く図形(空ならふつうに書く)
 
 const S = {
   rec: null,
@@ -102,6 +103,7 @@ async function init() {
   if (!PEN_NIBS[S.pen.nib]) S.pen.nib = 'fountain';
   for (const k of ['sens', 'stab']) { const v = Number(S.pen[k]); S.pen[k] = Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : PEN_DEFAULTS[k]; }
   if (!['', 'dash', 'dot'].includes(S.pen.dash)) S.pen.dash = '';
+  if (S.pen.shape && !SHAPES[S.pen.shape]) S.pen.shape = '';
   if (prefs.marker) S.marker = prefs.marker;
   if (prefs.sidebar) S.sidebar = true;
   for (const k of ['pen', 'marker']) {
@@ -788,6 +790,9 @@ function refreshToolbar() {
     $('#text-style .tc-size').textContent = Math.round(t.size);
   }
   $('#tool-pen').style.setProperty('--tc', S.pen.color);
+  // 図形を描く設定のときは、ペンのボタンに印を付ける
+  $('#tool-pen').classList.toggle('shape-on', !!S.pen.shape);
+  $('#tool-pen').title = S.pen.shape ? `ペン: ${SHAPES[S.pen.shape]}を描く (P)。もう一度押すと設定` : 'ペン (P)';
   $('#tool-marker').style.setProperty('--tc', S.marker.color);
   const sh = $('#shapes');
   sh.classList.toggle('on', S.shapes);
@@ -1125,11 +1130,12 @@ function penPopover(anchor) {
       <label class="pp-row"><span>筆圧感度</span><input type="range" min="0" max="100" step="5" class="pp-sens" aria-label="筆圧感度"><output></output></label>
       <label class="pp-row"><span>手ぶれ補正</span><input type="range" min="0" max="100" step="5" class="pp-stab" aria-label="手ぶれ補正"><output></output></label>
       <span class="menu-cap">線の種類</span><div class="seg lasso-mode pp-dash" role="radiogroup" aria-label="線の種類"></div>
+      <span class="menu-cap">図形を描く(ドラッグした範囲に描く)</span><div class="seg lasso-mode pp-shapes" role="radiogroup" aria-label="図形を描く"></div>
       <button type="button" class="menu-item pp-color">${icon('palette', 20)}<span class="menu-label">ペンの色を選ぶ…</span></button>`;
     body.querySelector('.pp-color').onclick = () => colorPopover($('#colors').querySelectorAll('.swatch')[Math.max(0, S.pen.ci)], 'pen', Math.max(0, S.pen.ci));
     const nibs = body.querySelector('.pp-nibs'), dash = body.querySelector('.pp-dash');
     const sens = body.querySelector('.pp-sens'), stab = body.querySelector('.pp-stab');
-    const show = () => {
+    let show = () => {
       const pen = S.pen;
       body.querySelector('.pp-title').textContent = PEN_NIBS[pen.nib].label;
       body.querySelector('.pp-note').textContent = PEN_NIBS[pen.nib].note;
@@ -1138,7 +1144,10 @@ function penPopover(anchor) {
       sens.value = pen.sens; sens.nextElementSibling.textContent = pen.sens + '%';
       stab.value = pen.stab; stab.nextElementSibling.textContent = pen.stab + '%';
       // ボールペン・線の種類が実線以外のときは、太さが変わらないので筆圧感度は使わない
-      sens.disabled = pen.nib === 'ball' || !!pen.dash || !S.pressure;
+      // 図形を描くときは筆圧を使わない(いつも同じ太さ)ので、ペン先と筆圧感度は効かない
+      sens.disabled = pen.nib === 'ball' || !!pen.dash || !S.pressure || !!pen.shape;
+      for (const b of nibs.children) b.disabled = !!pen.shape;
+      if (pen.shape) body.querySelector('.pp-note').textContent = `いまは${SHAPES[pen.shape]}を描きます(いつも同じ太さ)。ふつうに書くときは「なし」`;
       sens.closest('.pp-row').classList.toggle('off', sens.disabled);
       // 見本の線(軽い→強い→軽い筆圧で書いたつもり)
       const pts = [];
@@ -1161,6 +1170,16 @@ function penPopover(anchor) {
       b.onclick = () => { S.pen.dash = v; savePrefs(); show(); };
       dash.appendChild(b);
     }
+    const shapes = body.querySelector('.pp-shapes');
+    for (const [v, label] of [['', 'なし'], ...Object.entries(SHAPES)]) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.dataset.v = v; b.textContent = label; b.setAttribute('role', 'radio');
+      b.onclick = () => { S.pen.shape = v; savePrefs(); show(); refreshToolbar(); };
+      shapes.appendChild(b);
+    }
+    const showShapes = () => { for (const b of shapes.children) { const on = b.dataset.v === (S.pen.shape || ''); b.classList.toggle('on', on); b.setAttribute('aria-checked', on); } };
+    const show0 = show;
+    show = () => { show0(); showShapes(); };
     sens.oninput = () => { S.pen.sens = +sens.value; show(); };
     stab.oninput = () => { S.pen.stab = +stab.value; show(); };
     sens.onchange = stab.onchange = () => savePrefs();
@@ -1764,7 +1783,7 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v33\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v34\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 図形補正の様子(最後の数本): オン/オフ、最後に止めていた時間と揺れ、整えた結果
 const debugShapes = [];
@@ -1881,7 +1900,9 @@ function onDown(e) {
       addPoint(e);
       return;
     }
-    if (!active && penPending && S.tool !== 'lasso' && S.tool !== 'eraser' && !(e.buttons & 32) && e.button !== 5) {
+    // 図形を描いている途中に、離した知らせが来ないまま次のペン入力が来た: 同じペンなので続きとして引き継ぐ
+    if (active && active.kind === 'shape' && active.id !== e.pointerId) { e.preventDefault(); active.id = e.pointerId; return; }
+    if (!active && penPending && !(S.tool === 'pen' && S.pen.shape) && S.tool !== 'lasso' && S.tool !== 'eraser' && !(e.buttons & 32) && e.button !== 5) {
       const pp = penPending;
       const dt = performance.now() - pp.t, dist = Math.hypot(e.clientX - pp.x, e.clientY - pp.y);
       // 速く書いているときは、途切れている間にペンが進んだ分も許す
@@ -1942,6 +1963,11 @@ function onDown(e) {
     }
   } else {
     const st = toolState();
+    if (S.tool === 'pen' && S.pen.shape) {
+      // 図形を描く: 押した所から離した所までの範囲に描く(離すまで形を見せる)
+      active = { id: e.pointerId, v, kind: 'shape', x0: x, y0: y, x1: x, y1: y };
+      return;
+    }
     const d = { id: newId(), pageId: v.pg.id, tool: S.tool, color: st.color, width: st.width, pr: e.pointerType === 'pen' && S.tool === 'pen' && S.pen.nib !== 'ball', pts: [] };
     if (S.tool === 'pen') {
       // ペン先の種類と線の種類(古い版は知らない項目を無視して、ふつうのペンとして描く)
@@ -2002,6 +2028,8 @@ function onMove(e) {
       }
       const l = a.poly[a.poly.length - 1];
       if (Math.hypot(p[0] - l[0], p[1] - l[1]) > 2 / S.zoom) a.poly.push(p);
+    } else if (a.kind === 'shape') {
+      [a.x1, a.y1] = pagePoint(a.v, ev);
     } else if (a.kind === 'scale') {
       const [x, y] = pagePoint(a.v, ev);
       // 小さくしすぎて見えなくならないよう、5% までにとどめる
@@ -2023,6 +2051,7 @@ function onMove(e) {
   }
   if (a.kind === 'lasso') requestLive(() => paintLive(a.v, lassoSvg(a.poly)));
   if (a.kind === 'move') requestLive(() => { paintInk(a.v, null, { ids: S.sel.ids, dx: a.dx, dy: a.dy }); drawSelection(a.dx, a.dy); });
+  if (a.kind === 'shape') requestLive(() => { const d = shapeData(a); paintLive(a.v, d ? strokeSvg('live', d, geometry(d)) : ''); });
   if (a.kind === 'scale' || a.kind === 'rotate') requestLive(() => previewTransform(a.v, a.m, a.kind === 'rotate' ? `${a.deg || 0}°` : ''));
 }
 
@@ -2226,6 +2255,17 @@ async function onUp(e) {
     paintInk(a.v);
     return backFromEraser(a);
   }
+  if (a.kind === 'shape') {
+    paintLive(a.v, '');
+    // 途中で入力が取り消されても(手が触れたなど)、そこまでの形で描く
+    const d = shapeData(a);
+    if (!d) return;
+    pushUndo({ undo: [['stroke.del', { ids: [d.id] }]], redo: [['stroke.undel', { ids: [d.id] }]], pages: [a.v.pg.id] });
+    const saving = commit([mk('stroke.add', { s: d })]);
+    appendStroke(a.v, d.id);
+    await saving;
+    return;
+  }
   if (a.kind === 'texttap') {
     if (e.type !== 'pointercancel' && Math.hypot(e.clientX - a.cx, e.clientY - a.cy) < 10) textTap(a.v, a.x, a.y);
     return;
@@ -2381,6 +2421,16 @@ async function clearPage(pg) {
     const w = S.views.get(pg.id);
     if (w) paintInk(w);
   } });
+}
+
+// 図形のデータ(ペンの色・太さ・線の種類で描く)。小さすぎるときは null
+function shapeData(a) {
+  if (tooSmall(a.x0, a.y0, a.x1, a.y1, 3 / S.zoom)) return null;
+  const pts = shapePts(S.pen.shape, a.x0, a.y0, a.x1, a.y1, S.pen.width);
+  if (!pts.length) return null;
+  const d = { id: a.did || (a.did = newId()), pageId: a.v.pg.id, tool: 'pen', color: S.pen.color, width: S.pen.width, pr: false, shape: S.pen.shape, pts };
+  if (S.pen.dash) d.dash = S.pen.dash;
+  return d;
 }
 
 // ---------- テキストボックス ----------

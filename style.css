@@ -163,6 +163,8 @@ a.cover:active { transform: scale(.98); }
 #shapes.on { background: transparent; color: var(--accent); }
 #shapes.on::after { content: ''; position: absolute; right: 7px; top: 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--panel); }
 #shapes:disabled { opacity: .3; }
+/* ペンが図形を描く設定のとき */
+#tool-pen.shape-on::before { content: ''; position: absolute; right: 6px; top: 6px; width: 8px; height: 8px; border: 1.5px solid var(--accent); border-radius: 2px; background: var(--panel); }
 /* 消しゴムが蛍光ペンだけを消す設定のときは印を付ける */
 #tool-eraser.marker-only::after { content: ''; position: absolute; right: 6px; bottom: 5px; width: 9px; height: 9px; border-radius: 50%; background: #facc15; box-shadow: 0 0 0 2px var(--panel); }
 #colors .chip { display: none; }
