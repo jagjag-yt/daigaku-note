@@ -50,8 +50,9 @@ const PEN_NIBS = {
 };
 const PEN_DEFAULTS = { nib: 'fountain', sens: 50, stab: 0, dash: '', shape: '' }; // shape: ドラッグで描く図形(空ならふつうに書く)
 
-const APP_VERSION = 'v44'; // sw.js の VERSION と合わせる
+const APP_VERSION = 'v45'; // sw.js の VERSION と合わせる
 const MAX_TABS = 12; // 開いておけるタブの数
+const DEFAULT_HIDDEN = ['laser']; // 最初は隠しておく道具(設定やその他のメニューから使う)
 
 const S = {
   rec: null,
@@ -92,7 +93,8 @@ const S = {
   palettes: { pen: [...PEN_PALETTE], marker: [...MARKER_PALETTE], tape: [...TAPE_PALETTE] }, // 色のプリセット(編集できる)
   colorHist: { pen: [], marker: [], tape: [] }, // 最近使った色
   // ツールバー: 道具の並び・隠す道具・置く場所(top / bottom)
-  tb: { order: ['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky', 'image', 'shapes'], hidden: [], pos: 'top' },
+  tb: { order: ['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky', 'image', 'laser', 'shapes'], hidden: ['laser'], pos: 'top' },
+  ruler: null, // 定規 { x, y, a }(画面上の中心と角度)。null はしまっている
   tabs: [], // 開いているノートのタブ: [{ id, title, page }](page は最後に見ていたページ)
   theme: 'system', // 画面の色: system(端末に合わせる)/ light / dark
   ctpl: [], // 自作テンプレート(本棚・ダイアログを開くときに読み直す)
@@ -162,8 +164,9 @@ async function init() {
   }
   if (prefs.tb) {
     const all = S.tb.order;
-    if (Array.isArray(prefs.tb.order)) S.tb.order = [...new Set(prefs.tb.order.filter((k) => all.includes(k)))].concat(all.filter((k) => !prefs.tb.order.includes(k))); // 新しく増えた道具は最後に
-    if (Array.isArray(prefs.tb.hidden)) S.tb.hidden = [...new Set(prefs.tb.hidden.filter((k) => all.includes(k) && k !== 'pen'))];
+    const added = Array.isArray(prefs.tb.order) ? all.filter((k) => !prefs.tb.order.includes(k)) : [];
+    if (Array.isArray(prefs.tb.order)) S.tb.order = [...new Set(prefs.tb.order.filter((k) => all.includes(k)))].concat(added); // 新しく増えた道具は最後に
+    if (Array.isArray(prefs.tb.hidden)) S.tb.hidden = [...new Set(prefs.tb.hidden.filter((k) => all.includes(k) && k !== 'pen').concat(added.filter((k) => DEFAULT_HIDDEN.includes(k))))]; // 新しい道具は、既定で隠すものなら隠す(スマホでツールバーがはみ出さないように)
     if (['top', 'bottom'].includes(prefs.tb.pos)) S.tb.pos = prefs.tb.pos;
   }
   applyTheme();
@@ -181,7 +184,7 @@ async function init() {
     if (prefs.lasso.pick) S.lasso.pick = { ...S.lasso.pick, ...prefs.lasso.pick };
   }
   try { const c = JSON.parse(localStorage.getItem(CLIP_KEY) || 'null'); if (c && Array.isArray(c.items) && c.items.length) S.clip = c; } catch {}
-  if (['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky'].includes(prefs.tool)) S.tool = prefs.tool;
+  if (['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky'].includes(prefs.tool)) S.tool = prefs.tool; // レーザーは覚えない(開いたらペン)
   if (prefs.sticky && STICKY_COLORS.includes(prefs.sticky.color)) S.sticky = { color: prefs.sticky.color };
   if (prefs.text && typeof prefs.text === 'object') {
     const t = { ...S.text, ...prefs.text };
@@ -1226,7 +1229,7 @@ function buildToolbar() {
 
 function refreshToolbar() {
   syncHiddenTools();
-  for (const t of ['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky']) {
+  for (const t of ['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky', 'laser']) {
     const b = $('#tool-' + t);
     b.classList.toggle('on', S.tool === t);
     b.setAttribute('aria-pressed', S.tool === t);
@@ -1699,7 +1702,7 @@ function setTool(t) {
     return;
   }
   closePopover();
-  if (t === 'eraser' && S.tool !== 'eraser') S.prevTool = S.tool;
+  if ((t === 'eraser' || t === 'laser') && S.tool !== t) S.prevTool = S.tool;
   S.tool = t;
   savePrefs();
   refreshToolbar();
@@ -1727,6 +1730,8 @@ function moreMenu(anchor) {
     { icon: 'file', label: '貼り付け', id: 'paste', disabled: !S.clip, onClick: pasteHere },
     '-',
     { icon: 'rename', label: '名前を変更', onClick: renameNote },
+    { icon: 'laser', label: 'レーザーポインター', id: 'laser-menu', on: S.tool === 'laser', onClick: () => setTool(S.tool === 'laser' ? (S.prevTool && S.prevTool !== 'laser' ? S.prevTool : 'pen') : 'laser') },
+    { icon: 'ruler', label: '定規', id: 'ruler-menu', on: !!S.ruler, onClick: () => toggleRuler() },
     { icon: 'settings', label: '設定…', id: 'open-settings', onClick: openSettings },
     // 図形補正のボタンはスマホ幅ではツールバーに出さないので、ここからも切り替えられるようにする
     { icon: 'shapes', label: '図形補正', id: 'shapes-menu', on: S.shapes, onClick: () => $('#shapes').click() },
@@ -1752,6 +1757,7 @@ const TOOL_INFO = {
   text: { id: 'tool-text', icon: 'text', label: 'テキスト' },
   sticky: { id: 'tool-sticky', icon: 'sticky', label: '付箋' },
   image: { id: 'tool-image', icon: 'image', label: '画像' },
+  laser: { id: 'tool-laser', icon: 'laser', label: 'レーザーポインター' },
   shapes: { id: 'shapes', icon: 'shapes', label: '図形補正' },
 };
 // 隠した道具も、選んでいるあいだは見せる(何を選んでいるか分かるように)
@@ -1773,6 +1779,7 @@ function applyToolbarLayout() {
   else if (!bottom && !tb.parentElement.classList.contains('ed-top')) $('.ed-top').insertBefore(tb, $('#pdf-add-input'));
   tb.classList.toggle('bottom', bottom);
   $('#editor').classList.toggle('tb-bottom', bottom);
+  if (S.ruler) placeRuler();
 }
 
 // ---------- 設定 ----------
@@ -1911,7 +1918,8 @@ async function renameNote() {
 
 function bindEditor() {
   $('#back').onclick = () => (location.hash = '#/');
-  for (const t of ['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky']) $('#tool-' + t).onclick = () => setTool(t);
+  for (const t of ['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky', 'laser']) $('#tool-' + t).onclick = () => setTool(t);
+  bindRuler();
   for (const c of STICKY_COLORS) {
     const b = document.createElement('button');
     b.className = 'swatch sticky-c';
@@ -2044,6 +2052,7 @@ async function openNote(id, pageId) {
     onScroll();
   }
   renderTabs();
+  placeRuler();
   if (pageId) S.views.get(pageId)?.el.scrollIntoView({ block: 'start' });
 }
 
@@ -2121,6 +2130,8 @@ function closeTab(id) {
 
 function closeEditor() {
   rememberTabPage();
+  S.ruler = null; // 定規はノートを閉じたらしまう
+  $('#ruler').hidden = true;
   S.revealed.clear();
   if (S.edit) commitText();
   if (S.io) S.io.disconnect();
@@ -2418,6 +2429,108 @@ function appendStroke(v, id) {
 }
 
 // 書いている最中の線(毎フレーム描き直す)
+// ---------- レーザーポインター(保存しない。離すと少しして消える) ----------
+function laserPaint(a) {
+  if (!a.pts.length) return;
+  const d = a.pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`).join('') + (a.pts.length === 1 ? 'h0.01' : '');
+  const w = 3 / S.zoom;
+  paintLive(a.v, `<g class="laser"${a.fading ? ' style="opacity:0;transition:opacity .6s"' : ''}><path d="${d}" stroke="#ff3b30" stroke-opacity=".35" stroke-width="${w * 4}" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="${d}" stroke="#ff3b30" stroke-width="${w}" fill="none" stroke-linecap="round" stroke-linejoin="round"/></g>`);
+}
+function laserFade(a) {
+  const g = a.v.live.querySelector('.laser');
+  if (!g) return;
+  setTimeout(() => {
+    if (active && active.kind === 'laser' && active.v === a.v) return; // もう次をなぞっている
+    g.style.transition = 'opacity .6s';
+    g.style.opacity = '0';
+    setTimeout(() => { if (g.isConnected && !(active && active.v === a.v)) paintLive(a.v, ''); }, 650);
+  }, 700);
+}
+
+// ---------- 定規(画面の上に置く。ペン・蛍光ペンを縁に沿わせる) ----------
+const RULER_W = 560, RULER_H = 64;
+function toggleRuler(on = !S.ruler) {
+  const body = $('.ed-body').getBoundingClientRect();
+  S.ruler = on ? { x: body.left + body.width / 2, y: body.top + body.height / 2, a: 0 } : null;
+  placeRuler();
+  toast(on ? '定規を出しました。縁の近くから書くと、まっすぐ沿います' : '定規をしまいました');
+}
+function placeRuler() {
+  const el = $('#ruler');
+  el.hidden = !S.ruler || !S.note;
+  if (el.hidden) return;
+  const body = $('.ed-body').getBoundingClientRect();
+  // 画面の大きさ・ツールバーの場所・ページ一覧で表示域が変わっても、定規の中心は表示域の中に置く
+  S.ruler.x = Math.min(Math.max(S.ruler.x, body.left + 24), body.right - 24);
+  S.ruler.y = Math.min(Math.max(S.ruler.y, body.top + 24), body.bottom - 24);
+  el.style.width = Math.min(RULER_W, body.width * 0.9) + 'px';
+  el.style.left = S.ruler.x - body.left + 'px';
+  el.style.top = S.ruler.y - body.top + 'px';
+  el.style.transform = `translate(-50%, -50%) rotate(${S.ruler.a}rad)`;
+  const deg = ((Math.round((S.ruler.a * 180) / Math.PI) % 360) + 360) % 360;
+  el.querySelector('.ruler-deg').textContent = `${deg > 180 ? deg - 360 : deg}°`;
+}
+// 縁(上と下の2本)のうち、押した所から近いほう。遠ければ null(ふつうに書く)
+function rulerEdgeNear(e) {
+  if (!S.ruler || $('#ruler').hidden || (S.tool !== 'pen' && S.tool !== 'marker')) return null;
+  const w = $('#ruler').offsetWidth, r = S.ruler;
+  const ux = Math.cos(r.a), uy = Math.sin(r.a), nx = -uy, ny = ux; // 長い向き・それと直角
+  const dx = e.clientX - r.x, dy = e.clientY - r.y;
+  const along = dx * ux + dy * uy, across = dx * nx + dy * ny;
+  if (Math.abs(along) > w / 2 + 20) return null;
+  const off = across < 0 ? -RULER_H / 2 : RULER_H / 2;
+  if (Math.abs(across - off) > 28 || Math.abs(across) < RULER_H / 2 - 8) return null; // 縁から 28px 以内で、定規の内側ではない
+  return { px: r.x + nx * off, py: r.y + ny * off, ux, uy, nx, ny, side: Math.sign(off) };
+}
+// 押した点を縁の線の上に移す(線の太さの半分だけ外へ)
+function rulerProject(rl, e) {
+  const t = (e.clientX - rl.px) * rl.ux + (e.clientY - rl.py) * rl.uy;
+  const gap = 1.5 * rl.side;
+  return { clientX: rl.px + rl.ux * t + rl.nx * gap, clientY: rl.py + rl.uy * t + rl.ny * gap };
+}
+function bindRuler() {
+  const el = $('#ruler');
+  let drag = null;
+  el.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.ruler-x')) return;
+    e.preventDefault();
+    // 本物の定規と同じで、上には書けない。ペンと、書いている最中・直後の手のひらでは動かさない
+    if (e.pointerType === 'pen' || (e.pointerType === 'touch' && palmRecent())) return;
+    e.stopPropagation();
+    try { el.setPointerCapture(e.pointerId); } catch {}
+    const rot = !!e.target.closest('.ruler-rot');
+    drag = { id: e.pointerId, rot, sx: e.clientX, sy: e.clientY, x0: S.ruler.x, y0: S.ruler.y, a0: S.ruler.a, b0: Math.atan2(e.clientY - S.ruler.y, e.clientX - S.ruler.x) };
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    if (drag.rot) {
+      let a = drag.a0 + Math.atan2(e.clientY - S.ruler.y, e.clientX - S.ruler.x) - drag.b0;
+      const step = Math.PI / 4, near = Math.round(a / step) * step;
+      if (Math.abs(a - near) < (3 * Math.PI) / 180) a = near; // 0°・45°・90° の近くは吸い付く
+      S.ruler.a = a;
+    } else {
+      S.ruler.x = drag.x0 + e.clientX - drag.sx;
+      S.ruler.y = drag.y0 + e.clientY - drag.sy;
+    }
+    placeRuler();
+  });
+  const end = (e) => { if (drag && e.pointerId === drag.id) drag = null; };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+  el.querySelector('.ruler-x').onclick = () => toggleRuler(false);
+  // キーボード: 矢印で動かす、Shift+矢印で回す
+  el.tabIndex = 0;
+  el.addEventListener('keydown', (e) => {
+    const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+    if (!d) return;
+    e.preventDefault();
+    if (e.shiftKey) S.ruler.a += ((d[0] + d[1]) * Math.PI) / 180;
+    else { S.ruler.x += d[0] * 10; S.ruler.y += d[1] * 10; }
+    placeRuler();
+  });
+  window.addEventListener('resize', () => { if (S.ruler) placeRuler(); });
+}
+
 function paintLive(v, svg) {
   v.live.innerHTML = svg || '';
 }
@@ -2630,6 +2743,11 @@ function onDown(e) {
   if (e.pointerType === 'pen') lastPenTime = Date.now();
   const [x, y] = pagePoint(v, e);
   const eraser = S.tool === 'eraser' || (e.buttons & 32) || e.button === 5;
+  if (S.tool === 'laser' && !eraser) {
+    active = { id: e.pointerId, v, kind: 'laser', pts: [[x, y]] };
+    laserPaint(active);
+    return;
+  }
   if (eraser) {
     active = { id: e.pointerId, v, kind: 'erase', hits: new Set(), cut: S.eraser.mode !== 'stroke' ? new Map() : null, byTool: S.tool === 'eraser' };
     eraseAt(e);
@@ -2672,7 +2790,7 @@ function onDown(e) {
     }
     // ならす強さ: 画面上で約 2.5px 分。拡大して書くほど小さくして、小さな字の形を崩さない
     d.sm = Math.round(Math.max(0.3, Math.min(1.5, 2.5 / S.zoom)) * 100) / 100;
-    active = { id: e.pointerId, v, kind: 'draw', pen: e.pointerType === 'pen', d, lastMove: performance.now() };
+    active = { id: e.pointerId, v, kind: 'draw', pen: e.pointerType === 'pen', d, lastMove: performance.now(), ruler: rulerEdgeNear(e) };
     // 前の線の force を書き始めに使わない(touchend が届かなかったときの念のため)。
     // 直前(50ms 以内)の値は、この線の touchstart が先に届いたものなので残す
     if (active.pen && performance.now() - penForce.t > 50) penForce.t = 0;
@@ -2702,6 +2820,7 @@ function onMove(e) {
   if (debugOn && a.kind === 'draw') debugInput(e, evs);
   for (const ev of evs.length ? evs : [e]) {
     if (a.kind === 'erase') eraseAt(ev);
+    else if (a.kind === 'laser') a.pts.push(pagePoint(a.v, ev));
     else if (a.kind === 'draw') {
       // iPad Safari では、まとめて届く点のうち一部だけ座標が整数に丸められている。
       // 丸められた点は本当の位置から最大 0.5px ずれ、線に周期的なカクつきができるので、
@@ -2745,6 +2864,7 @@ function onMove(e) {
       a.dy = y - a.sy;
     }
   }
+  if (a.kind === 'laser') requestLive(() => laserPaint(a));
   if (a.kind === 'lasso') requestLive(() => paintLive(a.v, lassoSvg(a.poly)));
   if (a.kind === 'move') requestLive(() => { paintInk(a.v, null, { ids: S.sel.ids, dx: a.dx, dy: a.dy }); drawSelection(a.dx, a.dy); });
   if (a.kind === 'shape') requestLive(() => { const d = shapeData(a); paintLive(a.v, d ? strokeSvg('live', d, geometry(d)) : ''); });
@@ -2808,7 +2928,7 @@ function addPoint(e, main = e) {
     for (const [he, hm] of held) addPoint(he, hm);
   }
   holdCheck(a, e);
-  let [x, y] = pagePoint(a.v, e);
+  let [x, y] = pagePoint(a.v, a.ruler ? rulerProject(a.ruler, e) : e); // 定規に沿わせる
   // 手ぶれ補正: 入力の位置を少し遅れて追いかけさせ、細かな揺れをならす(強いほど遅れる)。
   // ペンを離したときに、遅れた分は本当の位置まで足す(finishStroke)
   const stab = d.tool === 'pen' ? S.pen.stab || 0 : 0;
@@ -2859,7 +2979,7 @@ function addPoint(e, main = e) {
 // 止まり始めた位置から HOLD_PX 以上動いたときだけ待ち直す
 const HOLD_MS = 500, HOLD_PX = 5, UNSHAPE_PX = 14; // 画面上の px
 function holdCheck(a, e) {
-  if (!S.shapes) return;
+  if (!S.shapes || a.ruler) return; // 定規に沿わせた線は、もうまっすぐなので整えない
   if (a.holdAt) {
     const dd = Math.hypot(e.clientX - a.holdAt[0], e.clientY - a.holdAt[1]);
     if (dd < HOLD_PX) { if (debugOn) a.holdMax = Math.max(a.holdMax || 0, dd); return; }
@@ -2943,6 +3063,7 @@ async function onUp(e) {
   const a = active;
   active = null;
   cancelAnimationFrame(liveFrame);
+  if (a.kind === 'laser') return laserFade(a);
   if (a.kind === 'erase' && a.cut) return finishPartialErase(a);
   if (a.kind === 'erase') {
     if (!a.hits.size) return;
@@ -4025,6 +4146,7 @@ function toggleSidebar(on = !S.sidebar) {
     if (S.fit) S.zoom = fitZoom();
     layoutPages();
   });
+  if (S.ruler) placeRuler();
   if (on) renderSidebar();
 }
 
