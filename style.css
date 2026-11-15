@@ -733,3 +733,15 @@ select:disabled { opacity: .55; }
   :root:not([data-theme="light"]) #toast, :root:not([data-theme="light"]) .page-ind { box-shadow: 0 0 0 1px rgba(255,255,255,.18); background: #2d323c; }
   :root:not([data-theme="light"]) .acct-avatar { color: #0f1520; }
 }
+/* ツールバーの並び・場所 */
+.tool.tb-hidden { display: none !important; }
+.ed-row.toolbar.bottom { background: var(--panel); border-top: 1px solid var(--line); padding: 4px max(8px, var(--sa-right)) max(4px, var(--sa-bottom)) max(8px, var(--sa-left)); z-index: 4; }
+#editor.tb-bottom .page-ind { bottom: 16px; }
+body:has(#editor.tb-bottom:not([hidden])) #toast { bottom: calc(72px + var(--sa-bottom)); }
+.tb-list { display: flex; flex-direction: column; gap: 2px; }
+.tb-row { display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 4px; border-radius: 8px; }
+.tb-ic { color: var(--accent); line-height: 0; }
+.tb-name { flex: 1; font-size: 15px; }
+.tb-show { border: none; background: transparent; padding: 0 4px; min-height: 40px; }
+.tb-show:disabled { opacity: .45; }
+.tb-reset { align-self: flex-start; border: none; background: transparent; color: var(--accent); padding: 8px 4px; min-height: 0; font-size: 14px; }
