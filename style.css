@@ -197,7 +197,7 @@ a.cover:active { transform: scale(.98); }
 
 /* ページ一覧(サイドバー) */
 .sidebar {
-  width: 196px; flex: none; display: flex; flex-direction: column;
+  width: calc(196px + var(--sa-left)); flex: none; /* 横向きのノッチの端末でも、中身の幅は 196px */ display: flex; flex-direction: column;
   background: var(--panel); border-right: 1px solid var(--line);
   padding-left: var(--sa-left);
 }
