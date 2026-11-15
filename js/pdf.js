@@ -2,7 +2,7 @@
 import * as db from './db.js';
 import { pagesOf, strokesOf, styleOf, bgOf } from './model.js';
 import { centerline, outline, smoothClosedPath, linePath, variableWidth, dashArray, PENCIL_ALPHA } from './ink.js';
-import { templatePrims } from './templates.js';
+import { templatePrims, paperColor } from './templates.js';
 import { isItem, itemRect, textPng } from './items.js';
 
 let pdfjsP = null;
@@ -125,6 +125,8 @@ export async function exportPdf(note) {
       out.addPage(page);
     } else {
       page = out.addPage([pg.w, pg.h]);
+      const paper = paperColor(bg);
+      if (paper !== '#ffffff') page.drawRectangle({ x: 0, y: 0, width: pg.w, height: pg.h, color: rgb(paper) });
       const prim = templatePrims(bg, pg.w, pg.h);
       for (const [x0, y0, x1, y1, t, c] of prim.lines) {
         page.drawLine({ start: { x: x0, y: pg.h - y0 }, end: { x: x1, y: pg.h - y1 }, thickness: t, color: rgb(c) });

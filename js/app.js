@@ -4,7 +4,7 @@ import {
 } from './model.js';
 import { drawStroke, recognizeShape, strokeInLasso, geometry, strokeSvg, pointInPolygon } from './ink.js';
 import { isItem, itemSvg, drawItem, itemInLasso, onImageReady, releaseImages, itemRect, cornerPts, textHeight, fontFamily, LINE_HEIGHT } from './items.js';
-import { TEMPLATES, SIZES, templatePrims, sizeById } from './templates.js';
+import { TEMPLATES, SIZES, PAPERS, templatePrims, sizeById, paperColor } from './templates.js';
 import { importPdf, renderPdfPage, exportPdf, sha256 } from './pdf.js';
 import { buildSyncFile, importSyncFile } from './sync.js';
 import * as search from './search.js';
@@ -88,6 +88,7 @@ const S = {
   edit: null, // 書いている途中のテキストボックス { v, id(書き直しのとき), d, ta }
   palettes: { pen: [...PEN_PALETTE], marker: [...MARKER_PALETTE], tape: [...TAPE_PALETTE] }, // 色のプリセット(編集できる)
   colorHist: { pen: [], marker: [], tape: [] }, // 最近使った色
+  nn: { tpl: 'lines-b', size: 'a4', paper: 'white' }, // 新しいノートの用紙(前に選んだものを次も使う)
   sbView: 'pages', // ページ一覧の種類: pages / marks(しおり)/ outline(目次)
   lib: { filter: 'all', sort: 'updated', view: 'grid', folder: null }, // 本棚: 表示するノート・並べ替え・並べ方
   clip: null, // コピーしたもの { items: [線・部品のデータ], pageId, cx, cy, n: 同じ場所に貼った回数 }
@@ -145,6 +146,11 @@ async function init() {
     if (Array.isArray(pl) && clean(pl).length) S.palettes[k] = clean(pl).slice(0, PALETTE_MAX);
     if (Array.isArray(hs)) S.colorHist[k] = clean(hs).slice(0, HIST_MAX);
   }
+  if (prefs.nn) {
+    if (TEMPLATES.some((t) => t.id === prefs.nn.tpl)) S.nn.tpl = prefs.nn.tpl;
+    if (SIZES.some((t) => t.id === prefs.nn.size)) S.nn.size = prefs.nn.size;
+    if (PAPERS.some((t) => t.id === prefs.nn.paper)) S.nn.paper = prefs.nn.paper;
+  }
   if (prefs.lib) {
     if (['updated', 'created', 'name'].includes(prefs.lib.sort)) S.lib.sort = prefs.lib.sort;
     if (['grid', 'list'].includes(prefs.lib.view)) S.lib.view = prefs.lib.view;
@@ -195,7 +201,7 @@ async function init() {
 }
 
 function savePrefs() {
-  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lib: { sort: S.lib.sort, view: S.lib.view }, tape: S.tape, markerMode: S.markerMode, straight: S.straight, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text, sticky: S.sticky });
+  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lib: { sort: S.lib.sort, view: S.lib.view }, nn: S.nn, tape: S.tape, markerMode: S.markerMode, straight: S.straight, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text, sticky: S.sticky });
 }
 
 function route() {
@@ -384,6 +390,8 @@ function fillSelects() {
   $('#pp-size').value = '';
   tplPicker($('#nn-tpl'), 'lines-b');
   tplPicker($('#pp-tpl'), 'lines-b');
+  paperPicker($('#nn-paper'), 'white', $('#nn-tpl'));
+  paperPicker($('#pp-paper'), 'white', $('#pp-tpl'));
   $('#nn-size').onchange = () => tplPicker($('#nn-tpl'), $('#nn-tpl').dataset.value, sizeById($('#nn-size').value));
   $('#pp-size').onchange = () => tplPicker($('#pp-tpl'), $('#pp-tpl').dataset.value, $('#pp-size').value ? sizeById($('#pp-size').value) : addRef || PAGE_A4);
   coverPicker($('#nn-cover'), COVERS[0]);
@@ -409,12 +417,49 @@ function tplPicker(el, value, size = PAGE_A4) {
   }
   setPick(el, value);
 }
+// 紙の色を選ぶ。tplEl: 用紙の見本(選んだ色で見本の紙を塗る)
+function paperPicker(el, value, tplEl) {
+  el.innerHTML = '';
+  for (const p of PAPERS) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'paper-opt';
+    b.dataset.paper = p.id;
+    b.style.setProperty('--paper', p.c);
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-label', '紙の色: ' + p.label);
+    b.title = p.label;
+    b.onclick = () => { setPick(el, p.id); tintTpl(tplEl, p.id); };
+    el.appendChild(b);
+  }
+  setPick(el, value);
+  tintTpl(tplEl, value);
+}
+function tintTpl(tplEl, paper) {
+  if (tplEl) tplEl.style.setProperty('--paper', paperColor({ type: 'blank', paper }));
+}
 function setPick(el, value) {
   el.dataset.value = value;
   for (const b of el.children) {
-    const on = (b.dataset.tpl || b.dataset.cover) === value;
+    const on = (b.dataset.tpl || b.dataset.cover || b.dataset.paper) === value;
     b.classList.toggle('on', on);
     b.setAttribute('aria-checked', on);
+  }
+  // ラジオの作法: 選んでいる1つだけタブで止まり、矢印キーで選び直す
+  for (const b of el.children) b.tabIndex = b.getAttribute('aria-checked') === 'true' ? 0 : -1;
+  if (!el.querySelector('[tabindex="0"]') && el.firstElementChild) el.firstElementChild.tabIndex = 0;
+  if (!el._roving) {
+    el._roving = true;
+    el.addEventListener('keydown', (e) => {
+      const d = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+      if (!d) return;
+      const items = [...el.children], i = items.indexOf(document.activeElement);
+      if (i < 0) return;
+      e.preventDefault();
+      const nb = items[(i + d + items.length) % items.length];
+      nb.focus();
+      nb.click();
+    });
   }
 }
 function coverPicker(el, value, onPick) {
@@ -521,6 +566,10 @@ function bindLibrary() {
   const newNote = () => {
     $('#nn-title').value = '';
     setPick($('#nn-cover'), COVERS[Math.floor(Math.random() * COVERS.length)]);
+    // 前に作ったノートと同じ用紙・サイズ・紙の色から始める
+    $('#nn-size').value = S.nn.size;
+    tplPicker($('#nn-tpl'), S.nn.tpl, sizeById(S.nn.size));
+    paperPicker($('#nn-paper'), S.nn.paper, $('#nn-tpl'));
     showDialog($('#new-dialog'), $('#nn-title'));
   };
   // 「新規」: ノートを作るか、ファイルを読み込むかを選ぶ
@@ -536,11 +585,14 @@ function bindLibrary() {
     const title = $('#nn-title').value.trim() || '無題のノート';
     const size = sizeById($('#nn-size').value);
     const ruling = $('#nn-tpl').dataset.value;
+    const paper = $('#nn-paper').dataset.value;
     const cover = $('#nn-cover').dataset.value;
+    S.nn = { tpl: ruling, size: $('#nn-size').value, paper };
+    savePrefs();
     const id = newId();
     const ops = [
       S.rec.make(id, 'note.create', { title, cover, ...(curFolder() ? { folder: curFolder() } : {}) }),
-      S.rec.make(id, 'page.add', { page: { id: newId(), w: size.w, h: size.h, order: 1, bg: { type: 'blank', ruling } } }),
+      S.rec.make(id, 'page.add', { page: { id: newId(), w: size.w, h: size.h, order: 1, bg: blankBg(ruling, paper) } }),
     ];
     await db.putOps(ops, S.rec.clock);
     dav.schedule();
@@ -1779,6 +1831,7 @@ function renderPages() {
       live: el.querySelector('.live'), els: new Map(), visible: false, ready: false, holder: {}, bgZoom: 0,
     };
     S.views.set(pg.id, v);
+    el.style.background = paperColor(bgOf(pg)); // 描く前から紙の色にしておく
     sizeView(v);
     S.io.observe(el);
   });
@@ -1888,6 +1941,7 @@ function paintBg(v) {
   v.holder.task?.cancel?.();
   v.bgZoom = S.zoom;
   if (bg && bg.type === 'pdf') {
+    v.el.style.background = '';
     v.tpl.innerHTML = '';
     const c = v.bg;
     [c.width, c.height] = canvasSize(v);
@@ -1901,6 +1955,7 @@ function paintBg(v) {
     });
   } else {
     v.bg.width = v.bg.height = 0;
+    v.el.style.background = paperColor(bg);
     v.tpl.innerHTML = templateSvg(bg, v.pg.w, v.pg.h);
   }
 }
@@ -3489,7 +3544,10 @@ function currentPage() {
 }
 
 // where: after(今のページの後ろ)| before(前)| last(最後)。tpl/size を省くと今のページと同じにする
-async function addPage(where = 'after', tpl, sizeId, ref = currentPage()) {
+// 罫線・無地の背景。白は書かない(古い版と同じ形のまま)
+const blankBg = (ruling, paper) => (paper && paper !== 'white' ? { type: 'blank', ruling, paper } : { type: 'blank', ruling });
+
+async function addPage(where = 'after', tpl, sizeId, ref = currentPage(), paper) {
   const pages = pagesOf(S.note);
   ref = ref || pages[pages.length - 1];
   const i = pages.indexOf(ref);
@@ -3499,11 +3557,12 @@ async function addPage(where = 'after', tpl, sizeId, ref = currentPage()) {
   else order = await freeOrder(ref, pages[i + 1]);
   const cbg = ref && bgOf(ref);
   const ruling = tpl || (cbg && cbg.type === 'blank' ? cbg.ruling : 'lines-b');
+  if (paper == null) paper = cbg && cbg.type === 'blank' ? cbg.paper : undefined; // 指定がなければ、基準のページと同じ紙の色
   let w = PAGE_A4.w, h = PAGE_A4.h;
   if (sizeId) ({ w, h } = sizeById(sizeId));
   else if (ref) ({ w, h } = ref); // PDF のページの後ろでも同じ大きさにする
   const id = newId();
-  await commit([mk('page.add', { page: { id, w, h, order, bg: { type: 'blank', ruling } } })]);
+  await commit([mk('page.add', { page: { id, w, h, order, bg: blankBg(ruling, paper) } })]);
   pushUndo({ undo: [['page.delete', { pageId: id }]], redo: [['page.restore', { pageId: id }]], relayout: true });
   const top = $('#scroller').scrollTop;
   renderPages();
@@ -3542,6 +3601,7 @@ function openAddDialog(where = 'after', ref = currentPage()) {
   const bg = ref && bgOf(ref);
   $('#pp-size').value = '';
   tplPicker($('#pp-tpl'), bg?.type === 'blank' ? (bg.ruling === 'lines' ? 'lines-b' : bg.ruling) : 'lines-b', ref || PAGE_A4);
+  paperPicker($('#pp-paper'), (bg?.type === 'blank' && PAPERS.some((p) => p.id === bg.paper) && bg.paper) || 'white', $('#pp-tpl'));
   showDialog($('#add-dialog'));
 }
 function bindAddDialog() {
@@ -3551,7 +3611,7 @@ function bindAddDialog() {
     e.preventDefault();
     const where = document.querySelector('input[name=pp-where]:checked')?.value || 'after';
     $('#add-dialog').close();
-    await addPage(where, $('#pp-tpl').dataset.value, $('#pp-size').value || undefined, addRef || undefined);
+    await addPage(where, $('#pp-tpl').dataset.value, $('#pp-size').value || undefined, addRef || undefined, $('#pp-paper').dataset.value);
   };
 }
 
@@ -3795,12 +3855,13 @@ function pageMenu(anchor, pg) {
     { icon: 'move', label: '別のノートに移動…', attrs: { 'data-a': 'moveto' }, disabled: pages.length <= 1, onClick: () => sendPage(anchor, pg, true) },
   ];
   if (bg && bg.type === 'blank') {
-    const sel = document.createElement('label');
+    const sel = document.createElement('div');
     sel.className = 'menu-select';
-    sel.innerHTML = `<span class="menu-cap">このページの用紙</span><select class="pp-tpl">${TEMPLATES.map((t) => `<option value="${t.id}"${(bg.ruling === 'lines' ? 'lines-b' : bg.ruling) === t.id ? ' selected' : ''}>${t.label}</option>`).join('')}</select>`;
-    sel.querySelector('select').onchange = async (e) => {
+    sel.innerHTML = `<span class="menu-cap">このページの用紙</span><select class="pp-tpl" aria-label="このページの用紙">${TEMPLATES.map((t) => `<option value="${t.id}"${(bg.ruling === 'lines' ? 'lines-b' : bg.ruling) === t.id ? ' selected' : ''}>${t.label}</option>`).join('')}</select>
+      <span class="menu-cap">紙の色</span><select class="pp-paper" aria-label="このページの紙の色">${PAPERS.map((p) => `<option value="${p.id}"${(bg.paper || 'white') === p.id ? ' selected' : ''}>${p.label}</option>`).join('')}</select>`;
+    sel.querySelector('.pp-paper').onchange = sel.querySelector('select').onchange = async () => {
       const before = bgOf(pg);
-      const nb = { type: 'blank', ruling: e.target.value };
+      const nb = blankBg(sel.querySelector('.pp-tpl').value, sel.querySelector('.pp-paper').value);
       closePopover();
       await commit([mk('page.bg', { pageId: pg.id, bg: nb })]);
       pushUndo({ undo: [['page.bg', { pageId: pg.id, bg: before }]], redo: [['page.bg', { pageId: pg.id, bg: nb }]], pages: [pg.id], bg: true });
@@ -3963,9 +4024,9 @@ function drawThumb(canvas, pg) {
   canvas.width = W * 2;
   canvas.height = Math.round((W * 2 * pg.h) / pg.w);
   const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
   const bg = bgOf(pg);
+  ctx.fillStyle = paperColor(bg);
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
   const scale = canvas.width / pg.w;
   const draw = () => {
     const c2 = scaledCtx(canvas, pg);
