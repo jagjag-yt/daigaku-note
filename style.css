@@ -294,6 +294,28 @@ dialog .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .sel-bar { position: absolute; left: 0; top: -40px; display: flex; gap: 4px; align-items: center; pointer-events: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 3px 6px; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,.12); font-size: 12px; }
 .sel-bar button { min-height: 28px; padding: 0 8px; font-size: 12px; }
 .sel-bar span { color: var(--muted); padding: 0 4px; }
+.sel-bar.below { top: auto; bottom: -84px; } /* 回転のつまみの下に出す */
+.sel-bar button.danger { color: var(--danger); }
+.sel-box.busy .sel-bar, .sel-box.busy .sel-rot-line { visibility: hidden; }
+/* 拡大縮小・回転のつまみ(押しやすいよう、見た目より広く当たり判定をとる) */
+.sel-h { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; border: 2px solid var(--accent); border-radius: 50%; background: #fff; pointer-events: auto; touch-action: none; box-sizing: border-box; }
+.sel-h::before { content: ''; position: absolute; inset: -12px; }
+.sel-nw { left: 0; top: 0; cursor: nwse-resize; }
+.sel-ne { left: 100%; top: 0; cursor: nesw-resize; }
+.sel-se { left: 100%; top: 100%; cursor: nwse-resize; }
+.sel-sw { left: 0; top: 100%; cursor: nesw-resize; }
+.sel-rot { left: 50%; top: calc(100% + 28px); cursor: grab; }
+.sel-rot-line { position: absolute; left: 50%; top: 100%; width: 0; height: 21px; border-left: 1.5px dashed var(--accent); }
+.sel-box.busy .sel-h { opacity: .6; }
+.sel-angle { position: absolute; z-index: 3; transform: translateX(-50%); font-size: 12px; color: var(--accent); background: var(--panel); border-radius: 6px; padding: 1px 6px; white-space: nowrap; pointer-events: none; }
+@media (pointer: coarse) { .sel-bar button { min-height: 36px; padding: 0 10px; font-size: 14px; } .sel-bar { top: -48px; } .sel-bar.below { bottom: -92px; } }
+.sel-box { transform-origin: 0 0; }
+.paste-chip { position: absolute; z-index: 3; transform: translate(-50%, calc(-100% - 8px)); }
+.paste-chip button { min-height: 34px; padding: 0 14px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); box-shadow: 0 2px 8px rgba(0,0,0,.15); font-size: 14px; }
+.lasso-head { padding: 2px 0 4px; }
+.lasso-mode { padding: 0 10px 8px; }
+.lasso-mode button { min-height: 34px; padding: 0 14px; border-radius: 999px; background: var(--field); color: var(--text); border: none; font-size: 14px; }
+.lasso-mode button.on { background: var(--accent); color: #fff; }
 
 dialog.wide { max-width: 640px; }
 dialog h3 { font-size: 15px; margin: 18px 0 4px; }
@@ -479,6 +501,7 @@ dialog::backdrop { background: rgba(15,23,42,.35); }
   .sb-scrim { display: block; position: absolute; inset: 0; z-index: 4; background: rgba(15,23,42,.3); }
 }
 @media (max-width: 520px) {
+  .sel-bar .sel-label { display: none; }
   .lib-row .search-box { order: 3; flex: 1 1 100%; margin-bottom: 4px; }
   .ed-row.toolbar { gap: 2px; }
   .tool { width: 38px; }
