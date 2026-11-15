@@ -16,6 +16,8 @@ const P = {
   tape: '<path d="M4 9l12-5 4 9-12 5z"/><path d="M7 8l1 2.5M10.5 6.5l1 2.5M14 5l1 2.5"/>',
   folder: '<path d="M3.5 7.5A1.5 1.5 0 015 6h4l2 2h8a1.5 1.5 0 011.5 1.5v8A1.5 1.5 0 0119 19H5a1.5 1.5 0 01-1.5-1.5z"/>',
   move: '<path d="M3.5 7.5A1.5 1.5 0 015 6h4l2 2h8a1.5 1.5 0 011.5 1.5v8A1.5 1.5 0 0119 19H5a1.5 1.5 0 01-1.5-1.5z"/><path d="M9 13.5h6M12.5 11l2.5 2.5-2.5 2.5"/>',
+  bookmark: '<path d="M7 4h10v16l-5-3.5L7 20z"/>',
+  outline: '<path d="M9 6.5h11M9 12h11M12 17.5h8"/><path d="M4.5 6.5h.01M4.5 12h.01M7.5 17.5h.01" stroke-width="2.6" stroke-linecap="round"/>',
   list: '<path d="M8 6.5h12M8 12h12M8 17.5h12"/><circle cx="4.5" cy="6.5" r="1" fill="currentColor"/><circle cx="4.5" cy="12" r="1" fill="currentColor"/><circle cx="4.5" cy="17.5" r="1" fill="currentColor"/>',
   grid: '<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>',
   star: '<path d="M12 4l2.4 5 5.4.6-4 3.7 1.1 5.4L12 16l-4.9 2.7 1.1-5.4-4-3.7 5.4-.6z"/>',

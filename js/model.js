@@ -160,6 +160,16 @@ export function applyOp(note, op) {
       }
       break;
     }
+    case 'page.mark': { // しおり
+      const e = pageEntry(note, p.pageId);
+      if (newer(s, e.markS)) { e.mark = !!p.mark; e.markS = s; }
+      break;
+    }
+    case 'page.title': { // 目次の見出し(空文字は目次から外す)
+      const e = pageEntry(note, p.pageId);
+      if (newer(s, e.titleS)) { e.title = p.title || ''; e.titleS = s; }
+      break;
+    }
     case 'page.move': {
       const e = pageEntry(note, p.pageId);
       if (newer(s, e.orderS)) {
