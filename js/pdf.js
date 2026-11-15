@@ -39,6 +39,31 @@ export async function sha256(buf) {
   return 'x' + Date.now().toString(36) + Math.random().toString(36).slice(2);
 }
 
+// 画像を1ページの PDF にする(自作テンプレート用)。長い辺を A4 の長い辺(842pt)に合わせる
+export async function imageToPdf(file) {
+  const L = await pdfLib();
+  // 写真の向き(EXIF)に合わせ、長い辺を 2400px までに縮めてから入れる(容量とメモリを抑える)
+  const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  const k0 = Math.min(1, 2400 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(bmp.width * k0));
+  c.height = Math.max(1, Math.round(bmp.height * k0));
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.drawImage(bmp, 0, 0, c.width, c.height);
+  bmp.close?.();
+  const png = file.type === 'image/png';
+  const out = await new Promise((r) => c.toBlob(r, png ? 'image/png' : 'image/jpeg', 0.9));
+  const doc = await L.PDFDocument.create();
+  const bytes = new Uint8Array(await out.arrayBuffer());
+  const img = png ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
+  const k = 842 / Math.max(img.width, img.height);
+  const w = img.width * k, h = img.height * k;
+  doc.addPage([w, h]).drawImage(img, { x: 0, y: 0, width: w, height: h });
+  return new File([await doc.save()], file.name.replace(/\.[^.]+$/, '') + '.pdf', { type: 'application/pdf' });
+}
+
 // PDF ファイルを保存し、ページの大きさの一覧を返す
 export async function importPdf(file) {
   const buf = await file.arrayBuffer();

@@ -1,11 +1,11 @@
 import * as db from './db.js';
 import {
-  Recorder, emptyNote, applyOp, foldersOf, folderOfNote, folderTree, pagesOf, strokesOf, buildLibrary, newId, strokeHit, styleOf, bgOf, PAGE_A4, addType,
+  Recorder, emptyNote, applyOp, customTemplates, foldersOf, folderOfNote, folderTree, pagesOf, strokesOf, buildLibrary, newId, strokeHit, styleOf, bgOf, PAGE_A4, addType,
 } from './model.js';
 import { drawStroke, recognizeShape, strokeInLasso, geometry, strokeSvg, pointInPolygon } from './ink.js';
 import { isItem, itemSvg, drawItem, itemInLasso, onImageReady, releaseImages, itemRect, cornerPts, textHeight, fontFamily, LINE_HEIGHT } from './items.js';
 import { TEMPLATES, SIZES, PAPERS, templatePrims, sizeById, paperColor } from './templates.js';
-import { importPdf, renderPdfPage, exportPdf, sha256 } from './pdf.js';
+import { importPdf, renderPdfPage, exportPdf, sha256, imageToPdf } from './pdf.js';
 import { buildSyncFile, importSyncFile } from './sync.js';
 import * as search from './search.js';
 import * as dav from './webdav.js';
@@ -88,6 +88,7 @@ const S = {
   edit: null, // 書いている途中のテキストボックス { v, id(書き直しのとき), d, ta }
   palettes: { pen: [...PEN_PALETTE], marker: [...MARKER_PALETTE], tape: [...TAPE_PALETTE] }, // 色のプリセット(編集できる)
   colorHist: { pen: [], marker: [], tape: [] }, // 最近使った色
+  ctpl: [], // 自作テンプレート(本棚・ダイアログを開くときに読み直す)
   nn: { tpl: 'lines-b', size: 'a4', paper: 'white' }, // 新しいノートの用紙(前に選んだものを次も使う)
   sbView: 'pages', // ページ一覧の種類: pages / marks(しおり)/ outline(目次)
   lib: { filter: 'all', sort: 'updated', view: 'grid', folder: null }, // 本棚: 表示するノート・並べ替え・並べ方
@@ -147,7 +148,7 @@ async function init() {
     if (Array.isArray(hs)) S.colorHist[k] = clean(hs).slice(0, HIST_MAX);
   }
   if (prefs.nn) {
-    if (TEMPLATES.some((t) => t.id === prefs.nn.tpl)) S.nn.tpl = prefs.nn.tpl;
+    if (TEMPLATES.some((t) => t.id === prefs.nn.tpl) || /^c:\w+$/.test(prefs.nn.tpl || '')) S.nn.tpl = prefs.nn.tpl; // c:<id> は自作(無くなっていたら開くときに B罫へ)
     if (SIZES.some((t) => t.id === prefs.nn.size)) S.nn.size = prefs.nn.size;
     if (PAPERS.some((t) => t.id === prefs.nn.paper)) S.nn.paper = prefs.nn.paper;
   }
@@ -392,6 +393,13 @@ function fillSelects() {
   tplPicker($('#pp-tpl'), 'lines-b');
   paperPicker($('#nn-paper'), 'white', $('#nn-tpl'));
   paperPicker($('#pp-paper'), 'white', $('#pp-tpl'));
+  let tplTarget = null;
+  for (const b of document.querySelectorAll('.tpl-add')) b.onclick = () => { tplTarget = $('#' + b.dataset.for); $('#tpl-input').click(); };
+  $('#tpl-input').onchange = (e) => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (f) addCustomTpl(f, tplTarget);
+  };
   $('#nn-size').onchange = () => tplPicker($('#nn-tpl'), $('#nn-tpl').dataset.value, sizeById($('#nn-size').value));
   $('#pp-size').onchange = () => tplPicker($('#pp-tpl'), $('#pp-tpl').dataset.value, $('#pp-size').value ? sizeById($('#pp-size').value) : addRef || PAGE_A4);
   coverPicker($('#nn-cover'), COVERS[0]);
@@ -412,10 +420,91 @@ function tplPicker(el, value, size = PAGE_A4) {
     b.setAttribute('role', 'radio');
     b.innerHTML = `<svg viewBox="0 0 ${w} ${h}" style="--ar:${w} / ${h}" preserveAspectRatio="none" aria-hidden="true">${templateSvg({ type: 'blank', ruling: t.id }, w, h, minW)}</svg><span></span>`;
     b.querySelector('span').textContent = t.label;
-    b.onclick = () => setPick(el, t.id);
+    b.onclick = () => { setPick(el, t.id); syncSizeSel(el); };
     el.appendChild(b);
   }
+  // 自作テンプレート(PDF のページ)。長押し・右クリックで削除
+  for (const t of S.ctpl) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'tpl-opt custom';
+    b.dataset.tpl = 'c:' + t.id;
+    b.setAttribute('role', 'radio');
+    b.innerHTML = `<img alt="" style="--ar:${t.w} / ${t.h}" aria-hidden="true"><span></span>`;
+    b.querySelector('span').textContent = t.name;
+    b.title = `${t.name}(長押し・右クリック・Delete キーで削除)`;
+    tplThumb(t).then((url) => { if (url) b.querySelector('img').src = url; });
+    b.onclick = () => { setPick(el, b.dataset.tpl); syncSizeSel(el); };
+    const del = () => deleteCustomTpl(t, el);
+    longPress(b, del);
+    b.addEventListener('contextmenu', (e) => { e.preventDefault(); del(); });
+    b.addEventListener('keydown', (e) => { if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); del(); } });
+    el.appendChild(b);
+  }
+  if (!el.querySelector(`[data-tpl="${CSS.escape(value)}"]`)) value = 'lines-b'; // 消えた自作テンプレートなど
   setPick(el, value);
+  syncSizeSel(el);
+}
+// 自作テンプレートの見本(一度描いたら覚えておく)
+const tplThumbs = new Map();
+function tplThumb(t) {
+  const k = `${t.hash}/${t.page}`;
+  if (!tplThumbs.has(k)) {
+    tplThumbs.set(k, (async () => {
+      const c = document.createElement('canvas');
+      c.width = 160;
+      c.height = Math.round((160 * t.h) / t.w);
+      await renderPdfPage(c, t.hash, t.page);
+      return c.toDataURL('image/png');
+    })().catch(() => { tplThumbs.delete(k); return null; }));
+  }
+  return tplThumbs.get(k);
+}
+// 自作テンプレートは大きさと見た目が決まっているので、サイズと紙の色の選択を止める
+function syncSizeSel(el) {
+  const sel = el.id === 'nn-tpl' ? $('#nn-size') : el.id === 'pp-tpl' ? $('#pp-size') : null;
+  if (!sel) return;
+  const custom = (el.dataset.value || '').startsWith('c:');
+  sel.disabled = custom;
+  sel.title = custom ? '自作テンプレートは、その大きさで作ります' : '';
+  for (const b of $(el.id === 'nn-tpl' ? '#nn-paper' : '#pp-paper').children) b.disabled = custom;
+}
+const customTpl = (v) => (v && v.startsWith('c:') ? S.ctpl.find((t) => t.id === v.slice(2)) : null);
+async function loadCustomTpl() {
+  S.ctpl = customTemplates(buildLibrary(await db.noteLevelOps()));
+}
+// 自作テンプレートを追加: PDF(全ページ、20 ページまで)か画像を、テンプレートとして保存する
+async function addCustomTpl(file, pickerEl) {
+  try {
+    toast('テンプレートを読み込んでいます…', 60000);
+    const pdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name) ? file : await imageToPdf(file);
+    const { hash, sizes } = await importPdf(pdf);
+    const base = file.name.replace(/\.[^.]+$/, '') || 'テンプレート';
+    const ops = sizes.slice(0, 20).map((sz, i) => S.rec.make(newId(), 'tpl.add', { name: sizes.length > 1 ? `${base} (${i + 1})` : base, hash, page: i + 1, w: sz.w, h: sz.h }));
+    await db.putOps(ops, S.rec.clock);
+    dav.schedule();
+    await loadCustomTpl();
+    const pick = 'c:' + ops[0].n;
+    for (const id of ['nn-tpl', 'pp-tpl']) {
+      const el = $('#' + id);
+      const size = id === 'nn-tpl' ? sizeById($('#nn-size').value) : $('#pp-size').value ? sizeById($('#pp-size').value) : addRef || PAGE_A4;
+      tplPicker(el, el === pickerEl ? pick : el.dataset.value, size);
+    }
+    toast(sizes.length > 20 ? `テンプレートを20ページ分追加しました(${sizes.length}ページのうち)` : `テンプレートを${Math.min(sizes.length, 20)}つ追加しました`);
+  } catch (err) {
+    toast('テンプレートを読み込めませんでした: ' + err.message, 6000);
+  }
+}
+async function deleteCustomTpl(t, el) {
+  if (!(await askConfirm({ heading: '自作テンプレートを削除', message: `「${t.name}」をテンプレートの一覧から外します。このテンプレートで作ったページはそのまま残ります。`, ok: '削除', danger: true }))) return;
+  await db.putOps([S.rec.make(t.id, 'tpl.delete', {})], S.rec.clock);
+  dav.schedule();
+  await loadCustomTpl();
+  for (const id of ['nn-tpl', 'pp-tpl']) {
+    const p = $('#' + id);
+    tplPicker(p, p.dataset.value, id === 'nn-tpl' ? sizeById($('#nn-size').value) : addRef || PAGE_A4);
+  }
+  el.querySelector('[tabindex="0"]')?.focus(); // 消したあとは、選んでいる見本へ
 }
 // 紙の色を選ぶ。tplEl: 用紙の見本(選んだ色で見本の紙を塗る)
 function paperPicker(el, value, tplEl) {
@@ -434,6 +523,7 @@ function paperPicker(el, value, tplEl) {
   }
   setPick(el, value);
   tintTpl(tplEl, value);
+  if (tplEl) syncSizeSel(tplEl); // 自作テンプレートを選んでいるなら、作り直した紙の色も止める
 }
 function tintTpl(tplEl, paper) {
   if (tplEl) tplEl.style.setProperty('--paper', paperColor({ type: 'blank', paper }));
@@ -563,7 +653,8 @@ function openSync() {
 
 // ---------- ノート一覧 ----------
 function bindLibrary() {
-  const newNote = () => {
+  const newNote = async () => {
+    await loadCustomTpl();
     $('#nn-title').value = '';
     setPick($('#nn-cover'), COVERS[Math.floor(Math.random() * COVERS.length)]);
     // 前に作ったノートと同じ用紙・サイズ・紙の色から始める
@@ -590,9 +681,11 @@ function bindLibrary() {
     S.nn = { tpl: ruling, size: $('#nn-size').value, paper };
     savePrefs();
     const id = newId();
+    const ct = customTpl(ruling); // 自作テンプレートなら、その PDF のページを背景に、その大きさで
     const ops = [
       S.rec.make(id, 'note.create', { title, cover, ...(curFolder() ? { folder: curFolder() } : {}) }),
-      S.rec.make(id, 'page.add', { page: { id: newId(), w: size.w, h: size.h, order: 1, bg: blankBg(ruling, paper) } }),
+      S.rec.make(id, 'page.add', { page: ct ? { id: newId(), w: ct.w, h: ct.h, order: 1, bg: { type: 'pdf', hash: ct.hash, page: ct.page, tpl: ct.id } }
+        : { id: newId(), w: size.w, h: size.h, order: 1, bg: blankBg(ruling, paper) } }),
     ];
     await db.putOps(ops, S.rec.clock);
     dav.schedule();
@@ -3556,13 +3649,21 @@ async function addPage(where = 'after', tpl, sizeId, ref = currentPage(), paper)
   else if (where === 'last' || i === pages.length - 1) order = pages.length ? pages[pages.length - 1].order + 1 : 1;
   else order = await freeOrder(ref, pages[i + 1]);
   const cbg = ref && bgOf(ref);
-  const ruling = tpl || (cbg && cbg.type === 'blank' ? cbg.ruling : 'lines-b');
+  const ruling = (tpl && !tpl.startsWith('c:') ? tpl : null) || (cbg && cbg.type === 'blank' ? cbg.ruling : 'lines-b');
   if (paper == null) paper = cbg && cbg.type === 'blank' ? cbg.paper : undefined; // 指定がなければ、基準のページと同じ紙の色
   let w = PAGE_A4.w, h = PAGE_A4.h;
   if (sizeId) ({ w, h } = sizeById(sizeId));
   else if (ref) ({ w, h } = ref); // PDF のページの後ろでも同じ大きさにする
   const id = newId();
-  await commit([mk('page.add', { page: { id, w, h, order, bg: blankBg(ruling, paper) } })]);
+  // 指定がなく、基準のページが自作テンプレートなら、同じテンプレートで足す
+  if (!tpl && cbg && cbg.type === 'pdf') {
+    await loadCustomTpl();
+    const m = cbg.tpl && S.ctpl.find((t) => t.id === cbg.tpl); // テンプレートから作ったページだけ(同じ PDF を読み込んだページは別)
+    if (m && !sizeId && !cbg.rot) tpl = 'c:' + m.id;
+  }
+  const ct = customTpl(tpl);
+  if (ct) ({ w, h } = ct);
+  await commit([mk('page.add', { page: { id, w, h, order, bg: ct ? { type: 'pdf', hash: ct.hash, page: ct.page, tpl: ct.id } : blankBg(ruling, paper) } })]);
   pushUndo({ undo: [['page.delete', { pageId: id }]], redo: [['page.restore', { pageId: id }]], relayout: true });
   const top = $('#scroller').scrollTop;
   renderPages();
@@ -3587,8 +3688,9 @@ async function deletePage(id) {
 
 // ---------- ページを追加(テンプレートを絵で選ぶ) ----------
 let addRef = null;
-function openAddDialog(where = 'after', ref = currentPage()) {
+async function openAddDialog(where = 'after', ref = currentPage()) {
   closePopover();
+  await loadCustomTpl();
   addRef = ref;
   for (const r of document.querySelectorAll('input[name=pp-where]')) r.checked = r.value === where;
   // 基準のページが今見ているページと違うときは、何ページ目かを書く
@@ -3600,7 +3702,9 @@ function openAddDialog(where = 'after', ref = currentPage()) {
   $('#pp-size').options[0].textContent = lbl + 'と同じ';
   const bg = ref && bgOf(ref);
   $('#pp-size').value = '';
-  tplPicker($('#pp-tpl'), bg?.type === 'blank' ? (bg.ruling === 'lines' ? 'lines-b' : bg.ruling) : 'lines-b', ref || PAGE_A4);
+  // 基準のページが自作テンプレートから作ったものなら、そのテンプレートを最初に選んでおく
+  const fromTpl = bg?.type === 'pdf' && bg.tpl && !bg.rot && S.ctpl.some((t) => t.id === bg.tpl) ? 'c:' + bg.tpl : null;
+  tplPicker($('#pp-tpl'), fromTpl || (bg?.type === 'blank' ? (bg.ruling === 'lines' ? 'lines-b' : bg.ruling) : 'lines-b'), ref || PAGE_A4);
   paperPicker($('#pp-paper'), (bg?.type === 'blank' && PAPERS.some((p) => p.id === bg.paper) && bg.paper) || 'white', $('#pp-tpl'));
   showDialog($('#add-dialog'));
 }

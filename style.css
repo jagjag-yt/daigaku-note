@@ -684,3 +684,8 @@ button.hit { width: 100%; text-align: left; font: inherit; cursor: pointer; }
 .paper-opt { width: 36px; height: 36px; min-height: 0; padding: 0; border-radius: 50%; background: var(--paper); border: 1px solid var(--line); box-shadow: inset 0 0 0 2px #fff; }
 .paper-opt.on { outline: 3px solid var(--accent); outline-offset: 2px; }
 .menu-select select + .menu-cap { margin-top: 6px; }
+/* 自作テンプレート */
+.tpl-opt img { display: block; width: 100%; height: auto; aspect-ratio: var(--ar, 210 / 297); background: #fff; border-radius: 2px; box-shadow: 0 0 0 1px var(--line), 0 1px 3px rgba(0,0,0,.08); }
+.tpl-add { margin-top: 8px; align-self: flex-start; border: none; background: transparent; color: var(--accent); font-size: 14px; padding: 6px 2px; min-height: 0; }
+select:disabled { opacity: .55; }
+.paper-opt:disabled { opacity: .35; }
