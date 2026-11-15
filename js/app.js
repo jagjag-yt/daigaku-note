@@ -36,6 +36,14 @@ const WIDTH_RANGE = { pen: [0.5, 8, 0.1], marker: [4, 32, 1] };
 const COVERS = ['#2f5d9e', '#b33a3a', '#2f7d5b', '#7a4fa0', '#c27c1a', '#3a6f7a', '#4b5563', '#a8556f'];
 const COVER_NAMES = ['紺', '赤', '緑', '紫', '黄土', '青緑', '灰', '桃'];
 const MAX_CANVAS_PX = 4_000_000; // iPad Safari のキャンバス上限を避ける
+// ペンの種類と設定(ペンの道具をもう一度押すと出る)。nib はペン先、sens は筆圧感度、stab は手ぶれ補正(0〜100)、dash は線の種類
+const PEN_NIBS = {
+  fountain: { label: '万年筆', note: '筆圧で太さが変わる、ふつうのペン' },
+  ball: { label: 'ボールペン', note: '筆圧に関係なく、いつも同じ太さ' },
+  brush: { label: '筆ペン', note: '筆圧で太さが大きく変わる' },
+  pencil: { label: '鉛筆', note: '少し薄く、太さの変化は小さめ' },
+};
+const PEN_DEFAULTS = { nib: 'fountain', sens: 50, stab: 0, dash: '' };
 
 const S = {
   rec: null,
@@ -84,6 +92,10 @@ async function init() {
   if (prefs.shapeSnap === true) S.shapes = true;
   if (prefs.pressure === false) S.pressure = false;
   if (prefs.pen) S.pen = prefs.pen;
+  S.pen = { ...PEN_DEFAULTS, ...S.pen };
+  if (!PEN_NIBS[S.pen.nib]) S.pen.nib = 'fountain';
+  for (const k of ['sens', 'stab']) { const v = Number(S.pen[k]); S.pen[k] = Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : PEN_DEFAULTS[k]; }
+  if (!['', 'dash', 'dot'].includes(S.pen.dash)) S.pen.dash = '';
   if (prefs.marker) S.marker = prefs.marker;
   if (prefs.sidebar) S.sidebar = true;
   for (const k of ['pen', 'marker']) {
@@ -974,6 +986,58 @@ function eraserPopover(anchor) {
   });
 }
 
+// ペンの設定: ペン先の種類・筆圧感度・手ぶれ補正・線の種類
+function penPopover(anchor) {
+  openPopover(anchor, (body) => {
+    body.classList.add('pen-pop');
+    body.innerHTML = `<div class="pp-title"></div><svg class="pp-preview" viewBox="0 0 220 44" width="220" height="44" aria-hidden="true"></svg>
+      <div class="seg lasso-mode pp-nibs" role="radiogroup" aria-label="ペン先の種類"></div><p class="menu-note pp-note"></p>
+      <label class="pp-row"><span>筆圧感度</span><input type="range" min="0" max="100" step="5" class="pp-sens" aria-label="筆圧感度"><output></output></label>
+      <label class="pp-row"><span>手ぶれ補正</span><input type="range" min="0" max="100" step="5" class="pp-stab" aria-label="手ぶれ補正"><output></output></label>
+      <span class="menu-cap">線の種類</span><div class="seg lasso-mode pp-dash" role="radiogroup" aria-label="線の種類"></div>
+      <button type="button" class="menu-item pp-color">${icon('palette', 20)}<span class="menu-label">ペンの色を選ぶ…</span></button>`;
+    body.querySelector('.pp-color').onclick = () => colorPopover($('#colors').querySelectorAll('.swatch')[Math.max(0, S.pen.ci)], 'pen', Math.max(0, S.pen.ci));
+    const nibs = body.querySelector('.pp-nibs'), dash = body.querySelector('.pp-dash');
+    const sens = body.querySelector('.pp-sens'), stab = body.querySelector('.pp-stab');
+    const show = () => {
+      const pen = S.pen;
+      body.querySelector('.pp-title').textContent = PEN_NIBS[pen.nib].label;
+      body.querySelector('.pp-note').textContent = PEN_NIBS[pen.nib].note;
+      for (const b of nibs.children) { b.classList.toggle('on', b.dataset.v === pen.nib); b.setAttribute('aria-checked', b.dataset.v === pen.nib); }
+      for (const b of dash.children) { b.classList.toggle('on', b.dataset.v === (pen.dash || '')); b.setAttribute('aria-checked', b.dataset.v === (pen.dash || '')); }
+      sens.value = pen.sens; sens.nextElementSibling.textContent = pen.sens + '%';
+      stab.value = pen.stab; stab.nextElementSibling.textContent = pen.stab + '%';
+      // ボールペン・線の種類が実線以外のときは、太さが変わらないので筆圧感度は使わない
+      sens.disabled = pen.nib === 'ball' || !!pen.dash || !S.pressure;
+      sens.closest('.pp-row').classList.toggle('off', sens.disabled);
+      // 見本の線(軽い→強い→軽い筆圧で書いたつもり)
+      const pts = [];
+      for (let i = 0; i <= 40; i++) { const t = i / 40; pts.push(10 + 200 * t, 24 - 12 * Math.sin(t * Math.PI * 2), 0.05 + 0.5 * Math.sin(t * Math.PI)); }
+      if (pen.sens !== 50) for (let i = 2; i < pts.length; i += 3) pts[i] = Math.max(0, Math.min(1, 0.2 + (pts[i] - 0.2) * (pen.sens / 50)));
+      const d = { tool: 'pen', color: pen.color, width: Math.max(1.5, pen.width * 1.6), pr: pen.nib === 'ball' ? false : 2, pts, sm: 1 };
+      if (pen.nib !== 'fountain') d.nib = pen.nib;
+      if (pen.dash) d.dash = pen.dash;
+      body.querySelector('.pp-preview').innerHTML = strokeSvg('pv', d, geometry(d));
+    };
+    for (const [v, n] of Object.entries(PEN_NIBS)) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.dataset.v = v; b.textContent = n.label; b.setAttribute('role', 'radio');
+      b.onclick = () => { S.pen.nib = v; savePrefs(); show(); };
+      nibs.appendChild(b);
+    }
+    for (const [v, label] of [['', '実線'], ['dash', '破線'], ['dot', '点線']]) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.dataset.v = v; b.textContent = label; b.setAttribute('role', 'radio');
+      b.onclick = () => { S.pen.dash = v; savePrefs(); show(); };
+      dash.appendChild(b);
+    }
+    sens.oninput = () => { S.pen.sens = +sens.value; show(); };
+    stab.oninput = () => { S.pen.stab = +stab.value; show(); };
+    sens.onchange = stab.onchange = () => savePrefs();
+    show();
+  }, { onClose: savePrefs });
+}
+
 // 投げ縄の設定: 囲み方と、選ぶものの種類
 const LASSO_PICKS = [['pen', 'pen', '手書き(ペン)'], ['marker', 'marker', '蛍光ペン'], ['image', 'file', '画像'], ['text', 'rename', 'テキストボックス・付箋']];
 function lassoPopover(anchor) {
@@ -1015,7 +1079,8 @@ function setTool(t) {
   if (t !== 'lasso') clearSelection();
   // 選んでいる道具をもう一度押すと、その道具の設定を出す
   if (S.tool === t) {
-    if (t === 'pen' || t === 'marker') colorPopover($('#tool-' + t), t, Math.max(0, S[t].ci));
+    if (t === 'pen') penPopover($('#tool-pen'));
+    else if (t === 'marker') colorPopover($('#tool-' + t), t, Math.max(0, S[t].ci));
     else if (t === 'eraser') eraserPopover($('#tool-eraser'));
     else if (t === 'lasso') lassoPopover($('#tool-lasso'));
     return;
@@ -1514,7 +1579,7 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v28\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v29\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 図形補正の様子(最後の数本): オン/オフ、最後に止めていた時間と揺れ、整えた結果
 const debugShapes = [];
@@ -1686,7 +1751,12 @@ function onDown(e) {
     }
   } else {
     const st = toolState();
-    const d = { id: newId(), pageId: v.pg.id, tool: S.tool, color: st.color, width: st.width, pr: e.pointerType === 'pen' && S.tool === 'pen', pts: [] };
+    const d = { id: newId(), pageId: v.pg.id, tool: S.tool, color: st.color, width: st.width, pr: e.pointerType === 'pen' && S.tool === 'pen' && S.pen.nib !== 'ball', pts: [] };
+    if (S.tool === 'pen') {
+      // ペン先の種類と線の種類(古い版は知らない項目を無視して、ふつうのペンとして描く)
+      if (S.pen.nib !== 'fountain') d.nib = S.pen.nib;
+      if (S.pen.dash) d.dash = S.pen.dash;
+    }
     // ならす強さ: 画面上で約 2.5px 分。拡大して書くほど小さくして、小さな字の形を崩さない
     d.sm = Math.round(Math.max(0.3, Math.min(1.5, 2.5 / S.zoom)) * 100) / 100;
     active = { id: e.pointerId, v, kind: 'draw', pen: e.pointerType === 'pen', d, lastMove: performance.now() };
@@ -1822,19 +1892,34 @@ function addPoint(e, main = e) {
     for (const [he, hm] of held) addPoint(he, hm);
   }
   holdCheck(a, e);
-  const [x, y] = pagePoint(a.v, e);
+  let [x, y] = pagePoint(a.v, e);
+  // 手ぶれ補正: 入力の位置を少し遅れて追いかけさせ、細かな揺れをならす(強いほど遅れる)。
+  // ペンを離したときに、遅れた分は本当の位置まで足す(finishStroke)
+  const stab = d.tool === 'pen' ? S.pen.stab || 0 : 0;
+  if (stab > 0) {
+    a.raw = [x, y];
+    if (a.fx != null) {
+      const k = 1 - Math.min(0.88, (stab / 100) * 0.88);
+      x = a.fx + (x - a.fx) * k;
+      y = a.fy + (y - a.fy) * k;
+    }
+  }
   const n0 = d.pts.length / 3;
   if (n0) {
     const lx = d.pts[d.pts.length - 3], ly = d.pts[d.pts.length - 2];
-    if (Math.hypot(x - lx, y - ly) < 0.5 / S.zoom) return; // 近すぎる点は捨てる
+    if (Math.hypot(x - lx, y - ly) < 0.5 / S.zoom) return; // 近すぎる点は捨てる(手ぶれ補正の位置も進めない)
   }
+  if (stab > 0) { a.fx = x; a.fy = y; }
   // 筆圧。本物の筆圧が来たら、その線は太さが変わる線(pr: 2)にする。それまでに置いた点(書き始めは
   // force がまだ届いていないことがある)には、最初に来た筆圧を入れておく。
   // 本物の筆圧が来ない機器や、筆圧をオフにしているときは、今までどおり一定の太さ(p = 0.5)のまま。
   // Safari は途中の点で筆圧 0 を返すことがあるので、そのときは直前の筆圧を使う
   let p = 0.5;
   if (d.pr) {
-    const q = S.pressure && a.pen ? penPressure(e, main) : null;
+    let q = S.pressure && a.pen ? penPressure(e, main) : null;
+    // 筆圧感度: 50 がふつう。上げると軽い・強いの差が大きく、下げると小さくなる(0.2 前後がふつうの筆圧)。
+    // 届いた筆圧にだけかける(前の点の値を使い回すときは、もうかかっているのでかけない)
+    if (q != null && d.tool === 'pen' && S.pen.sens !== 50) q = Math.max(0, Math.min(1, 0.2 + (q - 0.2) * (S.pen.sens / 50)));
     if (q != null) {
       // 書き始め(最初の 60ms)は、Apple Pencil の筆圧が 0 付近から立ち上がる途中なので、線の頭だけ細い
       // くさび形になる。この間はそれまでの最大の筆圧にそろえ、前の点にも入れ直す
@@ -2019,6 +2104,11 @@ function strokeScreenSize(d) {
 
 async function finishStroke(a) {
   const d = a.d;
+  // 手ぶれ補正で遅れていた分を、ペンを離した位置まで足す
+  if (a.raw && d.pts.length && !a.shaped) {
+    const lx = d.pts[d.pts.length - 3], ly = d.pts[d.pts.length - 2];
+    if (Math.hypot(a.raw[0] - lx, a.raw[1] - ly) > 0.3) d.pts.push(Math.round(a.raw[0] * 100) / 100, Math.round(a.raw[1] * 100) / 100, d.pts[d.pts.length - 1]);
+  }
   // 図形補正がオンなら、ペンを離したときにも図形に整える(止めて整えたものはそのまま)。
   // 小さな線(画面上で 30px 未満。ふつうの大きさの字)は、止めたときだけ整える
   if (S.shapes && !a.shaped && d.pts.length && strokeScreenSize(d) >= 30) {

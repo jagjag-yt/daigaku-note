@@ -62,7 +62,17 @@ export function centerline(d) {
   return rs;
 }
 
-export const variableWidth = (d) => d.pr && !d.shape && d.tool !== 'marker';
+// 破線・点線(dash)とボールペン(nib: 'ball')は太さ一定の線としてなぞる
+export const variableWidth = (d) => d.pr && !d.shape && d.tool !== 'marker' && !d.dash && d.nib !== 'ball';
+
+// 破線・点線の間隔(太さに合わせる)。点線は長さ0の線を丸い端で描いて点にする
+export function dashArray(d, w = d.width) {
+  if (d.dash === 'dash') return [w * 3, w * 2.2];
+  if (d.dash === 'dot') return [0.001, w * 2];
+  return null;
+}
+// 鉛筆は少し薄く描く
+export const PENCIL_ALPHA = 0.78;
 
 // 筆圧つきの線の輪郭(多角形) [[x,y], ...]
 export function outline(d, line = centerline(d)) {
@@ -155,9 +165,11 @@ export function geometry(d) {
 // SVG の要素(文字列)
 export function strokeSvg(id, d, geo, off = [0, 0]) {
   const tf = off[0] || off[1] ? ` transform="translate(${off[0]} ${off[1]})"` : '';
-  const mk = d.tool === 'marker' ? ' class="marker"' : '';
+  const mk = d.tool === 'marker' ? ' class="marker"' : d.nib === 'pencil' ? ' class="pencil"' : '';
   if (geo.kind === 'fill') return `<path data-id="${id}"${mk}${tf} d="${geo.d}" fill="${d.color}"/>`;
-  return `<path data-id="${id}"${mk}${tf} d="${geo.d}" fill="none" stroke="${d.color}" stroke-width="${geo.w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+  const da = dashArray(d, geo.w);
+  const dash = da ? ` stroke-dasharray="${da.map((v) => +v.toFixed(3)).join(' ')}"` : '';
+  return `<path data-id="${id}"${mk}${tf} d="${geo.d}" fill="none" stroke="${d.color}" stroke-width="${geo.w}" stroke-linecap="round" stroke-linejoin="round"${dash}/>`;
 }
 
 // キャンバスに1本描く(サムネイル用)
@@ -167,7 +179,7 @@ export function drawStroke(ctx, d, off = [0, 0], geo = geometry(d)) {
   if (d.tool === 'marker') {
     ctx.globalAlpha = 0.38;
     ctx.globalCompositeOperation = 'multiply';
-  }
+  } else if (d.nib === 'pencil') ctx.globalAlpha = PENCIL_ALPHA;
   const path = new Path2D(geo.d);
   if (geo.kind === 'fill') {
     ctx.fillStyle = d.color;
@@ -177,6 +189,8 @@ export function drawStroke(ctx, d, off = [0, 0], geo = geometry(d)) {
     ctx.lineWidth = geo.w;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+    const da = dashArray(d, geo.w);
+    if (da) ctx.setLineDash(da);
     ctx.stroke(path);
   }
   ctx.restore();

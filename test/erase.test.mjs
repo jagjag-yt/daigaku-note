@@ -41,13 +41,15 @@ test('keepPieces: 点1つや短すぎるかけらは残さない', () => {
 });
 
 test('pieceData: id を外し、色・太さ・筆圧の種類・図形の印は残す', () => {
-  const d = { id: 'x', pageId: 'p', tool: 'pen', color: '#f00', width: 2, pr: 2, sm: 1, shape: 'rect', pts: [] };
+  const d = { id: 'x', pageId: 'p', tool: 'pen', color: '#f00', width: 2, pr: 2, sm: 1, shape: 'rect', nib: 'brush', dash: 'dot', pts: [] };
   const out = ER.pieceData(d, [1.234, 2.345, 0.12345, 3, 4, 0.5]);
   assert.equal(out.id, undefined);
   assert.equal(out.shape, 'rect', '図形のかけらは角を丸めない');
   assert.equal(out.pageId, 'p');
   assert.equal(out.color, '#f00');
   assert.equal(out.pr, 2);
+  assert.equal(out.nib, 'brush', 'ペン先の種類も残す');
+  assert.equal(out.dash, 'dot', '線の種類も残す');
   assert.deepEqual(out.pts, [1.23, 2.35, 0.123, 3, 4, 0.5]);
 });
 

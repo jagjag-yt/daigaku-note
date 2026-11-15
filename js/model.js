@@ -283,7 +283,12 @@ export const fileExt = (type) => ({ 'application/pdf': 'pdf', 'image/png': 'png'
 // pr: 2  本物の筆圧つきの線。ふつうの筆圧(0.2 前後)で今までの線とほぼ同じ太さになり、
 //        軽く書くと細く(最小で 0.55 倍)、強く書くと太く(最大で 1.15 倍)なる。平方根で、弱い筆圧の差を大きめに出す
 // pr: true 以前の線(筆圧は実際には一定の 0.5 だった)。見た目を変えないため式はそのまま
+// nib(ペン先の種類): 'brush' 筆ペン は筆圧の差を大きく出す(最小 0.3 倍・最大 1.6 倍。ふつうの筆圧では万年筆とほぼ同じ)。
+//                    'pencil' 鉛筆 は差を小さく(0.7〜1.1 倍)。それ以外(万年筆)は今までどおり
 export function widthAt(d, p) {
-  if (d.pr === 2) return d.width * (0.55 + 0.6 * Math.sqrt(Math.max(0, Math.min(1, p))));
+  const q = Math.max(0, Math.min(1, p));
+  if (d.pr === 2 && d.nib === 'brush') return d.width * (0.3 + 1.3 * Math.pow(q, 0.55));
+  if (d.pr === 2 && d.nib === 'pencil') return d.width * (0.7 + 0.4 * Math.sqrt(q));
+  if (d.pr === 2) return d.width * (0.55 + 0.6 * Math.sqrt(q));
   return d.pr ? d.width * (0.3 + p) : d.width;
 }

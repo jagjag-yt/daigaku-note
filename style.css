@@ -262,6 +262,7 @@ a.cover:active { transform: scale(.98); }
 .page canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 .page svg.ink { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; cursor: crosshair; }
 .page svg.ink .marker { opacity: .38; mix-blend-mode: multiply; }
+.page svg.ink .pencil { opacity: .78; }
 dialog { border: 1px solid var(--line); border-radius: 12px; max-width: 520px; width: calc(100% - 32px - var(--sa-left) - var(--sa-right)); padding: 20px; }
 dialog h2 { margin-top: 0; font-size: 18px; }
 dialog p { line-height: 1.6; font-size: 14px; }
@@ -543,3 +544,13 @@ dialog::backdrop { background: rgba(15,23,42,.35); }
   .menu-item:hover:not(:disabled) { background: var(--hover); }
   .zoom-row button:hover { background: var(--accent-soft); }
 }
+
+/* ペンの設定(ペン先の種類・筆圧感度・手ぶれ補正・線の種類) */
+.pen-pop { width: 280px; max-width: calc(100vw - 24px); padding: 10px 0 8px; }
+.pen-pop .pp-title { font-weight: 600; text-align: center; padding: 0 10px 2px; }
+.pen-pop .pp-preview { display: block; margin: 0 auto 6px; max-width: 100%; }
+.pen-pop .pp-nibs, .pen-pop .pp-dash { padding: 0 10px 6px; }
+.pen-pop .pp-row { display: grid; grid-template-columns: 76px 1fr 40px; align-items: center; gap: 6px; padding: 4px 10px; font-size: 13px; }
+.pen-pop .pp-row output { font-size: 12px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.pen-pop .pp-row.off { opacity: .45; }
+.pen-pop .lasso-mode button { padding: 0 10px; font-size: 13px; }
