@@ -1948,7 +1948,7 @@ function paintBg(v) {
     const ctx = c.getContext('2d');
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, c.width, c.height);
-    renderPdfPage(c, bg.hash, bg.page, v.holder).catch((e) => {
+    renderPdfPage(c, bg.hash, bg.page, v.holder, bg.rot || 0).catch((e) => {
       ctx.fillStyle = '#999';
       ctx.font = `${14 * c.width / v.pg.w}px sans-serif`;
       ctx.fillText(e.message, 20, 40);
@@ -3846,6 +3846,8 @@ function pageMenu(anchor, pg) {
     { icon: 'page', label: '前にページを追加…', onClick: () => openAddDialog('before', pg) },
     { icon: 'page', label: '後ろにページを追加…', onClick: () => openAddDialog('after', pg) },
     { icon: 'file', label: 'このページを複製', attrs: { 'data-a': 'dup' }, onClick: () => duplicatePage(pg) },
+    { icon: 'rotate', label: '右に回転', attrs: { 'data-a': 'rotr' }, onClick: () => rotatePage(pg, 90) },
+    { icon: 'rotateL', label: '左に回転', attrs: { 'data-a': 'rotl' }, onClick: () => rotatePage(pg, 270) },
     '-',
     { icon: 'bookmark', label: pg.mark ? 'しおりを外す' : 'しおりを付ける', attrs: { 'data-a': 'mark' }, onClick: () => toggleMark(pg) },
     { icon: 'outline', label: pg.title ? '目次の見出しを変更…' : '目次に追加…', attrs: { 'data-a': 'title' }, onClick: () => editPageTitle(pg) },
@@ -3872,6 +3874,33 @@ function pageMenu(anchor, pg) {
   items.push('-', { icon: 'eraser', label: 'ページを消去…', attrs: { 'data-a': 'clear' }, onClick: () => clearPage(pg) });
   items.push({ icon: 'trash', label: 'ページを削除', danger: true, attrs: { 'data-a': 'del' }, disabled: pages.length <= 1, onClick: () => deletePage(pg.id) });
   openPopover(anchor, (body, close) => menu(body, items, close), { align: 'start' });
+}
+
+// ページを 90° 回す(rot: 90 右回り / 270 左回り)。
+// 古い版や同期先でも崩れないように、元のページを消して、回した新しいページ(新しい id)に背景・線・部品を写す。
+// 背景は bg.rot に角度を足す(PDF・罫線とも描くときに回す)。画像とテキストボックスは傾けず、位置だけ回す
+async function rotatePage(pg, rot) {
+  if (S.edit) await commitText(); // 書いている途中の文字を先に確定する(元のページに取り残さない)
+  flushPen();
+  const m = TF.pageRotation(rot, pg.w, pg.h);
+  const [w, h] = rot % 180 ? [pg.h, pg.w] : [pg.w, pg.h];
+  const bg = { ...bgOf(pg) };
+  bg.rot = ((((bg.rot || 0) + rot) % 360) + 360) % 360;
+  if (!bg.rot) delete bg.rot;
+  const id = newId();
+  const ops = [mk('page.add', { page: { id, w, h, order: pg.order, bg } })];
+  if (pg.mark) ops.push(mk('page.mark', { pageId: id, mark: true }));
+  if (pg.title) ops.push(mk('page.title', { pageId: id, title: pg.title }));
+  for (const st of strokesOf(S.note, pg.id)) {
+    const nd = { ...TF.transformData(styleOf(st), st.off, m), id: newId(), pageId: id };
+    ops.push(mk(addType(nd), { s: nd }));
+  }
+  ops.push(mk('page.delete', { pageId: pg.id }));
+  if (!(await commit(ops))) return;
+  pushUndo({ undo: [['page.restore', { pageId: pg.id }], ['page.delete', { pageId: id }]], redo: [['page.restore', { pageId: id }], ['page.delete', { pageId: pg.id }]], relayout: true });
+  if (S.sel && S.sel.pageId === pg.id) clearSelection();
+  keepPosition(() => renderPages());
+  toast(rot === 90 ? 'ページを右に回転しました' : 'ページを左に回転しました');
 }
 
 // ---------- しおり・目次 ----------
@@ -4041,7 +4070,7 @@ function drawThumb(canvas, pg) {
     // 前の描画が終わっていなければ止める
     canvas._holder?.task?.cancel?.();
     const holder = (canvas._holder = {});
-    renderPdfPage(canvas, bg.hash, bg.page, holder).then(() => { if (canvas._holder === holder) draw(); }).catch(() => { if (canvas._holder === holder) draw(); });
+    renderPdfPage(canvas, bg.hash, bg.page, holder, bg.rot || 0).then(() => { if (canvas._holder === holder) draw(); }).catch(() => { if (canvas._holder === holder) draw(); });
   } else draw();
 }
 

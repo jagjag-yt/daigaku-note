@@ -35,6 +35,17 @@ export function rotateAbout(cx, cy, t) {
   return [c, s, -s, c, cx - c * cx + s * cy, cy - s * cx - c * cy];
 }
 
+// ページを 90° 単位で回す行列。w, h は回す前のページの大きさ。rot: 90(右回り)/ 180 / 270(左回り)
+// 回したあとのページは、90・270 のとき幅と高さが入れ替わる
+export function pageRotation(rot, w, h) {
+  switch (((rot % 360) + 360) % 360) {
+    case 90: return [0, 1, -1, 0, h, 0];
+    case 180: return [-1, 0, 0, -1, w, h];
+    case 270: return [0, -1, 1, 0, 0, w];
+    default: return IDENTITY;
+  }
+}
+
 // 線の太さなどにかける倍率(面積の比の平方根)
 export const scaleOf = (m) => Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2]));
 
