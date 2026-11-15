@@ -88,6 +88,7 @@ const S = {
   edit: null, // 書いている途中のテキストボックス { v, id(書き直しのとき), d, ta }
   palettes: { pen: [...PEN_PALETTE], marker: [...MARKER_PALETTE], tape: [...TAPE_PALETTE] }, // 色のプリセット(編集できる)
   colorHist: { pen: [], marker: [], tape: [] }, // 最近使った色
+  sbView: 'pages', // ページ一覧の種類: pages / marks(しおり)/ outline(目次)
   lib: { filter: 'all', sort: 'updated', view: 'grid', folder: null }, // 本棚: 表示するノート・並べ替え・並べ方
   clip: null, // コピーしたもの { items: [線・部品のデータ], pageId, cx, cy, n: 同じ場所に貼った回数 }
 };
@@ -443,11 +444,14 @@ async function commit(ops) {
     await db.putOps(ops, S.rec.clock);
     setSaved(true);
     dav.schedule();
-    if (S.note) for (const op of ops) if (op.t === 'page.add') search.markDirty(S.note.id, op.p.page.id);
-    if (S.note) thumbsDirty(ops);
+    const mine = S.note ? ops.filter((op) => op.n === S.note.id) : []; // 別のノートへ送った op は、このノートの検索・サムネイルに関係しない
+    if (S.note) for (const op of mine) if (op.t === 'page.add') search.markDirty(S.note.id, op.p.page.id);
+    if (S.note) thumbsDirty(mine);
+    return true;
   } catch (e) {
     setSaved(false);
     toast('保存に失敗しました: ' + e.message, 6000);
+    return false;
   }
 }
 // 線が変わったページのサムネイルを少し後で描き直す
@@ -1546,6 +1550,7 @@ function moreMenu(anchor) {
     '-',
     { icon: 'page', label: 'ページを追加…', id: 'add-page', onClick: () => openAddDialog() },
     { icon: 'thumbs', label: 'ページへ移動…', id: 'goto-page', onClick: () => gotoPagePopover($('#page-ind')) },
+    { icon: 'bookmark', label: currentPage()?.mark ? 'このページのしおりを外す' : 'このページにしおりを付ける', id: 'mark-page', onClick: () => { const pg = currentPage(); if (pg) toggleMark(pg); } },
     { icon: 'pdf', label: 'PDF のページを追加…', id: 'add-pdf', onClick: () => $('#pdf-add-input').click() },
     { icon: 'export', label: 'PDF に書き出す', id: 'export-pdf', onClick: exportCurrentPdf },
     { icon: 'file', label: '貼り付け', id: 'paste', disabled: !S.clip, onClick: pasteHere },
@@ -1641,6 +1646,7 @@ function bindEditor() {
   $('#more-btn').onclick = (e) => moreMenu(e.currentTarget);
   $('#pages-btn').onclick = () => toggleSidebar();
   $('#pages-close').onclick = () => toggleSidebar(false);
+  for (const b of document.querySelectorAll('.sb-tabs [data-v]')) b.onclick = () => { S.sbView = b.dataset.v; renderSidebar(); };
   $('#sb-scrim').onclick = () => toggleSidebar(false);
   $('#page-ind').onclick = (e) => gotoPagePopover(e.currentTarget);
   $('#sb-add').onclick = () => openAddDialog();
@@ -3442,9 +3448,10 @@ function pushUndo(entry) {
   refreshToolbar();
 }
 async function runEntry(list, entry, which) {
-  await commit(list.map(([t, p]) => mk(t, p)));
+  await commit(list.map(([t, p, n]) => mk(t, p, n))); // n: 別のノートの op(ページを別のノートへ送ったとき)
   // 変形を元に戻す・やり直すときは、選んでいたものを付け替える(消えた線を選んだままにしない)
   if (entry.sel && S.sel && S.sel.pageId === entry.pages?.[0]) S.sel = { pageId: S.sel.pageId, ids: new Set(entry.sel[which]) };
+  if (entry.sidebar) renderSidebar();
   if (entry.relayout) keepPosition(() => renderPages());
   else if (entry.bg) for (const id of entry.pages || []) repaintPage(id);
   else for (const id of entry.pages || []) { const v = S.views.get(id); if (v) paintInk(v); }
@@ -3612,10 +3619,22 @@ function renderSidebar() {
   S.thumbIO?.disconnect();
   const list = $('#pp-list');
   list.innerHTML = '';
+  for (const b of document.querySelectorAll('.sb-tabs [data-v]')) {
+    const on = b.dataset.v === S.sbView;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', on);
+  }
+  list.classList.toggle('outline', S.sbView === 'outline');
   if (!S.sidebar || !S.note) return;
-  const pages = pagesOf(S.note);
+  const all = pagesOf(S.note);
   const cur = currentPage();
   curPageId = cur?.id;
+  if (S.sbView === 'outline') return renderOutline(list, all, cur);
+  const pages = S.sbView === 'marks' ? all.filter((p) => p.mark) : all;
+  if (!pages.length) {
+    list.innerHTML = '<p class="sb-empty">しおりを付けたページはありません。ページの操作(サムネイルの ⌄)か、その他のメニューから付けられます。</p>';
+    return;
+  }
   // サムネイルは見えているものだけ描く(ページが多いノート・PDF でも重くならないように)
   S.thumbIO = new IntersectionObserver((entries) => {
     for (const en of entries) {
@@ -3624,12 +3643,16 @@ function renderSidebar() {
       if (pg) { en.target.dataset.drawn = '1'; drawThumb(en.target.querySelector('canvas'), pg); }
     }
   }, { root: list, rootMargin: '400px 0px' });
-  pages.forEach((pg, i) => {
+  const canDrag = S.sbView === 'pages';
+  pages.forEach((pg) => {
+    const i = all.indexOf(pg);
     const row = document.createElement('div');
     row.className = 'pp-row' + (cur && cur.id === pg.id ? ' current' : '');
     row.dataset.id = pg.id;
-    row.innerHTML = `<button class="pp-go" title="${i + 1}ページ目を表示(長押しで並べ替え)"><canvas class="pp-thumb" width="240" height="${Math.round((240 * pg.h) / pg.w)}"></canvas></button>
+    row.innerHTML = `<button class="pp-go" title="${i + 1}ページ目を表示${canDrag ? '(長押しで並べ替え)' : ''}"><canvas class="pp-thumb" width="240" height="${Math.round((240 * pg.h) / pg.w)}"></canvas>${pg.mark ? `<span class="pp-mark">${icon('bookmark', 18)}<span class="sr">しおりあり</span></span>` : ''}</button>
+      ${pg.title ? '<div class="pp-title"></div>' : ''}
       <div class="pp-info"><span class="pp-no">${i + 1}</span><button class="pp-menu icon-btn small" aria-haspopup="menu" title="ページの操作" aria-label="${i + 1}ページ目の操作">${icon('chevron', 16)}</button></div>`;
+    if (pg.title) row.querySelector('.pp-title').textContent = pg.title;
     list.appendChild(row);
     S.thumbs.set(pg.id, row);
     S.thumbIO.observe(row);
@@ -3639,7 +3662,7 @@ function renderSidebar() {
       S.views.get(pg.id)?.el.scrollIntoView({ block: 'start' });
       if (window.innerWidth <= 700) toggleSidebar(false);
     };
-    bindThumbDrag(row, pg);
+    if (canDrag) bindThumbDrag(row, pg);
     const mb = row.querySelector('.pp-menu');
     mb.onclick = () => pageMenu(mb, pg);
     go.addEventListener('contextmenu', (e) => { e.preventDefault(); if (!thumbDrag && !go._dragged) pageMenu(mb, pg); });
@@ -3763,6 +3786,13 @@ function pageMenu(anchor, pg) {
     { icon: 'page', label: '前にページを追加…', onClick: () => openAddDialog('before', pg) },
     { icon: 'page', label: '後ろにページを追加…', onClick: () => openAddDialog('after', pg) },
     { icon: 'file', label: 'このページを複製', attrs: { 'data-a': 'dup' }, onClick: () => duplicatePage(pg) },
+    '-',
+    { icon: 'bookmark', label: pg.mark ? 'しおりを外す' : 'しおりを付ける', attrs: { 'data-a': 'mark' }, onClick: () => toggleMark(pg) },
+    { icon: 'outline', label: pg.title ? '目次の見出しを変更…' : '目次に追加…', attrs: { 'data-a': 'title' }, onClick: () => editPageTitle(pg) },
+    ...(pg.title ? [{ icon: 'close', label: '目次から外す', attrs: { 'data-a': 'untitle' }, onClick: () => setPageTitle(pg, '') }] : []),
+    '-',
+    { icon: 'copy', label: '別のノートにコピー…', attrs: { 'data-a': 'copyto' }, onClick: () => sendPage(anchor, pg, false) },
+    { icon: 'move', label: '別のノートに移動…', attrs: { 'data-a': 'moveto' }, disabled: pages.length <= 1, onClick: () => sendPage(anchor, pg, true) },
   ];
   if (bg && bg.type === 'blank') {
     const sel = document.createElement('label');
@@ -3781,6 +3811,96 @@ function pageMenu(anchor, pg) {
   items.push('-', { icon: 'eraser', label: 'ページを消去…', attrs: { 'data-a': 'clear' }, onClick: () => clearPage(pg) });
   items.push({ icon: 'trash', label: 'ページを削除', danger: true, attrs: { 'data-a': 'del' }, disabled: pages.length <= 1, onClick: () => deletePage(pg.id) });
   openPopover(anchor, (body, close) => menu(body, items, close), { align: 'start' });
+}
+
+// ---------- しおり・目次 ----------
+async function toggleMark(pg) {
+  const before = !!pg.mark, mark = !before;
+  await commit([mk('page.mark', { pageId: pg.id, mark })]);
+  const entry = { undo: [['page.mark', { pageId: pg.id, mark: before }]], redo: [['page.mark', { pageId: pg.id, mark }]], sidebar: true };
+  pushUndo(entry);
+  renderSidebar();
+  toast(mark ? 'しおりを付けました' : 'しおりを外しました', 4000, { label: '元に戻す', run: () => { if (S.undo[S.undo.length - 1] === entry) undo(); } });
+}
+async function setPageTitle(pg, title) {
+  const before = pg.title || '';
+  if (title === before) return;
+  await commit([mk('page.title', { pageId: pg.id, title })]);
+  pushUndo({ undo: [['page.title', { pageId: pg.id, title: before }]], redo: [['page.title', { pageId: pg.id, title }]], sidebar: true });
+  renderSidebar();
+}
+async function editPageTitle(pg) {
+  const no = pagesOf(S.note).indexOf(pg) + 1;
+  const title = await askName(pg.title ? '目次の見出しを変更' : '目次に追加', pg.title || `${no}ページ目`);
+  if (title == null || title === '') return; // 取り消し・空のときは何もしない(外すのは「目次から外す」)
+  await setPageTitle(pg, title.slice(0, 200));
+}
+// 目次: 見出しを付けたページを、ページの順に並べる
+function renderOutline(list, all, cur) {
+  const rows = all.map((pg, i) => ({ pg, i })).filter(({ pg }) => pg.title);
+  if (!rows.length) {
+    list.innerHTML = '<p class="sb-empty">目次はまだありません。ページの操作(サムネイルの ⌄)の「目次に追加」で、見出しを付けたページがここに並びます。</p>';
+    return;
+  }
+  for (const { pg, i } of rows) {
+    const row = document.createElement('div');
+    row.className = 'ol-row' + (cur && cur.id === pg.id ? ' current' : '');
+    row.innerHTML = `<button type="button" class="ol-go"><span class="ol-title"></span><span class="ol-no">${i + 1}</span></button><button class="pp-menu icon-btn small" aria-haspopup="menu" title="ページの操作" aria-label="${i + 1}ページ目の操作">${icon('chevron', 16)}</button>`;
+    row.querySelector('.ol-title').textContent = pg.title;
+    S.thumbs.set(pg.id, row); // スクロールで今のページの印を動かすため(サムネイルは無いので描かない)
+    row.querySelector('.ol-go').onclick = () => {
+      S.views.get(pg.id)?.el.scrollIntoView({ block: 'start' });
+      if (window.innerWidth <= 700) toggleSidebar(false);
+    };
+    const mb = row.querySelector('.pp-menu');
+    mb.onclick = () => pageMenu(mb, pg);
+    list.appendChild(row);
+  }
+}
+
+// ---------- 別のノートへコピー・移動 ----------
+async function pickNote(anchor) {
+  const [ops, metas] = await Promise.all([db.noteLevelOps(), db.allNoteMeta()]);
+  const upd = new Map(metas.map((m) => [m.id, m.updatedAt]));
+  const notes = [...buildLibrary(ops).values()].filter((n) => n.titleS && !n.deleted && !n.purged && n.id !== S.note.id)
+    .sort((a, b) => (upd.get(b.id) || 0) - (upd.get(a.id) || 0));
+  if (!notes.length) { toast('ほかのノートがありません。本棚でノートを作ってください'); return; }
+  return new Promise((resolve) => {
+    let picked;
+    openPopover(anchor, (body, close) => {
+      body.insertAdjacentHTML('beforeend', '<div class="menu-cap">送り先のノート</div>');
+      menu(body, notes.map((n) => ({ icon: 'notebook', label: n.title, attrs: { 'data-note': n.id }, keepOpen: true, onClick: () => { picked = n; close(); } })), close);
+    }, { className: 'folder-pick', align: 'start', onClose: () => resolve(picked) });
+  });
+}
+// ページを、ほかのノートの最後に写す(背景・線・画像・テキスト・目次の見出し)。move: 写したあと、このノートからは削除する
+async function sendPage(anchor, pg, move) {
+  const target = await pickNote(anchor);
+  if (!target) return;
+  const dst = emptyNote(target.id);
+  for (const op of await db.opsForNote(target.id)) applyOp(dst, op);
+  const last = pagesOf(dst).at(-1);
+  const pid = newId();
+  const ops = [mk('page.add', { page: { id: pid, w: pg.w, h: pg.h, order: (last ? last.order : 0) + 1, bg: bgOf(pg) } }, target.id)];
+  if (pg.title) ops.push(mk('page.title', { pageId: pid, title: pg.title }, target.id));
+  for (const st of strokesOf(S.note, pg.id)) {
+    const d = TF.transformData(styleOf(st), st.off, TF.IDENTITY);
+    const nd = { ...d, id: newId(), pageId: pid };
+    ops.push(mk(addType(nd), { s: nd }, target.id));
+  }
+  const no = pagesOf(S.note).indexOf(pg) + 1;
+  // 取り消すと、送り先のページを消す(移動なら、このノートのページも戻す)
+  const entry = { undo: [['page.delete', { pageId: pid }, target.id]], redo: [['page.restore', { pageId: pid }, target.id]], relayout: move };
+  if (move) {
+    ops.push(mk('page.delete', { pageId: pg.id }));
+    entry.undo.push(['page.restore', { pageId: pg.id }]);
+    entry.redo.push(['page.delete', { pageId: pg.id }]);
+  }
+  if (!(await commit(ops))) return; // 保存できなかったら、取り消しの記録も積まない
+  search.markNoteDirty(target.id); // 送り先の PDF の文字も検索できるように
+  pushUndo(entry);
+  if (move) keepPosition(() => renderPages());
+  toast(`${no}ページ目を「${target.title}」の最後に${move ? '移動' : 'コピー'}しました`, 6000, { label: '元に戻す', run: () => { if (S.undo[S.undo.length - 1] === entry) undo(); } });
 }
 
 // 1ページだけ描き直す(背景・線・サムネイル)
