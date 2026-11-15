@@ -1,7 +1,7 @@
 // PDF の読み込み(pdf.js)と書き出し(pdf-lib)。どちらも使うときだけ読み込む。
 import * as db from './db.js';
 import { pagesOf, strokesOf, styleOf, bgOf } from './model.js';
-import { centerline, outline, smoothClosedPath, linePath, variableWidth } from './ink.js';
+import { centerline, outline, smoothClosedPath, linePath, variableWidth, dashArray, PENCIL_ALPHA } from './ink.js';
 import { templatePrims } from './templates.js';
 import { isItem, itemRect, textPng } from './items.js';
 
@@ -170,7 +170,9 @@ export async function exportPdf(note) {
       // SVG のパスは y が下向きなので、PDF の座標 (X, Y) を (X, -Y) にして原点に置く
       const map = (x, y) => { const [X, Y] = toPdf(x + ox, y + oy); return [X, -Y]; };
       const marker = d.tool === 'marker';
-      const extra = marker ? { opacity: 0.38, borderOpacity: 0.38, blendMode: L.BlendMode.Multiply } : {};
+      const extra = marker ? { opacity: 0.38, borderOpacity: 0.38, blendMode: L.BlendMode.Multiply }
+        : d.nib === 'pencil' ? { opacity: PENCIL_ALPHA, borderOpacity: PENCIL_ALPHA } : {};
+      const da = dashArray(d, d.width * k);
       const line = centerline(d);
       if (variableWidth(d)) {
         page.drawSvgPath(smoothClosedPath(outline(d, line), map), { x: 0, y: 0, color: rgb(d.color), ...extra });
@@ -180,7 +182,7 @@ export async function exportPdf(note) {
       } else {
         page.drawSvgPath(linePath(line, map), {
           x: 0, y: 0, borderColor: rgb(d.color), borderWidth: d.width * k,
-          borderLineCap: L.LineCapStyle.Round, ...extra,
+          borderLineCap: L.LineCapStyle.Round, ...(da ? { borderDashArray: da } : {}), ...extra,
         });
       }
     }
