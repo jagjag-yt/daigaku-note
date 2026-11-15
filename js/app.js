@@ -3,7 +3,7 @@ import {
   Recorder, emptyNote, applyOp, pagesOf, strokesOf, buildLibrary, newId, strokeHit, styleOf, bgOf, PAGE_A4, addType,
 } from './model.js';
 import { drawStroke, recognizeShape, strokeInLasso, geometry, strokeSvg, pointInPolygon } from './ink.js';
-import { isItem, itemSvg, drawItem, itemInLasso, onImageReady, releaseImages } from './items.js';
+import { isItem, itemSvg, drawItem, itemInLasso, onImageReady, releaseImages, itemRect, cornerPts, textHeight, fontFamily, LINE_HEIGHT } from './items.js';
 import { TEMPLATES, SIZES, templatePrims, sizeById } from './templates.js';
 import { importPdf, renderPdfPage, exportPdf } from './pdf.js';
 import { buildSyncFile, importSyncFile } from './sync.js';
@@ -72,6 +72,9 @@ const S = {
   sel: null, // 投げ縄で選んだ線 { pageId, ids:Set, box }
   // 投げ縄の囲み方(free: 自由な形 / rect: 長方形)と、選ぶものの種類
   lasso: { mode: 'free', pick: { pen: true, marker: true, image: true, text: true } },
+  // テキストの道具で新しく置く文字の設定(書いている途中のテキストボックスは S.edit の中に持つ)
+  text: { color: '#1f2937', size: 16, font: '', bold: false, italic: false, underline: false, strike: false, align: '', bg: 'none' },
+  edit: null, // 書いている途中のテキストボックス { v, id(書き直しのとき), d, ta }
   palettes: { pen: [...PEN_PALETTE], marker: [...MARKER_PALETTE] }, // 色のプリセット(編集できる)
   colorHist: { pen: [], marker: [] }, // 最近使った色
   clip: null, // コピーしたもの { items: [線・部品のデータ], pageId, cx, cy, n: 同じ場所に貼った回数 }
@@ -130,7 +133,14 @@ async function init() {
     if (prefs.lasso.pick) S.lasso.pick = { ...S.lasso.pick, ...prefs.lasso.pick };
   }
   try { const c = JSON.parse(localStorage.getItem(CLIP_KEY) || 'null'); if (c && Array.isArray(c.items) && c.items.length) S.clip = c; } catch {}
-  if (['pen', 'marker', 'eraser', 'lasso'].includes(prefs.tool)) S.tool = prefs.tool;
+  if (['pen', 'marker', 'eraser', 'lasso', 'text'].includes(prefs.tool)) S.tool = prefs.tool;
+  if (prefs.text && typeof prefs.text === 'object') {
+    const t = { ...S.text, ...prefs.text };
+    t.size = Math.max(6, Math.min(96, Number(t.size) || 16));
+    if (!isHex(t.color)) t.color = '#1f2937';
+    if (!TEXT_BGS[t.bg]) t.bg = 'none';
+    S.text = t;
+  }
 
   navigator.storage?.persist?.().catch(() => {});
   // アプリ版は中身がアプリに入っているので、オフライン用のキャッシュ(サービスワーカー)は使わない。
@@ -162,7 +172,7 @@ async function init() {
 }
 
 function savePrefs() {
-  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist });
+  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text });
 }
 
 function route() {
@@ -454,6 +464,8 @@ function setSyncStatus(msg) {
 async function onRemoteChange(noteIds) {
   for (const n of noteIds) search.markNoteDirty(n);
   if (S.note && noteIds.has(S.note.id)) {
+    // 書いている途中なら先に確定する(描き直すと書いている欄が消えるため)
+    if (S.edit) await commitText();
     const top = $('#scroller').scrollTop;
     const ops = await db.opsForNote(S.note.id);
     const note = emptyNote(S.note.id);
@@ -751,10 +763,20 @@ function buildToolbar() {
 }
 
 function refreshToolbar() {
-  for (const t of ['pen', 'marker', 'eraser', 'lasso']) {
+  for (const t of ['pen', 'marker', 'eraser', 'lasso', 'text']) {
     const b = $('#tool-' + t);
     b.classList.toggle('on', S.tool === t);
     b.setAttribute('aria-pressed', S.tool === t);
+  }
+  // テキストの道具: 色と太さの場所に、文字の色と文字の設定を出す
+  const textMode = S.tool === 'text';
+  for (const id of ['#colors', '#sep-widths', '#widths']) $(id).hidden = textMode;
+  $('#text-opts').hidden = !textMode;
+  if (textMode) {
+    const t = textState();
+    $('#text-color').style.setProperty('--c', t.color);
+    $('#text-color').setAttribute('aria-label', '文字の色: ' + colorName(t.color));
+    $('#text-style .tc-size').textContent = Math.round(t.size);
   }
   $('#tool-pen').style.setProperty('--tc', S.pen.color);
   $('#tool-marker').style.setProperty('--tc', S.marker.color);
@@ -1174,6 +1196,7 @@ function lassoPopover(anchor) {
 }
 
 function setTool(t) {
+  if (S.edit && t !== 'text') commitText();
   if (t !== 'lasso') clearSelection();
   // 選んでいる道具をもう一度押すと、その道具の設定を出す
   if (S.tool === t) {
@@ -1181,6 +1204,7 @@ function setTool(t) {
     else if (t === 'marker') colorPopover($('#tool-' + t), t, Math.max(0, S[t].ci));
     else if (t === 'eraser') eraserPopover($('#tool-eraser'));
     else if (t === 'lasso') lassoPopover($('#tool-lasso'));
+    else if (t === 'text') textStylePopover($('#tool-text'));
     return;
   }
   closePopover();
@@ -1246,7 +1270,9 @@ async function renameNote() {
 
 function bindEditor() {
   $('#back').onclick = () => (location.hash = '#/');
-  for (const t of ['pen', 'marker', 'eraser', 'lasso']) $('#tool-' + t).onclick = () => setTool(t);
+  for (const t of ['pen', 'marker', 'eraser', 'lasso', 'text']) $('#tool-' + t).onclick = () => setTool(t);
+  $('#text-color').onclick = (e) => textColorPopover(e.currentTarget);
+  $('#text-style').onclick = (e) => textStylePopover(e.currentTarget);
   $('#shapes').onclick = () => {
     S.shapes = !S.shapes;
     savePrefs();
@@ -1282,6 +1308,7 @@ function bindEditor() {
     else if (k === 'h') setTool('marker');
     else if (k === 'e') setTool('eraser');
     else if (k === 'l') setTool('lasso');
+    else if (k === 't') setTool('text');
     else if ((k === 'delete' || k === 'backspace') && S.sel) deleteSelection();
     else if (k === 'escape') clearSelection();
   });
@@ -1333,6 +1360,7 @@ async function openNote(id, pageId) {
 }
 
 function closeEditor() {
+  if (S.edit) commitText();
   if (S.io) S.io.disconnect();
   for (const v of S.views.values()) releaseView(v);
   S.views.clear();
@@ -1421,6 +1449,7 @@ function layoutPages() {
   clearTimeout(bgTimer);
   bgTimer = setTimeout(() => { for (const v of S.views.values()) if (v.visible && v.bgZoom !== S.zoom) paintBg(v); }, 250);
   drawSelection();
+  styleTextEditor(); // 書いている途中のテキストボックスも拡大率に合わせる
   refreshToolbar();
 }
 
@@ -1629,6 +1658,8 @@ function paintLive(v, svg) {
 let active = null; // 書いている最中の線 / 消している最中 / 投げ縄
 const touches = new Map();
 let pinch = null, inertia = null, lastPenTime = 0, liveFrame = 0;
+let tapStart = null; // テキストの道具で指で押したところ
+const isTouchEv = (e) => e.pointerType === 'touch';
 // ペンを離した直後の線。iPad では手のひらが触れたときなどに、書いている途中で
 // ペンの入力がいったん途切れる(pointercancel / pointerup)ことがある。すぐに同じ場所から
 // 続きが来たら同じ線としてつなぐため、確定を少し待つ。
@@ -1678,7 +1709,7 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v30\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v31\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 図形補正の様子(最後の数本): オン/オフ、最後に止めていた時間と揺れ、整えた結果
 const debugShapes = [];
@@ -1772,8 +1803,11 @@ function pagePoint(v, e) {
 
 function onDown(e) {
   if (!S.note) return;
-  if (e.target.closest('.sel-bar, .paste-chip')) return;
+  if (e.target.closest('.sel-bar, .paste-chip, .text-editor')) return;
   hidePasteChip();
+  // 書いている途中のテキストボックスの外をペン・マウスで押したら、そこで書き終える(その押した操作は使わない)。
+  // 指はスクロールに使うので、軽く押したときだけ書き終える(gestureUp)
+  if (S.edit && !(isTouchEv(e) && !S.fingerDraw)) { e.preventDefault(); commitText(); return; }
   const isTouch = e.pointerType === 'touch';
   // ペンで書いている最中・直後の指は手のひらとみなして無視する
   if (isTouch && palmRecent()) return;
@@ -1828,6 +1862,9 @@ function onDown(e) {
   if (eraser) {
     active = { id: e.pointerId, v, kind: 'erase', hits: new Set(), cut: S.eraser.mode !== 'stroke' ? new Map() : null, byTool: S.tool === 'eraser' };
     eraseAt(e);
+  } else if (S.tool === 'text') {
+    // 離したときに、押した所へ文字を打つ(動かしたら何もしない)
+    active = { id: e.pointerId, v, kind: 'texttap', x, y, cx: e.clientX, cy: e.clientY };
   } else if (S.tool === 'lasso') {
     const b = S.sel && S.sel.pageId === v.pg.id && S.sel.box;
     const h = b && e.target.closest('.sel-h');
@@ -2134,6 +2171,10 @@ async function onUp(e) {
     paintInk(a.v);
     return backFromEraser(a);
   }
+  if (a.kind === 'texttap') {
+    if (e.type !== 'pointercancel' && Math.hypot(e.clientX - a.cx, e.clientY - a.cy) < 10) textTap(a.v, a.x, a.y);
+    return;
+  }
   if (a.kind === 'scale' || a.kind === 'rotate') {
     // 途中で入力が取り消されたとき(通知が来たなど)は、変形しないで元に戻す
     if (e.type === 'pointercancel') { paintInk(a.v); drawSelection(); return; }
@@ -2285,6 +2326,227 @@ async function clearPage(pg) {
     const w = S.views.get(pg.id);
     if (w) paintInk(w);
   } });
+}
+
+// ---------- テキストボックス ----------
+// 背景と枠の組み合わせ(テキストボックスのスタイル)
+const TEXT_BGS = {
+  none: { label: 'なし', fill: null, border: null },
+  box: { label: '枠', fill: null, border: { w: 1, color: '#374151' } },
+  white: { label: '白', fill: '#ffffff', border: { w: 1, color: '#d1d5db' } },
+  yellow: { label: '黄', fill: '#fef08a', border: null },
+  pink: { label: '桃', fill: '#fbcfe8', border: null },
+  blue: { label: '水色', fill: '#bfdbfe', border: null },
+  green: { label: '緑', fill: '#bbf7d0', border: null },
+  gray: { label: '灰', fill: '#e5e7eb', border: null },
+};
+const TEXT_FONTS = [['', '標準'], ['serif', '明朝'], ['mono', '等幅']];
+// いま変える対象: 書いている途中ならそのテキストボックス、そうでなければ新しく置くときの設定
+const textState = () => (S.edit ? S.edit.d : S.text);
+
+// テキストボックスのデータを、文字の設定から作る(位置と幅はあとで決める)
+function textData(t) {
+  const bg = TEXT_BGS[t.bg] || TEXT_BGS.none;
+  const pad = Math.round(t.size * 0.35 * 100) / 100;
+  const d = { tool: 'text', text: '', size: t.size, font: t.font || '', color: t.color, pad, padT: pad, wrap: true, width: 0, bg: t.bg || 'none' };
+  if (bg.fill) d.fill = bg.fill;
+  if (bg.border) d.border = { ...bg.border };
+  if (bg.fill || bg.border) d.radius = 4;
+  for (const k of ['bold', 'italic', 'underline', 'strike']) if (t[k]) d[k] = true;
+  if (t.align === 'center' || t.align === 'right') d.align = t.align;
+  return d;
+}
+
+// テキストの道具で押した: 文字があればそれを書き直す、なければ新しく置く
+function textTap(v, x, y) {
+  const hit = strokesOf(S.note, v.pg.id).reverse().find((st) => st.data.tool === 'text' && (() => {
+    const r = itemRect(st.data, st.off);
+    return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  })());
+  if (hit) return openTextEditor(v, hit);
+  const d = textData(S.text);
+  // 幅: 押した所からページの右端の少し手前まで(最大 260pt、最小 80pt)
+  const w = Math.max(80, Math.min(260, v.pg.w - x - 12));
+  const x0 = Math.max(4, Math.min(x, v.pg.w - w - 4));
+  d.pts = cornerPts(x0, y - d.size * 0.6, w, d.size * LINE_HEIGHT + d.pad * 2);
+  openTextEditor(v, null, d);
+}
+
+// 書く画面: ページの上に文字を打つ欄を重ねる(見た目は保存したときと同じになるようにそろえる)
+function openTextEditor(v, st, d0) {
+  if (S.edit) commitText();
+  clearSelection();
+  const d = st ? { ...styleOf(st) } : d0;
+  if (st) { // ずれ(off)を足し込んで、書き直したら新しいテキストボックスとして置く
+    const r = itemRect(d, st.off);
+    d.pts = cornerPts(r.x, r.y, r.w, r.h);
+    if (!d.bg) d.bg = Object.keys(TEXT_BGS).find((k) => (TEXT_BGS[k].fill || null) === (d.fill || null) && !!TEXT_BGS[k].border === !!d.border) || 'none';
+  }
+  const ta = document.createElement('textarea');
+  ta.className = 'text-editor';
+  ta.rows = 1;
+  ta.value = d.text || '';
+  ta.setAttribute('aria-label', 'テキスト');
+  ta.spellcheck = false;
+  v.el.appendChild(ta);
+  // 取り込んだテキスト(bg なし)は、書き直しても元の枠の高さより小さくしない(付箋などの見た目を保つ)
+  S.edit = { v, id: st ? st.id : null, d, ta, keepH: st && !st.data.bg ? itemRect(d).h : 0, orig: st ? textKey(styleOf(st)) : null };
+  if (st) paintInk(v, new Set([st.id])); // 書き直している間は、元の文字を隠す
+  ta.addEventListener('input', () => { d.text = ta.value; sizeTextEditor(); });
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !e.isComposing) { e.preventDefault(); commitText(); } // 変換中の Esc は変換の取り消しに使う
+    e.stopPropagation(); // 文字を打っている間は、P・E などのショートカットを効かせない
+  });
+  styleTextEditor();
+  refreshToolbar();
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+}
+
+function styleTextEditor() {
+  const ed = S.edit;
+  if (!ed) return;
+  const { d, ta } = ed, z = S.zoom, r = itemRect(d);
+  Object.assign(ta.style, {
+    left: r.x * z + 'px', top: r.y * z + 'px', width: r.w * z + 'px',
+    font: `${d.italic ? 'italic ' : ''}${d.bold ? 'bold ' : ''}${d.size * z}px ${fontFamily(d)}`,
+    lineHeight: String(LINE_HEIGHT), color: d.color, textAlign: d.align || 'left',
+    padding: `${(d.padT ?? d.pad) * z}px ${d.pad * z}px ${d.pad * z}px`,
+    background: d.fill || 'rgba(255,255,255,.6)', borderRadius: (d.radius || 0) * z + 'px',
+    textDecoration: [d.underline && 'underline', d.strike && 'line-through'].filter(Boolean).join(' ') || 'none',
+    whiteSpace: d.wrap === false ? 'pre' : 'pre-wrap',
+    boxShadow: d.border ? `inset 0 0 0 ${Math.max(1, d.border.w * z)}px ${d.border.color}` : 'none',
+  });
+  sizeTextEditor();
+}
+function sizeTextEditor() {
+  const ta = S.edit?.ta;
+  if (!ta) return;
+  ta.style.height = 'auto';
+  ta.style.height = ta.scrollHeight + 'px';
+}
+
+// 書き終える: 空なら置かない(書き直しなら消す)。高さは文字に合わせる
+async function commitText() {
+  const ed = S.edit;
+  if (!ed) return;
+  S.edit = null;
+  const { v, d, ta, id } = ed;
+  ta.remove();
+  refreshToolbar();
+  const text = (ta.value || '').replace(/\s+$/, '');
+  const old = id && S.note.strokes.get(id);
+  const oldText = old ? styleOf(old).text : null;
+  if (!text) {
+    if (old) {
+      pushUndo({ undo: [['stroke.undel', { ids: [id] }]], redo: [['stroke.del', { ids: [id] }]], pages: [v.pg.id] });
+      await commit([mk('stroke.del', { ids: [id] })]);
+    }
+    paintInk(v);
+    return;
+  }
+  d.text = text;
+  const r = itemRect(d);
+  d.pts = cornerPts(r.x, r.y, r.w, Math.max(ed.keepH || 0, textHeight({ ...d })));
+  // 何も変えずに閉じたときは、記録しない(移動していない・文字と見た目が同じ)
+  if (old && oldText === text && ed.orig === textKey(d) && !old.off[0] && !old.off[1]) { paintInk(v); return; }
+  const nd = { ...d, id: newId(), pageId: v.pg.id };
+  const ops = [mk('item.add', { s: nd })];
+  let undo = [['stroke.del', { ids: [nd.id] }]], redo = [['stroke.undel', { ids: [nd.id] }]];
+  if (old) {
+    ops.unshift(mk('stroke.del', { ids: [id] }));
+    undo = [...undo, ['stroke.undel', { ids: [id] }]];
+    redo = [['stroke.del', { ids: [id] }], ...redo];
+  }
+  pushUndo({ undo, redo, pages: [v.pg.id] });
+  await commit(ops);
+  paintInk(v);
+}
+// 文字と見た目の比べ方(項目の順番・bg の有無に左右されないように、決まった項目だけを並べる)
+const TEXT_KEYS = ['text', 'size', 'font', 'color', 'fill', 'radius', 'pad', 'padT', 'wrap', 'bold', 'italic', 'underline', 'strike', 'align'];
+const textKey = (d) => JSON.stringify([...TEXT_KEYS.map((k) => d[k] ?? null), d.border ? [d.border.w, d.border.color] : null]);
+
+// 文字の設定を変えた: 書いている途中ならその場に、そうでなければ次に置く文字に使う
+function setTextProp(patch) {
+  const t = textState();
+  Object.assign(t, patch);
+  if (S.edit) {
+    const d = S.edit.d;
+    if ('bg' in patch) {
+      const bg = TEXT_BGS[patch.bg] || TEXT_BGS.none;
+      delete d.fill; delete d.border; delete d.radius;
+      if (bg.fill) d.fill = bg.fill;
+      if (bg.border) d.border = { ...bg.border };
+      if (bg.fill || bg.border) d.radius = 4;
+    }
+    if ('size' in patch) d.pad = d.padT = Math.round(patch.size * 0.35 * 100) / 100;
+    for (const k of ['bold', 'italic', 'underline', 'strike']) if (!d[k]) delete d[k];
+    if (!d.align) delete d.align;
+    styleTextEditor();
+    S.edit.ta.focus();
+  } else savePrefs();
+  refreshToolbar();
+}
+
+function textColorPopover(anchor) {
+  openPopover(anchor, (body, close) => {
+    body.classList.add('palette');
+    const cur = textState().color;
+    body.innerHTML = `<div class="pal-grid">${PEN_PALETTE.map((c) => `<button type="button" class="pal-c${c === cur ? ' on' : ''}" data-c="${c}" style="--c:${c}" title="${colorName(c)}" aria-label="${colorName(c)}" aria-pressed="${c === cur}"></button>`).join('')}</div>`;
+    body.querySelectorAll('.pal-c').forEach((b) => (b.onclick = () => { setTextProp({ color: b.dataset.c }); close(); }));
+    const custom = document.createElement('label');
+    custom.className = 'cp-more';
+    custom.innerHTML = `<input type="color" value="${isHex(cur) ? cur : '#000000'}" aria-label="ほかの色"><span>ほかの色…</span>`;
+    custom.querySelector('input').oninput = (e) => setTextProp({ color: e.target.value });
+    custom.querySelector('input').onchange = () => close();
+    body.appendChild(custom);
+  }, { onClose: () => S.edit?.ta.focus() });
+}
+
+function textStylePopover(anchor) {
+  openPopover(anchor, (body) => {
+    body.classList.add('text-pop');
+    body.innerHTML = `<label class="pp-row"><span>大きさ</span><input type="range" min="8" max="72" step="1" class="tp-size" aria-label="文字の大きさ"><output></output></label>
+      <span class="menu-cap">書体</span><div class="seg lasso-mode tp-font" role="radiogroup" aria-label="書体"></div>
+      <span class="menu-cap">文字の飾り</span><div class="seg lasso-mode tp-deco"></div>
+      <span class="menu-cap">揃え</span><div class="seg lasso-mode tp-align" role="radiogroup" aria-label="揃え"></div>
+      <span class="menu-cap">背景と枠</span><div class="tp-bgs"></div>`;
+    const size = body.querySelector('.tp-size');
+    const show = () => {
+      const t = textState();
+      size.value = t.size; size.nextElementSibling.textContent = Math.round(t.size) + 'pt';
+      for (const b of body.querySelectorAll('[data-font]')) { const on = (t.font || '') === b.dataset.font; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); }
+      for (const b of body.querySelectorAll('[data-deco]')) { const on = !!t[b.dataset.deco]; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
+      for (const b of body.querySelectorAll('[data-align]')) { const on = (t.align || '') === b.dataset.align; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); }
+      for (const b of body.querySelectorAll('[data-bg]')) { const on = (t.bg || 'none') === b.dataset.bg; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
+    };
+    const add = (sel, attr, items, onClick) => {
+      const box = body.querySelector(sel);
+      for (const [v, label, extra] of items) {
+        const b = document.createElement('button');
+        b.type = 'button'; b.dataset[attr] = v; b.innerHTML = label;
+        if (extra) b.setAttribute('aria-label', extra);
+        b.onclick = () => { onClick(v); show(); };
+        box.appendChild(b);
+      }
+    };
+    add('.tp-font', 'font', TEXT_FONTS, (v) => setTextProp({ font: v }));
+    add('.tp-deco', 'deco', [['bold', '<b>B</b>', '太字'], ['italic', '<i>I</i>', '斜体'], ['underline', '<u>U</u>', '下線'], ['strike', '<s>S</s>', '取り消し線']],
+      (k) => setTextProp({ [k]: !textState()[k] }));
+    add('.tp-align', 'align', [['', '左'], ['center', '中央'], ['right', '右']], (v) => setTextProp({ align: v }));
+    const bgs = body.querySelector('.tp-bgs');
+    for (const [k, bg] of Object.entries(TEXT_BGS)) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'tp-bg'; b.dataset.bg = k; b.title = bg.label; b.setAttribute('aria-label', '背景と枠: ' + bg.label);
+      b.style.background = bg.fill || 'transparent';
+      if (bg.border) b.style.boxShadow = `inset 0 0 0 1.5px ${bg.border.color}`;
+      if (k === 'none') b.textContent = '∅';
+      b.onclick = () => { setTextProp({ bg: k }); show(); };
+      bgs.appendChild(b);
+    }
+    size.oninput = () => { setTextProp({ size: +size.value }); show(); };
+    show();
+  }, { onClose: () => { if (S.edit) S.edit.ta.focus(); else savePrefs(); } });
 }
 
 // ---------- 投げ縄の選択 ----------
@@ -2502,6 +2764,9 @@ async function recolorSelection(color) {
 // 指: 1本でスクロール(慣性つき)、2本でズーム
 function gestureDown(e) {
   const sc = $('#scroller');
+  // テキストの道具では、指で軽く押しても文字を打てるようにする(動かしたらスクロール)
+  if (S.tool === 'text' && touches.size === 0) tapStart = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), target: e.target };
+  else tapStart = null;
   try { sc.setPointerCapture(e.pointerId); } catch {}
   stopInertia();
   touches.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now(), vx: 0, vy: 0 });
@@ -2535,6 +2800,16 @@ function gestureMove(e) {
 function gestureUp(e) {
   const t = touches.get(e.pointerId);
   touches.delete(e.pointerId);
+  const ts = tapStart;
+  tapStart = null;
+  if (ts && ts.id === e.pointerId && !pinch && e.type !== 'pointercancel' && Math.hypot(e.clientX - ts.x, e.clientY - ts.y) < 10 && performance.now() - ts.t < 500) {
+    if (ts.target.closest?.('.text-editor')) return; // 書いている欄の中(カーソルを動かした)
+    if (S.edit) { commitText(); return; } // 書いている途中なら、外を押したら書き終えるだけ
+    const pageEl = ts.target.closest?.('.page');
+    const v = pageEl && S.views.get(pageEl.dataset.id);
+    if (v && v.ready && !ts.target.closest('.page-foot')) { const [x, y] = pagePoint(v, e); textTap(v, x, y); }
+    return;
+  }
   if (pinch) {
     if (touches.size < 2) {
       const p = pinch;
@@ -2585,6 +2860,7 @@ async function runEntry(list, entry, which) {
   refreshToolbar();
 }
 async function undo() {
+  if (S.edit) await commitText(); // 書いている途中の文字を先に確定してから戻す
   flushPen();
   const e = S.undo.pop();
   if (!e) return;
@@ -2592,6 +2868,7 @@ async function undo() {
   await runEntry(e.undo, e, 'undo');
 }
 async function redo() {
+  if (S.edit) await commitText();
   flushPen();
   const e = S.redo.pop();
   if (!e) return;
