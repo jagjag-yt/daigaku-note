@@ -815,3 +815,6 @@ body:has(#editor.tb-bottom:not([hidden])) #toast { bottom: calc(72px + var(--sa-
 .lock-badge { position: absolute; left: 10px; top: 8px; width: 26px; height: 26px; border-radius: 50%; background: var(--chip-bg); color: var(--text); display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 3px rgba(0,0,0,.15); pointer-events: none; }
 .grid.list .lock-badge { position: static; grid-column: 2; grid-row: 1; justify-self: end; box-shadow: none; }
 .set-btns { display: flex; gap: 6px; flex: none; }
+/* 横に 1 ページずつ送る */
+#editor.hs:not(.present) #pages { flex-direction: row; align-items: center; min-height: 100%; width: max-content; padding: 12px 50vw; gap: 32px; box-sizing: border-box; }
+#editor.hs:not(.present) #add-tile { width: 200px !important; height: auto !important; min-height: 160px; align-self: center; }
