@@ -132,13 +132,14 @@ export async function pdfPageText(hash, pageNo) {
 }
 
 // ノートを PDF にする。PDF 由来のページは元の PDF をそのまま使い、その上に手書きをベクターで重ねる。
-export async function exportPdf(note) {
+// pageIds: 書き出すページ(省略すると全部)
+export async function exportPdf(note, pageIds = null) {
   const L = await pdfLib();
   const out = await L.PDFDocument.create();
   const srcDocs = new Map();
   const rgb = (hex) => L.rgb(...hexToRgb(hex));
   const images = new Map(); // 同じ画像は一度だけ埋め込む
-  for (const pg of pagesOf(note)) {
+  for (const pg of pagesOf(note).filter((p) => !pageIds || pageIds.includes(p.id))) {
     const bg = bgOf(pg);
     let page;
     if (bg && bg.type === 'pdf') { // 画面と同じく、変更後の背景(bgOf)で決める
