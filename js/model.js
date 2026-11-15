@@ -8,7 +8,7 @@
 // note.move: ノートを入れるフォルダ / folder.*: フォルダ(op の n はフォルダの id。note.create が無いので、古い版の本棚には出ない)
 export const NOTE_TYPES = ['note.create', 'note.rename', 'note.delete', 'note.restore', 'note.cover', 'note.fav', 'note.purge',
   'note.move', 'folder.create', 'folder.rename', 'folder.move', 'folder.delete',
-  'tpl.add', 'tpl.delete']; // tpl.*: 自作テンプレート(n はテンプレートの id。中身は PDF のページ)
+  'tpl.add', 'tpl.delete', 'note.lock']; // note.lock: ノートのロック(LWW) / tpl.*: 自作テンプレート(n はテンプレートの id。中身は PDF のページ)
 
 export const PAGE_A4 = { w: 595.28, h: 841.89 };
 
@@ -128,6 +128,9 @@ export function applyOp(note, op) {
       break;
     case 'folder.delete': // フォルダの削除は取り消さない(中のノートはゴミ箱へ。戻すと本棚のいちばん上に出る)
       note.folderDeleted = true;
+      break;
+    case 'note.lock': // ロック(開くときにこの端末のパスコードを聞く。中身を暗号にするものではない)
+      if (newer(s, note.lockS)) { note.locked = !!p.lock; note.lockS = s; }
       break;
     case 'note.fav': // お気に入り
       if (newer(s, note.favS)) { note.fav = !!p.fav; note.favS = s; }
