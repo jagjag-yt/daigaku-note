@@ -83,6 +83,18 @@
         <button id="account-btn" class="icon-btn acct-btn" data-icon="user" title="アカウント" aria-label="アカウント"><span class="acct-avatar" aria-hidden="true" hidden></span><span class="acct-dot" hidden></span></button>
       </div>
       <div class="substatus"><span class="sync-status"></span><span id="search-status"></span></div>
+      <div class="lib-bar">
+        <div class="lib-filter" role="group" aria-label="表示するノート">
+          <button type="button" data-f="all">すべて</button>
+          <button type="button" data-f="fav">お気に入り</button>
+          <button type="button" data-f="trash">ゴミ箱</button>
+        </div>
+        <div class="spacer"></div>
+        <label class="lib-sort"><span class="sr">並べ替え</span><select id="lib-sort" aria-label="並べ替え">
+          <option value="updated">最終変更日</option><option value="created">作成日</option><option value="name">名前</option>
+        </select></label>
+        <button id="lib-view" class="icon-btn" type="button" title="リスト表示に切り替え" aria-label="リスト表示に切り替え"></button>
+      </div>
     </header>
     <input id="pdf-input" type="file" accept="application/pdf,.pdf" hidden>
     <input id="gn-input" type="file" accept=".goodnotes,application/zip" multiple hidden>

@@ -627,3 +627,29 @@ dialog::backdrop { background: rgba(15,23,42,.35); }
 /* マスキングテープ: めくったテープは薄くして下を見せる */
 .page svg.ink .tape.revealed { opacity: .22; }
 #tool-marker.tape-on::before { content: ''; position: absolute; right: 6px; top: 6px; width: 9px; height: 5px; border-radius: 1px; background: var(--tc); transform: rotate(-20deg); }
+
+/* 本棚の上の帯(表示するノート・並べ替え・並べ方) */
+.lib-bar { display: flex; align-items: center; gap: 8px; padding: 6px 0 2px; flex-wrap: wrap; }
+.lib-filter { display: flex; flex-wrap: wrap; gap: 6px; }
+.lib-filter button { min-height: 34px; padding: 0 14px; border-radius: 999px; background: var(--field); color: var(--text); border: none; font-size: 14px; }
+.lib-filter button.on { background: var(--accent); color: #fff; }
+.lib-filter button:focus-visible, .fav-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lib-sort select { min-height: 34px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: 0 8px; font-size: 14px; }
+/* お気に入りの星(表紙の右上) */
+.card { position: relative; }
+.fav-btn { position: absolute; right: 6px; top: 6px; width: 34px; height: 34px; min-height: 34px; padding: 0; border: none; border-radius: 50%; background: rgba(255,255,255,.85); color: #9ca3af; display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+.fav-btn.on { color: #f59e0b; }
+.fav-btn.on svg path { fill: currentColor; }
+/* リスト表示 */
+.grid.list { display: flex; flex-direction: column; gap: 0; }
+.grid.list .card { display: grid; grid-template-columns: 44px 1fr auto; align-items: center; gap: 12px; padding: 8px 4px; border-bottom: 1px solid var(--line); }
+.grid.list .cover { width: 44px; height: 56px; min-height: 0; aspect-ratio: auto; }
+.grid.list .cover .label { display: none; }
+.grid.list .new-cover svg { width: 24px; height: 24px; }
+.grid.list .meta { padding: 0; min-width: 0; align-items: flex-start; text-align: left; }
+.grid.list .name-btn { max-width: 100%; }
+.grid.list .fav-btn { position: static; grid-column: 3; grid-row: 1; box-shadow: none; background: transparent; }
+.trash-bar { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 4px 0 8px; }
+.card.in-trash .cover { opacity: .7; border: none; padding: 0; cursor: pointer; font: inherit; }
+.trash-note { margin: 0; font-size: 13px; color: var(--muted); }
+button.hit { width: 100%; text-align: left; font: inherit; cursor: pointer; }

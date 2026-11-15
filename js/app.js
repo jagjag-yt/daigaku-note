@@ -88,6 +88,7 @@ const S = {
   edit: null, // 書いている途中のテキストボックス { v, id(書き直しのとき), d, ta }
   palettes: { pen: [...PEN_PALETTE], marker: [...MARKER_PALETTE], tape: [...TAPE_PALETTE] }, // 色のプリセット(編集できる)
   colorHist: { pen: [], marker: [], tape: [] }, // 最近使った色
+  lib: { filter: 'all', sort: 'updated', view: 'grid' }, // 本棚: 表示するノート・並べ替え・並べ方
   clip: null, // コピーしたもの { items: [線・部品のデータ], pageId, cx, cy, n: 同じ場所に貼った回数 }
 };
 const CLIP_KEY = 'daigaku-note-clip';
@@ -143,6 +144,10 @@ async function init() {
     if (Array.isArray(pl) && clean(pl).length) S.palettes[k] = clean(pl).slice(0, PALETTE_MAX);
     if (Array.isArray(hs)) S.colorHist[k] = clean(hs).slice(0, HIST_MAX);
   }
+  if (prefs.lib) {
+    if (['updated', 'created', 'name'].includes(prefs.lib.sort)) S.lib.sort = prefs.lib.sort;
+    if (['grid', 'list'].includes(prefs.lib.view)) S.lib.view = prefs.lib.view;
+  }
   if (prefs.lasso) {
     if (prefs.lasso.mode === 'rect' || prefs.lasso.mode === 'free') S.lasso.mode = prefs.lasso.mode;
     if (prefs.lasso.pick) S.lasso.pick = { ...S.lasso.pick, ...prefs.lasso.pick };
@@ -176,6 +181,7 @@ async function init() {
   bindDialogs();
   fillSelects();
   bindLibrary();
+  bindLibBar();
   buildToolbar();
   bindEditor();
   bindNative();
@@ -188,7 +194,7 @@ async function init() {
 }
 
 function savePrefs() {
-  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, tape: S.tape, markerMode: S.markerMode, straight: S.straight, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text, sticky: S.sticky });
+  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lib: { sort: S.lib.sort, view: S.lib.view }, tape: S.tape, markerMode: S.markerMode, straight: S.straight, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text, sticky: S.sticky });
 }
 
 function route() {
@@ -216,7 +222,7 @@ function route() {
 // この端末にあるノートの数(ログインのページで、ノートが消えないことを知らせるため)
 async function countNotes() {
   const lib = buildLibrary(await db.noteLevelOps());
-  return [...lib.values()].filter((n) => !n.deleted && n.titleS).length;
+  return [...lib.values()].filter((n) => !n.deleted && !n.purged && n.titleS).length;
 }
 
 // action: { label, run } を渡すと「元に戻す」などのボタンを付ける
@@ -618,24 +624,31 @@ async function runSearch() {
   if (!q) {
     box.hidden = true;
     $('#notes').hidden = false;
+    showLibrary(); // 空のときの案内を出し直す
     return;
   }
   const lib = buildLibrary(await db.noteLevelOps());
-  const live = new Map([...lib.values()].filter((n) => !n.deleted && n.titleS).map((n) => [n.id, n]));
+  // 検索の対象は、今の絞り込み(すべて / お気に入り / ゴミ箱)に合わせる
+  const f = S.lib.filter;
+  const live = new Map([...lib.values()].filter((n) => n.titleS && !n.purged && (f === 'trash' ? n.deleted : !n.deleted && (f !== 'fav' || n.fav))).map((n) => [n.id, n]));
   const hits = await search.query(q, live);
   if (seq !== searchSeq) return; // もっと新しい検索が始まっている
   box.hidden = false;
   $('#notes').hidden = true;
+  $('#empty').hidden = true;
   if (!hits.length) {
     box.innerHTML = `<p class="empty">「${esc(q)}」は見つかりませんでした。</p>`;
     return;
   }
+  // ゴミ箱のノートは開けないので、押すと「元に戻す / 完全に削除」を出す
+  const trash = f === 'trash';
   box.innerHTML = hits.slice(0, 100).map((h) => `
-    <a class="hit" href="#/note/${h.noteId}${h.pageId ? '/p/' + h.pageId : ''}">
+    ${trash ? `<button type="button" class="hit" data-id="${h.noteId}" aria-haspopup="menu">` : `<a class="hit" href="#/note/${h.noteId}${h.pageId ? '/p/' + h.pageId : ''}">`}
       <span class="hit-title">${h.pageId ? esc(h.title) : h.snippet}${h.pageNo ? ` <span class="hit-page">${h.pageNo}ページ目</span>` : ''}</span>
       ${h.pageId ? `<span class="hit-snip">${h.snippet}</span>` : ''}
       <span class="hit-src">${h.source}</span>
-    </a>`).join('');
+    ${trash ? '</button>' : '</a>'}`).join('');
+  if (trash) for (const b of box.querySelectorAll('button.hit')) b.onclick = () => trashMenu(b, live.get(b.dataset.id));
 }
 
 function coverColor(n) {
@@ -661,33 +674,63 @@ async function showLibrary() {
   const [ops, metas] = await Promise.all([db.noteLevelOps(), db.allNoteMeta()]);
   const lib = buildLibrary(ops);
   const upd = new Map(metas.map((m) => [m.id, m.updatedAt]));
-  const notes = [...lib.values()].filter((n) => !n.deleted && n.titleS).sort((a, b) => (upd.get(b.id) || 0) - (upd.get(a.id) || 0));
+  const f = S.lib.filter, trash = f === 'trash';
+  const all = [...lib.values()].filter((n) => n.titleS && !n.purged);
+  const notes = all.filter((n) => (trash ? n.deleted : !n.deleted && (f !== 'fav' || n.fav)));
+  // 並べ替え: 最終変更日(新しい順)/ 作成日(新しい順)/ 名前(あいうえお順)
+  const byName = new Intl.Collator('ja', { numeric: true, sensitivity: 'base' });
+  const cmpFn = S.lib.sort === 'name' ? (a, b) => byName.compare(a.title, b.title)
+    : S.lib.sort === 'created' ? (a, b) => (b.created || upd.get(b.id) || 0) - (a.created || upd.get(a.id) || 0)
+    : (a, b) => (upd.get(b.id) || 0) - (upd.get(a.id) || 0);
+  notes.sort(cmpFn);
+  refreshLibBar(all.filter((n) => n.deleted).length);
   const grid = $('#notes');
   grid.innerHTML = '';
-  $('#empty').hidden = notes.length > 0;
-  // 先頭は「新規」
-  const nt = document.createElement('div');
-  nt.className = 'card new-card';
-  nt.innerHTML = `<button id="new-note" class="cover new-cover" aria-haspopup="menu">${icon('plus', 40)}</button><div class="meta"><div class="name">新規</div></div>`;
-  nt.querySelector('#new-note').onclick = (e) => S.newMenu(e.currentTarget);
-  grid.appendChild(nt);
+  grid.classList.toggle('list', S.lib.view === 'list');
+  $('#empty').hidden = notes.length > 0 || !$('#results').hidden;
+  $('#empty').textContent = trash ? 'ゴミ箱は空です。' : f === 'fav' ? 'お気に入りのノートはまだありません。ノートの☆を押すと、ここに並びます。' : 'ノートはまだありません。「新規」から作成するか、PDF を読み込んでください。';
+  // 先頭は「新規」(ゴミ箱では、空にするボタン)
+  if (!trash) {
+    const nt = document.createElement('div');
+    nt.className = 'card new-card';
+    nt.innerHTML = `<button id="new-note" class="cover new-cover" aria-haspopup="menu">${icon('plus', 40)}</button><div class="meta"><div class="name">新規</div></div>`;
+    nt.querySelector('#new-note').onclick = (e) => S.newMenu(e.currentTarget);
+    grid.appendChild(nt);
+  } else if (notes.length) {
+    const bar = document.createElement('div');
+    bar.className = 'trash-bar';
+    bar.innerHTML = `<p class="trash-note">表紙を押すと、元に戻すか完全に削除するかを選べます。</p><button type="button" id="empty-trash" class="danger">ゴミ箱を空にする</button>`;
+    bar.querySelector('#empty-trash').onclick = () => emptyTrash(notes);
+    grid.appendChild(bar);
+  }
   for (const n of notes) {
     const card = document.createElement('div');
-    card.className = 'card';
+    card.className = 'card' + (trash ? ' in-trash' : '');
     card.innerHTML = `
-      <a class="cover" href="#/note/${n.id}" style="--cover:${coverColor(n)}">
+      ${trash ? '<button type="button" class="cover" aria-haspopup="menu"' : `<a class="cover" href="#/note/${n.id}"`} style="--cover:${coverColor(n)}">
         <span class="label"><span class="label-title"></span></span>
-      </a>
+      ${trash ? '</button>' : '</a>'}
+      ${trash ? '' : `<button class="fav-btn${n.fav ? ' on' : ''}" type="button" data-id="${n.id}" aria-pressed="${!!n.fav}" title="お気に入り" aria-label="お気に入り">${icon('star', 18)}</button>`}
       <div class="meta">
         <button class="name-btn" aria-haspopup="menu" title="ノートの操作"><span class="name"></span>${icon('chevron', 16)}</button>
         <div class="date"></div>
       </div>`;
     card.querySelector('.label-title').textContent = n.title;
     card.querySelector('.name').textContent = n.title;
-    card.querySelector('.date').textContent = fmtDate(upd.get(n.id));
+    card.querySelector('.date').textContent = fmtDate((S.lib.sort === 'created' && n.created) || upd.get(n.id));
     const nb = card.querySelector('.name-btn');
-    nb.onclick = () => noteMenu(nb, n);
-    longPress(card.querySelector('.cover'), () => noteMenu(nb, n));
+    const menuFn = () => (trash ? trashMenu(nb, n) : noteMenu(nb, n));
+    nb.onclick = menuFn;
+    longPress(card.querySelector('.cover'), menuFn);
+    if (trash) card.querySelector('.cover').onclick = menuFn;
+    const fb = card.querySelector('.fav-btn');
+    if (fb) fb.onclick = async () => {
+      if (fb.disabled) return;
+      fb.disabled = true; // 描き直すまで連打を受けない
+      try { await setFav(n, fb.getAttribute('aria-pressed') !== 'true'); } finally { fb.disabled = false; }
+      // 描き直したあとも同じボタンにフォーカス(お気に入りの絞り込みで消えたら、帯のボタンへ)
+      ($(`#notes .fav-btn[data-id="${n.id}"]`) || $('.lib-filter .on'))?.focus();
+    };
     grid.appendChild(card);
   }
   if ($('#search').value.trim()) runSearch();
@@ -729,6 +772,8 @@ function noteMenu(anchor, n) {
       dav.schedule();
       showLibrary();
     } },
+    { icon: 'copy', label: '複製', attrs: { 'data-act': 'dup' }, onClick: () => duplicateNote(n) },
+    { icon: 'star', label: n.fav ? 'お気に入りから外す' : 'お気に入りにする', attrs: { 'data-act': 'fav' }, onClick: () => setFav(n, !n.fav) },
     { icon: 'export', label: '同期ファイルとして書き出す', attrs: { 'data-act': 'export' }, onClick: async () => {
       const json = await buildSyncFile(S.rec.device, n.id);
       if ((await download(JSON.stringify(json), `${safeName(n.title)}.daigaku.json`, 'application/json')) === 'saved') toast('書き出しました');
@@ -736,17 +781,92 @@ function noteMenu(anchor, n) {
     '-',
     { el: covers },
     '-',
-    { icon: 'trash', label: '削除', danger: true, attrs: { 'data-act': 'delete' }, onClick: async () => {
+    { icon: 'trash', label: 'ゴミ箱に入れる', danger: true, attrs: { 'data-act': 'delete' }, onClick: async () => {
       await db.putOps([S.rec.make(n.id, 'note.delete', {})], S.rec.clock);
       dav.schedule();
       showLibrary();
-      toast(`「${n.title}」を削除しました`, 6000, { label: '元に戻す', run: async () => {
+      toast(`「${n.title}」をゴミ箱に入れました`, 6000, { label: '元に戻す', run: async () => {
         await db.putOps([S.rec.make(n.id, 'note.restore', {})], S.rec.clock);
         dav.schedule();
         if (!$('#library').hidden) showLibrary();
       } });
     } },
   ], close), { align: 'start' });
+}
+
+// 本棚の上の帯: 表示するノート・並べ替え・並べ方
+function bindLibBar() {
+  for (const b of document.querySelectorAll('.lib-filter [data-f]')) b.onclick = () => { S.lib.filter = b.dataset.f; showLibrary(); };
+  $('#lib-sort').onchange = (e) => { S.lib.sort = e.target.value; savePrefs(); showLibrary(); };
+  $('#lib-view').onclick = () => { S.lib.view = S.lib.view === 'list' ? 'grid' : 'list'; savePrefs(); showLibrary(); };
+}
+async function setFav(n, fav) {
+  await db.putOps([S.rec.make(n.id, 'note.fav', { fav })], S.rec.clock);
+  dav.schedule();
+  await showLibrary();
+}
+function refreshLibBar(trashCount) {
+  for (const b of document.querySelectorAll('.lib-filter [data-f]')) {
+    const on = b.dataset.f === S.lib.filter;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', on);
+    if (b.dataset.f === 'trash') b.textContent = trashCount ? `ゴミ箱 ${trashCount}` : 'ゴミ箱';
+  }
+  $('#lib-sort').value = S.lib.sort;
+  const list = S.lib.view === 'list';
+  const vb = $('#lib-view');
+  vb.innerHTML = icon(list ? 'grid' : 'list', 20);
+  vb.title = list ? 'グリッド表示に切り替え' : 'リスト表示に切り替え';
+  vb.setAttribute('aria-label', vb.title);
+}
+
+// ゴミ箱のノートの操作: 元に戻す / 完全に削除
+function trashMenu(anchor, n) {
+  openPopover(anchor, (body, close) => menu(body, [
+    { icon: 'restore', label: '元に戻す', attrs: { 'data-act': 'restore' }, onClick: async () => {
+      await db.putOps([S.rec.make(n.id, 'note.restore', {})], S.rec.clock);
+      dav.schedule();
+      showLibrary();
+      toast(`「${n.title}」を元に戻しました`);
+    } },
+    '-',
+    { icon: 'trash', label: '完全に削除…', danger: true, attrs: { 'data-act': 'purge' }, onClick: async () => {
+      if (!(await askConfirm({ heading: '完全に削除', message: `「${n.title}」をゴミ箱から外し、本棚にも検索にも出なくします。元に戻せません。`, ok: '完全に削除', danger: true }))) return;
+      await db.putOps([S.rec.make(n.id, 'note.purge', {})], S.rec.clock);
+      dav.schedule();
+      showLibrary();
+    } },
+  ], close));
+}
+async function emptyTrash(notes) {
+  if (!(await askConfirm({ heading: 'ゴミ箱を空にする', message: `ゴミ箱の ${notes.length} 冊を外し、本棚にも検索にも出なくします。元に戻せません。`, ok: '空にする', danger: true }))) return;
+  await db.putOps(notes.map((n) => S.rec.make(n.id, 'note.purge', {})), S.rec.clock);
+  dav.schedule();
+  showLibrary();
+}
+
+// ノートを複製する: 今の状態(ページ・背景・線・画像・テキスト)を新しいノートとして作る。履歴は引き継がない
+async function duplicateNote(n) {
+  const src = emptyNote(n.id);
+  for (const op of await db.opsForNote(n.id)) applyOp(src, op);
+  const id = newId();
+  const title = `${n.title} のコピー`;
+  const ops = [S.rec.make(id, 'note.create', { title, cover: coverColor(n) })];
+  let order = 1;
+  for (const pg of pagesOf(src)) {
+    const pid = newId();
+    ops.push(S.rec.make(id, 'page.add', { page: { id: pid, w: pg.w, h: pg.h, order: order++, bg: bgOf(pg) } }));
+    for (const st of strokesOf(src, pg.id)) {
+      const d = TF.transformData(styleOf(st), st.off, TF.IDENTITY);
+      const nd = { ...d, id: newId(), pageId: pid };
+      ops.push(S.rec.make(id, addType(nd), { s: nd }));
+    }
+  }
+  await db.putOps(ops, S.rec.clock);
+  search.markNoteDirty(id); // PDF の文字を検索できるように
+  dav.schedule();
+  showLibrary();
+  toast(`「${title}」を作りました`);
 }
 
 // ---------- エディタのツールバー ----------
@@ -1424,7 +1544,7 @@ async function openNote(id, pageId) {
     const ops = await db.opsForNote(id);
     const note = emptyNote(id);
     for (const op of ops) applyOp(note, op);
-    if (!note.titleS || note.deleted) { location.hash = '#/'; return; }
+    if (!note.titleS || note.deleted || note.purged) { location.hash = '#/'; return; }
     if (!accountUI.loggedIn()) return; // 読み込んでいるあいだにログインが切れた(ログインのページを出したまま)
     S.note = note;
     S.undo = [];
