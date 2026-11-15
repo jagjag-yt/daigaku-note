@@ -301,6 +301,16 @@
     </form>
   </dialog>
 
+  <div id="timer" class="timer" hidden role="timer" aria-label="タイマー">
+    <div class="tm-head"><span class="tm-grip" aria-hidden="true"></span><button type="button" class="tm-x icon-btn small" data-icon="close" data-icon-size="16" aria-label="タイマーを閉じる" title="閉じる"></button></div>
+    <div class="tm-seg seg" role="radiogroup" aria-label="タイマーの種類">
+      <label><input type="radio" name="tm-mode" value="down" checked><span>タイマー</span></label>
+      <label><input type="radio" name="tm-mode" value="up"><span>ストップウォッチ</span></label>
+    </div>
+    <div class="tm-time" aria-live="off">00:00</div>
+    <div class="tm-presets"><button type="button" data-min="1">1分</button><button type="button" data-min="5">5分</button><button type="button" data-min="10">10分</button><button type="button" data-min="25">25分</button><button type="button" data-min="custom">…</button></div>
+    <div class="tm-ctrl"><button type="button" class="tm-start primary">開始</button><button type="button" class="tm-reset">リセット</button></div>
+  </div>
   <div id="toast" hidden><span id="toast-msg"></span><button id="toast-act" type="button" hidden></button></div>
   <script type="module" src="js/app.js"></script>
 </body>

@@ -50,7 +50,7 @@ const PEN_NIBS = {
 };
 const PEN_DEFAULTS = { nib: 'fountain', sens: 50, stab: 0, dash: '', shape: '' }; // shape: ドラッグで描く図形(空ならふつうに書く)
 
-const APP_VERSION = 'v45'; // sw.js の VERSION と合わせる
+const APP_VERSION = 'v46'; // sw.js の VERSION と合わせる
 const MAX_TABS = 12; // 開いておけるタブの数
 const DEFAULT_HIDDEN = ['laser']; // 最初は隠しておく道具(設定やその他のメニューから使う)
 
@@ -1732,6 +1732,7 @@ function moreMenu(anchor) {
     { icon: 'rename', label: '名前を変更', onClick: renameNote },
     { icon: 'laser', label: 'レーザーポインター', id: 'laser-menu', on: S.tool === 'laser', onClick: () => setTool(S.tool === 'laser' ? (S.prevTool && S.prevTool !== 'laser' ? S.prevTool : 'pen') : 'laser') },
     { icon: 'ruler', label: '定規', id: 'ruler-menu', on: !!S.ruler, onClick: () => toggleRuler() },
+    { icon: 'timer', label: 'タイマー', id: 'timer-menu', on: !$('#timer').hidden, onClick: () => toggleTimer() },
     { icon: 'settings', label: '設定…', id: 'open-settings', onClick: openSettings },
     // 図形補正のボタンはスマホ幅ではツールバーに出さないので、ここからも切り替えられるようにする
     { icon: 'shapes', label: '図形補正', id: 'shapes-menu', on: S.shapes, onClick: () => $('#shapes').click() },
@@ -1920,6 +1921,7 @@ function bindEditor() {
   $('#back').onclick = () => (location.hash = '#/');
   for (const t of ['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky', 'laser']) $('#tool-' + t).onclick = () => setTool(t);
   bindRuler();
+  bindTimer();
   for (const c of STICKY_COLORS) {
     const b = document.createElement('button');
     b.className = 'swatch sticky-c';
@@ -2445,6 +2447,149 @@ function laserFade(a) {
     g.style.opacity = '0';
     setTimeout(() => { if (g.isConnected && !(active && active.v === a.v)) paintLive(a.v, ''); }, 650);
   }, 700);
+}
+
+// ---------- タイマー(どの画面でも前に出る小さな窓。ドラッグで動かす) ----------
+const TM = { mode: 'down', total: 5 * 60 * 1000, left: 5 * 60 * 1000, up: 0, running: false, endAt: 0, startAt: 0, tick: 0, end: 0, ac: null };
+function toggleTimer(on = $('#timer').hidden) {
+  $('#timer').hidden = !on;
+  if (on) { showTimer(); clampTimer(); $('#timer .tm-start').focus(); }
+}
+// 動かした位置を画面の中に収める(画面の向き・大きさが変わったとき)
+function clampTimer() {
+  const el = $('#timer');
+  if (el.hidden || !el.style.left) return;
+  el.style.left = Math.min(Math.max(4, parseFloat(el.style.left)), innerWidth - el.offsetWidth - 4) + 'px';
+  el.style.top = Math.min(Math.max(4, parseFloat(el.style.top)), innerHeight - el.offsetHeight - 4) + 'px';
+}
+const fmtMs = (ms) => {
+  const t = Math.max(0, Math.ceil(ms / 1000)), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : String(m).padStart(2, '0')) + ':' + String(s).padStart(2, '0');
+};
+function timerNow() {
+  if (TM.mode === 'down') return TM.running ? TM.endAt - Date.now() : TM.left;
+  return TM.running ? TM.up + Date.now() - TM.startAt : TM.up;
+}
+function showTimer() {
+  const el = $('#timer');
+  el.querySelector('.tm-time').textContent = fmtMs(timerNow());
+  el.querySelector('.tm-start').textContent = TM.running ? '一時停止' : timerNow() > 0 && timerNow() !== (TM.mode === 'down' ? TM.total : 0) ? '再開' : '開始';
+  el.querySelector('.tm-presets').hidden = TM.mode !== 'down';
+  el.classList.toggle('running', TM.running);
+  el.classList.toggle('done', TM.mode === 'down' && !TM.running && TM.left <= 0);
+}
+// 時間になったときの知らせ(音は「開始」を押したときに用意した AudioContext で鳴らす。鳴らせなくても画面と振動で分かる)
+function timerFinish() {
+  if (!TM.running || TM.mode !== 'down') return;
+  TM.running = false;
+  TM.left = 0;
+  clearTimeout(TM.tick);
+  showTimer();
+  navigator.vibrate?.([200, 100, 200]);
+  const ac = TM.ac;
+  const beep = () => {
+    try {
+      for (let i = 0; i < 3; i++) {
+        const o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime + i * 0.35;
+        o.frequency.value = 880;
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.25, t + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+        o.connect(g).connect(ac.destination);
+        o.start(t);
+        o.stop(t + 0.3);
+      }
+    } catch {}
+  };
+  if (ac) Promise.resolve(ac.resume?.()).then(beep, beep); // 止まっていたら動かしてから鳴らす
+  $('#timer').hidden = false;
+  clampTimer();
+  toast('時間になりました', 6000);
+}
+// 表示の更新(200ms ごと)。終わりの知らせは別に予約する(タブが裏にあっても、なるべく時間どおりに)
+function timerLoop() {
+  clearTimeout(TM.tick);
+  clearTimeout(TM.end);
+  if (!TM.running) return;
+  if (TM.mode === 'down') {
+    const left = TM.endAt - Date.now();
+    if (left <= 0) return timerFinish();
+    TM.end = setTimeout(timerFinish, left);
+  }
+  showTimer();
+  TM.tick = setTimeout(timerLoop, 200);
+}
+function timerStop() {
+  if (!TM.running) return;
+  if (TM.mode === 'down') TM.left = TM.endAt - Date.now(); else TM.up += Date.now() - TM.startAt;
+  TM.running = false;
+  clearTimeout(TM.tick);
+  clearTimeout(TM.end);
+}
+function setTimerMinutes(min) {
+  timerStop();
+  TM.mode = 'down';
+  TM.total = TM.left = Math.round(min * 60 * 1000);
+  showTimer();
+}
+function bindTimer() {
+  const el = $('#timer');
+  el.querySelector('.tm-x').onclick = () => toggleTimer(false);
+  for (const r of el.querySelectorAll('input[name=tm-mode]')) r.onchange = () => {
+    timerStop(); // 動いている途中で切り替えたら止める
+    TM.mode = r.value;
+    showTimer();
+  };
+  for (const b of el.querySelectorAll('.tm-presets [data-min]')) b.onclick = async () => {
+    let min = +b.dataset.min;
+    if (b.dataset.min === 'custom') {
+      const v = await askName('タイマーの時間(分)', String(Math.round(TM.total / 60000)));
+      min = parseFloat((v || '').replace(/[^\d.]/g, ''));
+      if (!(min >= 1) || min > 24 * 60) return v && toast('1分から1440分までの数字で入れてください');
+    }
+    setTimerMinutes(min);
+  };
+  el.querySelector('.tm-start').onclick = () => {
+    // 音を鳴らす準備は、押したとき(操作のあと)にしておく(iPad などは操作の無い所では音を出せない)
+    if (!TM.ac) { try { TM.ac = new (window.AudioContext || window.webkitAudioContext)(); } catch {} }
+    TM.ac?.resume?.();
+    if (TM.running) timerStop();
+    else {
+      if (TM.mode === 'down') { if (TM.left <= 0) TM.left = TM.total; TM.endAt = Date.now() + TM.left; } else TM.startAt = Date.now();
+      TM.running = true;
+    }
+    showTimer();
+    timerLoop();
+  };
+  el.querySelector('.tm-reset').onclick = () => {
+    timerStop();
+    if (TM.mode === 'down') TM.left = TM.total; else TM.up = 0;
+    showTimer();
+  };
+  // 上の帯をつかんで動かす(画面の外へは出さない)
+  let drag = null;
+  const head = el.querySelector('.tm-head');
+  head.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button')) return;
+    const r = el.getBoundingClientRect();
+    drag = { id: e.pointerId, dx: e.clientX - r.left, dy: e.clientY - r.top };
+    try { head.setPointerCapture(e.pointerId); } catch {}
+    e.preventDefault();
+  });
+  head.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const w = el.offsetWidth, h = el.offsetHeight;
+    el.style.left = Math.min(Math.max(4, e.clientX - drag.dx), innerWidth - w - 4) + 'px';
+    el.style.top = Math.min(Math.max(4, e.clientY - drag.dy), innerHeight - h - 4) + 'px';
+    el.style.right = 'auto';
+  });
+  const end = (e) => { if (drag && e.pointerId === drag.id) drag = null; };
+  head.addEventListener('pointerup', end);
+  head.addEventListener('pointercancel', end);
+  // 画面に戻ったら、止まっていた間の分も進める(バックグラウンドでは描き直しが止まるため)
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && TM.running) timerLoop(); });
+  // 画面の大きさ・向きが変わったら、画面の中に収め直す
+  window.addEventListener('resize', clampTimer);
 }
 
 // ---------- 定規(画面の上に置く。ペン・蛍光ペンを縁に沿わせる) ----------

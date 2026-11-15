@@ -768,3 +768,18 @@ body:has(#editor.tb-bottom:not([hidden])) #toast { bottom: calc(72px + var(--sa-
 .ruler-x { position: absolute; left: 4px; top: 50%; margin-top: -14px; width: 28px; min-width: 28px; height: 28px; min-height: 28px; color: #1f2937; background: rgba(255,255,255,.7); }
 :root[data-theme="dark"] .ruler { --ruler-bg: rgba(150, 175, 210, .55); }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .ruler { --ruler-bg: rgba(150, 175, 210, .55); } }
+/* タイマー */
+.timer { position: fixed; right: max(16px, var(--sa-right)); top: calc(110px + var(--sa-top)); z-index: 25; width: 236px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 8px 28px rgba(0,0,0,.22); padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.timer[hidden] { display: none; }
+.tm-head { display: flex; align-items: center; justify-content: center; position: relative; height: 28px; cursor: grab; touch-action: none; }
+.tm-grip { width: 36px; height: 4px; border-radius: 2px; background: var(--line-strong); }
+.tm-x { position: absolute; right: -6px; top: 0; width: 28px; min-width: 28px; height: 28px; min-height: 28px; }
+.tm-seg { justify-content: center; }
+.tm-seg span { min-height: 30px; padding: 0 10px; font-size: 13px; }
+.tm-time { font-size: 40px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; letter-spacing: .02em; line-height: 1.1; }
+.timer.done .tm-time { color: var(--danger); animation: tm-blink 1s steps(2, start) 4; }
+@keyframes tm-blink { to { visibility: hidden; } }
+.tm-presets { display: flex; gap: 4px; justify-content: center; }
+.tm-presets button { min-height: 30px; padding: 0 8px; font-size: 13px; border-radius: 999px; }
+.tm-ctrl { display: flex; gap: 8px; }
+.tm-ctrl button { flex: 1; }
