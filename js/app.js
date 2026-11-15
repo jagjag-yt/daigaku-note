@@ -74,6 +74,7 @@ const S = {
   lasso: { mode: 'free', pick: { pen: true, marker: true, image: true, text: true } },
   // テキストの道具で新しく置く文字の設定(書いている途中のテキストボックスは S.edit の中に持つ)
   text: { color: '#1f2937', size: 16, font: '', bold: false, italic: false, underline: false, strike: false, align: '', bg: 'none' },
+  sticky: { color: '#fef08a' }, // 次に貼る付箋の色
   edit: null, // 書いている途中のテキストボックス { v, id(書き直しのとき), d, ta }
   palettes: { pen: [...PEN_PALETTE], marker: [...MARKER_PALETTE] }, // 色のプリセット(編集できる)
   colorHist: { pen: [], marker: [] }, // 最近使った色
@@ -133,7 +134,8 @@ async function init() {
     if (prefs.lasso.pick) S.lasso.pick = { ...S.lasso.pick, ...prefs.lasso.pick };
   }
   try { const c = JSON.parse(localStorage.getItem(CLIP_KEY) || 'null'); if (c && Array.isArray(c.items) && c.items.length) S.clip = c; } catch {}
-  if (['pen', 'marker', 'eraser', 'lasso', 'text'].includes(prefs.tool)) S.tool = prefs.tool;
+  if (['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky'].includes(prefs.tool)) S.tool = prefs.tool;
+  if (prefs.sticky && STICKY_COLORS.includes(prefs.sticky.color)) S.sticky = { color: prefs.sticky.color };
   if (prefs.text && typeof prefs.text === 'object') {
     const t = { ...S.text, ...prefs.text };
     t.size = Math.max(6, Math.min(96, Number(t.size) || 16));
@@ -172,7 +174,7 @@ async function init() {
 }
 
 function savePrefs() {
-  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text });
+  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text, sticky: S.sticky });
 }
 
 function route() {
@@ -763,15 +765,22 @@ function buildToolbar() {
 }
 
 function refreshToolbar() {
-  for (const t of ['pen', 'marker', 'eraser', 'lasso', 'text']) {
+  for (const t of ['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky']) {
     const b = $('#tool-' + t);
     b.classList.toggle('on', S.tool === t);
     b.setAttribute('aria-pressed', S.tool === t);
   }
   // テキストの道具: 色と太さの場所に、文字の色と文字の設定を出す
-  const textMode = S.tool === 'text';
-  for (const id of ['#colors', '#sep-widths', '#widths']) $(id).hidden = textMode;
+  // 付箋のときは、付箋の色を並べる(書いている途中の付箋なら、文字の設定も出す)
+  const stickyMode = S.tool === 'sticky';
+  const textMode = S.tool === 'text' || (stickyMode && !!S.edit);
+  for (const id of ['#colors', '#sep-widths', '#widths']) $(id).hidden = textMode || stickyMode;
   $('#text-opts').hidden = !textMode;
+  $('#sticky-opts').hidden = !stickyMode;
+  if (stickyMode) {
+    const cur = S.edit && isSticky(S.edit.d) ? S.edit.d.fill : S.sticky.color;
+    for (const b of $('#sticky-opts').children) { const on = b.dataset.c === cur; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); }
+  }
   if (textMode) {
     const t = textState();
     $('#text-color').style.setProperty('--c', t.color);
@@ -1196,7 +1205,7 @@ function lassoPopover(anchor) {
 }
 
 function setTool(t) {
-  if (S.edit && t !== 'text') commitText();
+  if (S.edit && t !== S.tool) commitText(); // 道具を変えたら、書いている途中の文字を確定する
   if (t !== 'lasso') clearSelection();
   // 選んでいる道具をもう一度押すと、その道具の設定を出す
   if (S.tool === t) {
@@ -1270,7 +1279,19 @@ async function renameNote() {
 
 function bindEditor() {
   $('#back').onclick = () => (location.hash = '#/');
-  for (const t of ['pen', 'marker', 'eraser', 'lasso', 'text']) $('#tool-' + t).onclick = () => setTool(t);
+  for (const t of ['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky']) $('#tool-' + t).onclick = () => setTool(t);
+  for (const c of STICKY_COLORS) {
+    const b = document.createElement('button');
+    b.className = 'swatch sticky-c';
+    b.dataset.c = c;
+    b.style.setProperty('--c', c);
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-label', '付箋の色: ' + (STICKY_NAMES[c] || c));
+    b.title = STICKY_NAMES[c] || c;
+    // 幅 800px 以下(10色が並びきらない)では今の色だけを出すので、押したら全部の色を出す(style.css と同じ境目)
+    b.onclick = () => (window.innerWidth <= 800 && b.classList.contains('on') ? stickyColorPopover(b) : setStickyColor(c));
+    $('#sticky-opts').appendChild(b);
+  }
   $('#text-color').onclick = (e) => textColorPopover(e.currentTarget);
   $('#text-style').onclick = (e) => textStylePopover(e.currentTarget);
   $('#shapes').onclick = () => {
@@ -1309,6 +1330,7 @@ function bindEditor() {
     else if (k === 'e') setTool('eraser');
     else if (k === 'l') setTool('lasso');
     else if (k === 't') setTool('text');
+    else if (k === 'n') setTool('sticky');
     else if ((k === 'delete' || k === 'backspace') && S.sel) deleteSelection();
     else if (k === 'escape') clearSelection();
   });
@@ -1709,7 +1731,7 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v31\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v32\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 図形補正の様子(最後の数本): オン/オフ、最後に止めていた時間と揺れ、整えた結果
 const debugShapes = [];
@@ -1862,8 +1884,8 @@ function onDown(e) {
   if (eraser) {
     active = { id: e.pointerId, v, kind: 'erase', hits: new Set(), cut: S.eraser.mode !== 'stroke' ? new Map() : null, byTool: S.tool === 'eraser' };
     eraseAt(e);
-  } else if (S.tool === 'text') {
-    // 離したときに、押した所へ文字を打つ(動かしたら何もしない)
+  } else if (S.tool === 'text' || S.tool === 'sticky') {
+    // 離したときに、押した所へ文字を打つ・付箋を貼る(動かしたら何もしない)
     active = { id: e.pointerId, v, kind: 'texttap', x, y, cx: e.clientX, cy: e.clientY };
   } else if (S.tool === 'lasso') {
     const b = S.sel && S.sel.pageId === v.pg.id && S.sel.box;
@@ -2344,6 +2366,49 @@ const TEXT_FONTS = [['', '標準'], ['serif', '明朝'], ['mono', '等幅']];
 // いま変える対象: 書いている途中ならそのテキストボックス、そうでなければ新しく置くときの設定
 const textState = () => (S.edit ? S.edit.d : S.text);
 
+// ---------- 付箋 ----------
+const STICKY_COLORS = ['#fca5a5', '#fdba74', '#fef08a', '#bbf7d0', '#99f6e4', '#bfdbfe', '#ddd6fe', '#fbcfe8', '#e5e7eb', '#ffffff'];
+const STICKY_NAMES = { '#fca5a5': '赤', '#fdba74': '橙', '#fef08a': '黄', '#bbf7d0': '緑', '#99f6e4': '青緑', '#bfdbfe': '水色', '#ddd6fe': '紫', '#fbcfe8': '桃', '#e5e7eb': '灰', '#ffffff': '白' };
+const STICKY_SIZE = 140; // 付箋の一辺(pt)
+// 付箋か(この道具で貼ったもの・GoodNotes から取り込んだもの。取り込んだ付箋は下の小さな文字 foot で見分ける)
+const isSticky = (d) => !!(d && (d.sticky || d.foot));
+// 付箋の色を全部並べる(スマホ幅ではツールバーに今の色だけを出すので、押したらこれを出す)
+function stickyColorPopover(anchor) {
+  openPopover(anchor, (body, close) => {
+    body.classList.add('palette');
+    const cur = S.edit && isSticky(S.edit.d) ? S.edit.d.fill : S.sticky.color;
+    body.innerHTML = `<div class="pal-grid sticky-grid">${STICKY_COLORS.map((c) => `<button type="button" class="pal-c${c === cur ? ' on' : ''}" data-c="${c}" style="--c:${c}" title="${STICKY_NAMES[c]}" aria-label="付箋の色: ${STICKY_NAMES[c]}" aria-pressed="${c === cur}"></button>`).join('')}</div>`;
+    body.querySelectorAll('.pal-c').forEach((b) => (b.onclick = () => { setStickyColor(b.dataset.c); close(); }));
+  }, { onClose: () => S.edit?.ta.focus() });
+}
+function placeSticky(v, x, y) {
+  const s = Math.min(STICKY_SIZE, v.pg.w - 8, v.pg.h - 8);
+  const x0 = Math.max(4, Math.min(x - s / 2, v.pg.w - s - 4)), y0 = Math.max(4, Math.min(y - s / 2, v.pg.h - s - 4));
+  const now = new Date();
+  const d = {
+    tool: 'text', sticky: true, text: '', size: 14, font: '', color: '#1f2937', pad: 10, padT: 10, wrap: true, width: 0,
+    fill: S.sticky.color, radius: 2, foot: `${now.getMonth() + 1}/${now.getDate()}`,
+    border: S.sticky.color === '#ffffff' ? { w: 1, color: '#d1d5db' } : undefined,
+    pts: cornerPts(x0, y0, s, s),
+  };
+  if (!d.border) delete d.border;
+  openTextEditor(v, null, d);
+}
+// 付箋の色: 書いている途中の付箋ならその付箋に、そうでなければ次に貼る付箋に
+function setStickyColor(c) {
+  if (S.edit && isSticky(S.edit.d)) {
+    const d = S.edit.d;
+    d.fill = c;
+    if (c === '#ffffff') d.border = { w: 1, color: '#d1d5db' }; else delete d.border;
+    styleTextEditor();
+    S.edit.ta.focus();
+  } else {
+    S.sticky.color = c;
+    savePrefs();
+  }
+  refreshToolbar();
+}
+
 // テキストボックスのデータを、文字の設定から作る(位置と幅はあとで決める)
 function textData(t) {
   const bg = TEXT_BGS[t.bg] || TEXT_BGS.none;
@@ -2364,6 +2429,7 @@ function textTap(v, x, y) {
     return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
   })());
   if (hit) return openTextEditor(v, hit);
+  if (S.tool === 'sticky') return placeSticky(v, x, y);
   const d = textData(S.text);
   // 幅: 押した所からページの右端の少し手前まで(最大 260pt、最小 80pt)
   const w = Math.max(80, Math.min(260, v.pg.w - x - 12));
@@ -2390,7 +2456,9 @@ function openTextEditor(v, st, d0) {
   ta.spellcheck = false;
   v.el.appendChild(ta);
   // 取り込んだテキスト(bg なし)は、書き直しても元の枠の高さより小さくしない(付箋などの見た目を保つ)
-  S.edit = { v, id: st ? st.id : null, d, ta, keepH: st && !st.data.bg ? itemRect(d).h : 0, orig: st ? textKey(styleOf(st)) : null };
+  // 付箋は四角のまま(文字が少なくても小さくしない)
+  const keep = isSticky(d) || (st && !st.data.bg) ? itemRect(d).h : 0;
+  S.edit = { v, id: st ? st.id : null, d, ta, keepH: keep, orig: st ? textKey(styleOf(st)) : null };
   if (st) paintInk(v, new Set([st.id])); // 書き直している間は、元の文字を隠す
   ta.addEventListener('input', () => { d.text = ta.value; sizeTextEditor(); });
   ta.addEventListener('keydown', (e) => {
@@ -2423,7 +2491,8 @@ function sizeTextEditor() {
   const ta = S.edit?.ta;
   if (!ta) return;
   ta.style.height = 'auto';
-  ta.style.height = ta.scrollHeight + 'px';
+  // 付箋・取り込んだテキストは、書いている間も元の大きさより小さくしない
+  ta.style.height = Math.max(ta.scrollHeight, (S.edit.keepH || 0) * S.zoom) + 'px';
 }
 
 // 書き終える: 空なら置かない(書き直しなら消す)。高さは文字に合わせる
@@ -2437,7 +2506,8 @@ async function commitText() {
   const text = (ta.value || '').replace(/\s+$/, '');
   const old = id && S.note.strokes.get(id);
   const oldText = old ? styleOf(old).text : null;
-  if (!text) {
+  // 付箋は、何も書かずに閉じても・書き直しで空にしても貼ったまま(消すときは投げ縄で)
+  if (!text && !isSticky(d)) {
     if (old) {
       pushUndo({ undo: [['stroke.undel', { ids: [id] }]], redo: [['stroke.del', { ids: [id] }]], pages: [v.pg.id] });
       await commit([mk('stroke.del', { ids: [id] })]);
@@ -2765,7 +2835,7 @@ async function recolorSelection(color) {
 function gestureDown(e) {
   const sc = $('#scroller');
   // テキストの道具では、指で軽く押しても文字を打てるようにする(動かしたらスクロール)
-  if (S.tool === 'text' && touches.size === 0) tapStart = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), target: e.target };
+  if ((S.tool === 'text' || S.tool === 'sticky') && touches.size === 0) tapStart = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), target: e.target };
   else tapStart = null;
   try { sc.setPointerCapture(e.pointerId); } catch {}
   stopInertia();
