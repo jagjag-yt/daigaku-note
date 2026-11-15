@@ -113,6 +113,7 @@
           <button id="tool-lasso" class="tool" data-icon="lasso" data-icon-size="24" title="投げ縄で選択・移動 (L)" aria-label="投げ縄"></button>
           <button id="tool-text" class="tool" data-icon="text" data-icon-size="24" title="テキスト (T): 押した所に文字を打つ。文字を押すと書き直す" aria-label="テキスト"></button>
           <button id="tool-sticky" class="tool" data-icon="sticky" data-icon-size="24" title="付箋 (N): 押した所に付箋を貼る" aria-label="付箋"></button>
+          <button id="tool-image" class="tool" data-icon="image" data-icon-size="24" title="画像を入れる(写真・ファイル・カメラ。貼り付け・ドラッグでも入る)" aria-label="画像を入れる"></button>
           <button id="shapes" class="tool" data-icon="shapes" data-icon-size="24" title="図形補正: 書き終えると、直線・折れ線・弧・円・三角形・四角形などに整えます(ペンを止めると、離す前に確かめられます)" aria-label="図形補正"></button>
         </div>
         <div class="tb-sep"></div>
@@ -126,6 +127,7 @@
         </div>
       </div>
       <input id="pdf-add-input" type="file" accept="application/pdf,.pdf" hidden>
+      <input id="img-input" type="file" accept="image/*" multiple hidden>
     </header>
     <div class="ed-body">
       <aside id="sidebar" class="sidebar" hidden aria-label="ページ一覧">
