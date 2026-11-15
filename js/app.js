@@ -13,6 +13,7 @@ import * as accountUI from './account-ui.js';
 import { icon, fillIcons, openPopover, closePopover, menu, retargetPopover, popoverOpen, safeRect } from './ui.js';
 import * as native from './native.js';
 import * as TF from './transform.js';
+import * as ER from './erase.js';
 
 const $ = (s) => document.querySelector(s);
 // 色と太さは道具ごとに3つずつ「よく使うもの」として並べる。選んでいるものをもう一度押すと入れ替えられる
@@ -48,7 +49,10 @@ const S = {
     marker: { colors: [...MARKER_COLORS], widths: [...MARKER_WIDTHS] },
   },
   sidebar: false,
-  eraser: { si: 1, markerOnly: false },
+  // 消しゴム: mode = stroke(線ごと)/ normal(なぞった所だけ)/ precise(なぞった所だけ・細かく)。
+  // pick = 消すものの種類。back = 消し終わったら前の道具に戻す
+  eraser: { si: 1, mode: 'stroke', pick: { pen: true, marker: true }, back: false },
+  prevTool: 'pen', // 消しゴムに切り替える前の道具
   fit: true, // 幅に合わせた拡大率のままか(手で拡大したら false)
   fingerDraw: false,
   shapes: false, // 図形補正(既定はオフ)
@@ -92,7 +96,15 @@ async function init() {
     if (!(S[k].ci >= 0 && S.slots[k].colors[S[k].ci] === S[k].color)) S[k].ci = S.slots[k].colors.indexOf(S[k].color);
     if (!(S[k].wi >= 0 && S.slots[k].widths[S[k].wi] === S[k].width)) S[k].wi = S.slots[k].widths.indexOf(S[k].width);
   }
-  if (prefs.eraser) S.eraser = { ...S.eraser, ...prefs.eraser };
+  if (prefs.eraser) {
+    const pe = prefs.eraser;
+    S.eraser = { ...S.eraser, ...pe, pick: { ...S.eraser.pick, ...(pe.pick || {}) } };
+    // 以前の「蛍光ペンだけ消す」は、消すものの種類(ペンをオフ)に読み替える
+    if (pe.markerOnly && !pe.pick) S.eraser.pick.pen = false;
+    delete S.eraser.markerOnly;
+    if (!ERASER_MODES[S.eraser.mode]) S.eraser.mode = 'stroke';
+    if (!S.eraser.pick.pen && !S.eraser.pick.marker) S.eraser.pick = { pen: true, marker: true }; // 何も消せない設定にはしない
+  }
   if (prefs.lasso) {
     if (prefs.lasso.mode === 'rect' || prefs.lasso.mode === 'free') S.lasso.mode = prefs.lasso.mode;
     if (prefs.lasso.pick) S.lasso.pick = { ...S.lasso.pick, ...prefs.lasso.pick };
@@ -699,17 +711,12 @@ function buildToolbar() {
     w.onclick = () => onWidthSlot(w, i);
     ws.appendChild(w);
   }
-  // 消しゴムのときは、色の場所に「蛍光ペンだけ消す」のスイッチを出す
+  // 消しゴムのときは、色の場所に消しゴムの種類のボタンを出す(押すと種類・消すものを選べる)
   const em = document.createElement('button');
-  em.id = 'eraser-marker';
+  em.id = 'eraser-kind';
   em.className = 'chip';
-  em.innerHTML = `${icon('marker', 18)}<span>蛍光ペンだけ</span>`;
-  em.title = 'オンにすると、蛍光ペンの線だけを消します';
-  em.onclick = () => {
-    S.eraser.markerOnly = !S.eraser.markerOnly;
-    savePrefs();
-    refreshToolbar();
-  };
+  em.innerHTML = `${icon('eraser', 18)}<span class="chip-label"></span>${icon('chevron', 14)}`;
+  em.onclick = () => eraserPopover(em);
   sw.appendChild(em);
 }
 
@@ -726,11 +733,14 @@ function refreshToolbar() {
   sh.setAttribute('aria-pressed', S.shapes);
   sh.disabled = S.tool !== 'pen' && S.tool !== 'marker';
   const er = $('#tool-eraser');
-  er.classList.toggle('marker-only', !!S.eraser.markerOnly);
-  er.title = S.eraser.markerOnly ? '消しゴム(蛍光ペンだけ消す) (E)' : '消しゴム (E)';
-  const em = $('#eraser-marker');
-  em.classList.toggle('on', !!S.eraser.markerOnly);
-  em.setAttribute('aria-pressed', !!S.eraser.markerOnly);
+  const only = eraserOnlyLabel();
+  er.classList.toggle('marker-only', only === '蛍光ペン');
+  er.title = `消しゴム(${ERASER_MODES[S.eraser.mode].label}${only ? '・' + only + 'だけ' : ''}) (E)`;
+  const em = $('#eraser-kind');
+  em.querySelector('.chip-label').textContent = ERASER_MODES[S.eraser.mode].short;
+  em.classList.toggle('on', !!only);
+  em.title = '消しゴムの種類・消すもの' + (only ? `(いまは${only}だけ消す)` : '');
+  em.setAttribute('aria-label', `消しゴムの種類: ${ERASER_MODES[S.eraser.mode].label}` + (only ? `、${only}だけ消す` : ''));
   $('#undo').disabled = !S.undo.length;
   $('#redo').disabled = !S.redo.length;
   $('#pages-btn').classList.toggle('on', S.sidebar);
@@ -906,14 +916,62 @@ function eraserSizePopover(anchor) {
   })), close));
 }
 
+const ERASER_MODES = {
+  precise: { label: '正確な消しゴム', short: '正確', note: 'なぞった所だけを、普通の半分の幅で細かく消します' },
+  normal: { label: '普通の消しゴム', short: '普通', note: 'なぞった所だけを消します' },
+  stroke: { label: 'ストローク消しゴム', short: 'ストローク', note: '触れた線を丸ごと消します' },
+};
+// 消すものを絞っているときの名前(絞っていなければ空)
+function eraserOnlyLabel() {
+  const p = S.eraser.pick;
+  if (p.pen && p.marker) return '';
+  return p.pen ? 'ペン' : '蛍光ペン';
+}
 function eraserPopover(anchor) {
-  openPopover(anchor, (body, close) => menu(body, [
-    { icon: 'marker', label: '蛍光ペンだけ消す', id: 'eraser-marker-only', on: S.eraser.markerOnly, onClick: () => {
-      S.eraser.markerOnly = !S.eraser.markerOnly;
+  openPopover(anchor, (body, close) => {
+    const head = document.createElement('div');
+    head.className = 'lasso-head';
+    head.innerHTML = '<span class="menu-cap">消しゴムの種類</span><div class="seg lasso-mode eraser-mode-seg" role="radiogroup" aria-label="消しゴムの種類"></div><p class="menu-note"></p><span class="menu-cap">消すもの</span>';
+    const seg = head.querySelector('.eraser-mode-seg'), note = head.querySelector('.menu-note');
+    const show = () => {
+      for (const x of seg.children) { x.classList.toggle('on', x.dataset.mode === S.eraser.mode); x.setAttribute('aria-checked', x.dataset.mode === S.eraser.mode); }
+      note.textContent = ERASER_MODES[S.eraser.mode].note;
+    };
+    for (const [mode, m] of Object.entries(ERASER_MODES)) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.dataset.mode = mode;
+      b.textContent = m.short;
+      b.setAttribute('role', 'radio');
+      b.onclick = () => { S.eraser.mode = mode; savePrefs(); show(); refreshToolbar(); };
+      seg.appendChild(b);
+    }
+    show();
+    const toggle = (k) => (b) => {
+      const p = S.eraser.pick;
+      if (p[k] && Object.values(p).filter(Boolean).length === 1) return toast('少なくとも1つは消せるようにしてください');
+      p[k] = !p[k];
+      b.classList.toggle('checked', p[k]);
+      b.setAttribute('aria-checked', p[k]);
+      b.querySelector('.switch')?.classList.toggle('on', p[k]);
       savePrefs();
       refreshToolbar();
-    } },
-  ], close));
+    };
+    menu(body, [
+      { el: head },
+      { icon: 'pen', label: 'ペン', on: S.eraser.pick.pen, keepOpen: true, attrs: { 'data-pick': 'pen' }, onClick: toggle('pen') },
+      { icon: 'marker', label: '蛍光ペン', on: S.eraser.pick.marker, keepOpen: true, attrs: { 'data-pick': 'marker' }, onClick: toggle('marker') },
+      '-',
+      { icon: 'back', label: '消したら前の道具に戻す', id: 'eraser-back', on: S.eraser.back, keepOpen: true, onClick: (b) => {
+        S.eraser.back = !S.eraser.back;
+        b.classList.toggle('checked', S.eraser.back);
+        b.setAttribute('aria-checked', S.eraser.back);
+        b.querySelector('.switch')?.classList.toggle('on', S.eraser.back);
+        savePrefs();
+      } },
+      { icon: 'trash', label: 'このページを消去…', id: 'clear-page', danger: true, onClick: () => clearPage(currentPage()) },
+    ], close);
+  });
 }
 
 // 投げ縄の設定: 囲み方と、選ぶものの種類
@@ -963,6 +1021,7 @@ function setTool(t) {
     return;
   }
   closePopover();
+  if (t === 'eraser' && S.tool !== 'eraser') S.prevTool = S.tool;
   S.tool = t;
   savePrefs();
   refreshToolbar();
@@ -1455,7 +1514,7 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v27\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v28\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 図形補正の様子(最後の数本): オン/オフ、最後に止めていた時間と揺れ、整えた結果
 const debugShapes = [];
@@ -1603,7 +1662,7 @@ function onDown(e) {
   const [x, y] = pagePoint(v, e);
   const eraser = S.tool === 'eraser' || (e.buttons & 32) || e.button === 5;
   if (eraser) {
-    active = { id: e.pointerId, v, kind: 'erase', hits: new Set() };
+    active = { id: e.pointerId, v, kind: 'erase', hits: new Set(), cut: S.eraser.mode !== 'stroke' ? new Map() : null, byTool: S.tool === 'eraser' };
     eraseAt(e);
   } else if (S.tool === 'lasso') {
     const b = S.sel && S.sel.pageId === v.pg.id && S.sel.box;
@@ -1822,17 +1881,59 @@ function holdCheck(a, e) {
   }, HOLD_MS);
 }
 
+// 消しゴムが消せる線か(画像・テキストは消さない。消すものの種類で絞る)
+const erasable = (d) => !isItem(d) && (d.tool === 'marker' ? S.eraser.pick.marker : S.eraser.pick.pen);
+
 function eraseAt(e) {
   const a = active;
   const [x, y] = pagePoint(a.v, e);
-  const r = ERASER_SIZES[S.eraser.si ?? 1] / S.zoom;
-  let changed = false;
-  for (const st of strokesOf(S.note, a.v.pg.id, a.hits)) {
-    if (isItem(st.data) || (S.eraser.markerOnly && st.data.tool !== 'marker')) continue;
-    if (strokeHit(st, x, y, r)) { a.hits.add(st.id); changed = true; }
+  const partial = S.eraser.mode !== 'stroke';
+  // 正確な消しゴムは、同じ大きさの設定でも半分の範囲だけ消す
+  const r = (ERASER_SIZES[S.eraser.si ?? 1] * (S.eraser.mode === 'precise' ? 0.5 : 1)) / S.zoom;
+  if (!partial) {
+    let changed = false;
+    for (const st of strokesOf(S.note, a.v.pg.id, a.hits)) {
+      if (!erasable(st.data)) continue;
+      if (strokeHit(st, x, y, r)) { a.hits.add(st.id); changed = true; }
+    }
+    if (changed) paintInk(a.v, a.hits);
+    return;
   }
-  if (changed) paintInk(a.v, a.hits);
+  // なぞった所だけ消す: 速く動かして点が飛んでも消し残さないよう、前の位置からの間も細かくたどる
+  const l = a.last || [x, y];
+  const n = Math.max(1, Math.ceil(Math.hypot(x - l[0], y - l[1]) / (r / 2)));
+  a.last = [x, y];
+  let changed = false;
+  const list = strokesOf(S.note, a.v.pg.id).filter((st) => erasable(st.data)); // 1回の移動につき1回だけ取る
+  for (let k = 1; k <= n; k++) {
+    const cx = l[0] + ((x - l[0]) * k) / n, cy = l[1] + ((y - l[1]) * k) / n;
+    for (const st of list) {
+      let c = a.cut.get(st.id);
+      if (!c) {
+        if (!strokeHit(st, cx, cy, r)) continue;
+        // 当たった線は、ずれ(off)を足し込み、点を細かくしてから切る(図形の長い辺の途中も消せるように)
+        const d = styleOf(st), P = d.pts, base = new Array(P.length);
+        for (let i = 0; i < P.length; i += 3) { base[i] = P[i] + st.off[0]; base[i + 1] = P[i + 1] + st.off[1]; base[i + 2] = P[i + 2]; }
+        c = { d, pieces: [ER.densify(base, Math.max(0.5, r / 3))], cut: false, svg: '' };
+        a.cut.set(st.id, c);
+      }
+      const next = ER.cutPieces(c.pieces, cx, cy, r + c.d.width / 2);
+      // 縁をかすめただけで点が1つも消えなかった線は、書き換えない(確定時にも触らない)
+      if (next !== c.pieces) { c.pieces = next; c.cut = true; c.svg = null; changed = true; }
+    }
+  }
+  if (changed) {
+    const cutIds = new Set([...a.cut].filter(([, c]) => c.cut).map(([id]) => id));
+    paintInk(a.v, cutIds);
+    // 途中経過: 確定したときに残るかけらだけを描く(形は変わった線だけ作り直す)
+    requestLive(() => paintLive(a.v, [...a.cut.values()].filter((c) => c.cut).map((c) => {
+      if (c.svg == null) c.svg = ER.keepPieces(c.pieces, minPiece(c.d)).map((P) => { const pd = ER.pieceData(c.d, P); return strokeSvg('erasing', pd, geometry(pd)); }).join('');
+      return c.svg;
+    }).join('')));
+  }
 }
+// これより短いかけらは残さない(消しゴムの縁に残ったかす)
+const minPiece = (d) => Math.max(0.3, d.width * 0.6);
 
 async function onUp(e) {
   if (e.pointerType === 'touch' && touches.has(e.pointerId)) return gestureUp(e);
@@ -1840,13 +1941,14 @@ async function onUp(e) {
   const a = active;
   active = null;
   cancelAnimationFrame(liveFrame);
+  if (a.kind === 'erase' && a.cut) return finishPartialErase(a);
   if (a.kind === 'erase') {
     if (!a.hits.size) return;
     const ids = [...a.hits];
     pushUndo({ undo: [['stroke.undel', { ids }]], redo: [['stroke.del', { ids }]], pages: [a.v.pg.id] });
     await commit([mk('stroke.del', { ids })]);
     paintInk(a.v);
-    return;
+    return backFromEraser(a);
   }
   if (a.kind === 'scale' || a.kind === 'rotate') {
     // 途中で入力が取り消されたとき(通知が来たなど)は、変形しないで元に戻す
@@ -1932,6 +2034,68 @@ async function finishStroke(a) {
   appendStroke(a.v, d.id);
   paintLive(a.v, '');
   await saving;
+}
+
+// なぞった所だけ消したのを確定する: 当たった線を消し、残ったかけらを新しい線として足す
+async function finishPartialErase(a) {
+  paintLive(a.v, '');
+  const cut = [...a.cut].filter(([, c]) => c.cut);
+  if (!cut.length) return;
+  const oldIds = [], ops = [], newIds = [];
+  const selOld = new Set(), selNew = [];
+  for (const [id, c] of cut) {
+    oldIds.push(id);
+    const inSel = S.sel && S.sel.ids.has(id);
+    if (inSel) selOld.add(id);
+    // ごく短いかけら(消しゴムの縁に残ったかす)は残さない
+    for (const P of ER.keepPieces(c.pieces, minPiece(c.d))) {
+      const nd = { ...ER.pieceData(c.d, P), id: newId() };
+      newIds.push(nd.id);
+      if (inSel) selNew.push(nd.id);
+      ops.push(mk('stroke.add', { s: nd }));
+    }
+  }
+  ops.unshift(mk('stroke.del', { ids: oldIds }));
+  const undo = [['stroke.undel', { ids: oldIds }]], redo = [['stroke.del', { ids: oldIds }]];
+  if (newIds.length) { undo.unshift(['stroke.del', { ids: newIds }]); redo.push(['stroke.undel', { ids: newIds }]); }
+  pushUndo({ undo, redo, pages: [a.v.pg.id] });
+  await commit(ops);
+  // 投げ縄で選んでいた線を一部消したら、選択を残ったかけらに付け替える
+  if (selOld.size && S.sel) {
+    const ids = new Set([...S.sel.ids].filter((id) => !selOld.has(id)).concat(selNew));
+    if (ids.size) S.sel = { pageId: S.sel.pageId, ids }; else clearSelection();
+  }
+  paintInk(a.v);
+  if (S.sel) drawSelection();
+  backFromEraser(a);
+}
+
+// 「消したら前の道具に戻す」がオンなら、消しゴムの道具で消し終えたときに前の道具へ戻す(ペンの消しゴムボタンのときは何もしない)
+function backFromEraser(a) {
+  if (!S.eraser.back || !a.byTool || S.tool !== 'eraser') return;
+  setTool(S.prevTool && S.prevTool !== 'eraser' ? S.prevTool : 'pen');
+}
+
+// ページの手書き・画像・テキストを全部消す(元に戻せる)
+async function clearPage(pg) {
+  if (!pg) return;
+  const ids = strokesOf(S.note, pg.id).map((st) => st.id);
+  if (!ids.length) return toast('このページには消すものがありません');
+  const n = pagesOf(S.note).findIndex((p) => p.id === pg.id) + 1;
+  const ok = await askConfirm({ heading: `${n}ページ目を消去`, message: 'このページの手書き・画像・テキストをすべて消します(用紙と PDF は残ります)。あとで「元に戻す」で戻せます。', ok: '消去', danger: true });
+  if (!ok) return;
+  if (S.sel && S.sel.pageId === pg.id) clearSelection();
+  pushUndo({ undo: [['stroke.undel', { ids }]], redo: [['stroke.del', { ids }]], pages: [pg.id] });
+  await commit([mk('stroke.del', { ids })]);
+  const v = S.views.get(pg.id);
+  if (v) paintInk(v);
+  // この消去だけを戻す(直後に別の操作をしていても、それは戻さない)
+  toast(`${n}ページ目を消去しました`, 6000, { label: '元に戻す', run: async () => {
+    pushUndo({ undo: [['stroke.del', { ids }]], redo: [['stroke.undel', { ids }]], pages: [pg.id] });
+    await commit([mk('stroke.undel', { ids })]);
+    const w = S.views.get(pg.id);
+    if (w) paintInk(w);
+  } });
 }
 
 // ---------- 投げ縄の選択 ----------
@@ -2556,7 +2720,8 @@ function pageMenu(anchor, pg) {
     };
     items.push('-', { el: sel });
   }
-  items.push('-', { icon: 'trash', label: 'ページを削除', danger: true, attrs: { 'data-a': 'del' }, disabled: pages.length <= 1, onClick: () => deletePage(pg.id) });
+  items.push('-', { icon: 'eraser', label: 'ページを消去…', attrs: { 'data-a': 'clear' }, onClick: () => clearPage(pg) });
+  items.push({ icon: 'trash', label: 'ページを削除', danger: true, attrs: { 'data-a': 'del' }, disabled: pages.length <= 1, onClick: () => deletePage(pg.id) });
   openPopover(anchor, (body, close) => menu(body, items, close), { align: 'start' });
 }
 
