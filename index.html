@@ -6,6 +6,7 @@
   <title>大学ノート</title>
   <meta name="description" content="無料・オフラインで使える手書きノート">
   <meta name="theme-color" content="#2f5d9e">
+  <script src="js/theme-boot.js"></script>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
@@ -79,6 +80,7 @@
         <h1>書類</h1>
         <div class="spacer"></div>
         <label class="search-box"><span data-icon="search" data-icon-size="18"></span><input id="search" type="search" placeholder="検索" aria-label="ノートを検索(名前・PDFの文字)" autocomplete="off"></label>
+        <button id="settings-btn" class="icon-btn" data-icon="settings" title="設定" aria-label="設定"></button>
         <button id="sync-btn" class="icon-btn" data-icon="cloud" title="同期" aria-label="同期"><span class="sync-dot" hidden></span></button>
         <button id="account-btn" class="icon-btn acct-btn" data-icon="user" title="アカウント" aria-label="アカウント"><span class="acct-avatar" aria-hidden="true" hidden></span><span class="acct-dot" hidden></span></button>
       </div>
@@ -258,6 +260,14 @@
         <button type="button" id="acct-delete" class="danger">アカウントを削除</button>
       </details>
     </div>
+  </dialog>
+
+  <dialog id="settings-dialog" class="wide" aria-labelledby="settings-heading">
+    <form method="dialog">
+      <h2 id="settings-heading">設定</h2>
+      <div id="settings-body" class="settings"></div>
+      <div class="row end"><button type="submit" class="primary">閉じる</button></div>
+    </form>
   </dialog>
 
   <dialog id="rename-dialog">
