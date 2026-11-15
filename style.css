@@ -49,7 +49,6 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 :where(button.on) { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
 [hidden] { display: none !important; }
 .invisible { visibility: hidden; }
-.native .web-only { display: none; }
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 button.danger { color: var(--danger); }
 button.primary.danger-fill { background: var(--danger); border-color: var(--danger); color: #fff; }
@@ -350,22 +349,49 @@ button.link:disabled { color: var(--muted); text-decoration: none; opacity: 1; }
   align-self: center; display: flex; align-items: center; justify-content: center;
   width: 60px; height: 60px; margin: 8px 0 10px; border-radius: 50%; background: var(--accent-soft); color: var(--accent);
 }
-dialog h2.acct-title { text-align: center; padding: 0 32px; margin: 0 0 6px; font-size: 20px; word-break: keep-all; overflow-wrap: anywhere; }
-dialog h2[tabindex]:focus { outline: none; }
+.acct-title { text-align: center; padding: 0 8px; margin: 0 0 6px; font-size: 22px; font-weight: 700; word-break: keep-all; overflow-wrap: anywhere; }
+dialog h2[tabindex]:focus, .auth h1[tabindex]:focus { outline: none; }
 dialog h2.acct-title-left { margin-bottom: 12px; }
-dialog p.acct-lead { text-align: center; margin: 0 0 14px; color: var(--text); }
+p.acct-lead { text-align: center; margin: 0 0 14px; color: var(--text); }
 .acct-addr { overflow-wrap: anywhere; }
 .nowrap { white-space: nowrap; }
 .acct-points { list-style: none; margin: 0 0 16px; padding: 12px 14px; border-radius: 10px; background: var(--shelf); display: flex; flex-direction: column; gap: 8px; }
 .acct-points li { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.5; }
 .acct-points li svg.ic { color: var(--accent); margin-top: 1px; }
 .acct-step .field input { min-height: 44px; font-size: 16px; }
-dialog p.acct-msg { color: var(--danger); font-size: 13px; margin: -2px 0 10px; line-height: 1.5; }
+p.acct-msg { color: var(--danger); font-size: 13px; margin: -2px 0 10px; line-height: 1.5; }
 .acct-msg:empty { display: none; }
 button.acct-wide { width: 100%; min-height: 44px; font-size: 15px; font-weight: 600; }
-dialog p.acct-foot { margin: 14px 0 0; text-align: center; line-height: 1.6; }
+p.acct-foot { margin: 14px 0 0; text-align: center; line-height: 1.6; }
 .acct-links { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px 20px; margin-top: 12px; font-size: 14px; }
-.acct-links button.link { min-height: 36px; }
+.acct-links button.link { min-height: 44px; }
+/* ログイン・アカウント作成のページ(ログインしていないときは、これだけを出す) */
+.auth {
+  position: fixed; inset: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; background: var(--shelf);
+  padding: calc(24px + var(--sa-top)) calc(16px + var(--sa-right)) calc(24px + var(--sa-bottom)) calc(16px + var(--sa-left));
+}
+.auth.busy { cursor: progress; }
+.auth-wrap { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; }
+.auth-brand { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 700; color: var(--accent); letter-spacing: .04em; }
+.auth-brand img { border-radius: 10px; }
+.auth-card { width: 100%; max-width: 420px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 24px 20px; box-shadow: 0 6px 24px rgba(31,41,55,.06); }
+.auth-card p { line-height: 1.6; font-size: 14px; }
+/* 日本語の文を、文節の途中・1文字だけで折り返さない(対応しているブラウザだけ) */
+.auth-card p, .auth-card h1, .acct-points li, p.auth-local, dialog h2, dialog p, #toast-msg { word-break: auto-phrase; text-wrap: pretty; }
+.auth-card h1, dialog h2 { text-wrap: balance; }
+p.auth-offline { margin: 0 0 14px; padding: 10px 12px; border-radius: 10px; background: #fdf2f2; color: var(--danger); font-size: 13px; }
+.file-sync { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 6px; }
+.file-sync summary { min-height: 44px; display: flex; align-items: center; font-size: 15px; font-weight: 600; cursor: pointer; }
+.file-sync summary::before { content: '▸'; margin-right: 6px; color: var(--muted); }
+.file-sync[open] summary::before { content: '▾'; }
+.file-sync summary::-webkit-details-marker { display: none; }
+.auth-card .small { color: var(--muted); font-size: 12px; }
+p.auth-switch { margin: 18px 0 0; padding-top: 6px; line-height: 1.4; border-top: 1px solid var(--line); text-align: center; color: var(--muted); }
+.auth a { color: var(--accent); font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px; white-space: nowrap; }
+.auth a:hover { text-decoration: underline; }
+p.auth-local { max-width: 420px; margin: 0; padding: 0 4px; font-size: 13px; line-height: 1.6; color: var(--muted); text-align: center; }
+.acct-noacct { margin: 0 0 4px; padding: 12px 14px; border-radius: 10px; background: var(--accent-soft); }
+.acct-noacct p { margin: 0 0 10px; color: var(--text); font-size: 14px; }
 /* 6桁の番号: 本当の入力欄を6つの枠の上に透明にかぶせる(貼り付け・自動入力・読み上げは1つの入力欄のまま) */
 .code-box { position: relative; margin: 0 auto 12px; width: 100%; max-width: 320px; }
 .code-cells { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; pointer-events: none; }
@@ -376,6 +402,7 @@ dialog p.acct-foot { margin: 14px 0 0; text-align: center; line-height: 1.6; }
 }
 .code-cells span.filled { border-color: var(--text); }
 .code-box.focus .code-cells span.cur { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.code-box.locked .code-cells span { opacity: .45; }
 #acct-code {
   position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: none; background: transparent;
   color: transparent; caret-color: transparent; font-size: 16px; letter-spacing: 1em; outline: none;
@@ -410,11 +437,6 @@ dialog .acct-card p { margin: 6px 0 0; }
 .acct-danger[open] summary::before { content: '▾'; }
 .acct-danger summary::-webkit-details-marker { display: none; }
 .acct-danger p { margin: 4px 0 10px; }
-#dav-details { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 6px; }
-#dav-details summary { min-height: 36px; display: flex; align-items: center; font-size: 15px; font-weight: 600; cursor: pointer; }
-#dav-details summary::before { content: '▸'; margin-right: 6px; color: var(--muted); }
-#dav-details[open] summary::before { content: '▾'; }
-#dav-details summary::-webkit-details-marker { display: none; }
 /* ポップオーバー */
 .pop {
   position: fixed; z-index: 20; min-width: 200px; max-width: calc(100vw - 16px);

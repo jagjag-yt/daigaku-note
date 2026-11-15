@@ -1,12 +1,14 @@
 // アプリ版(Android)の動きを、ブラウザの中で再現して確かめる(Playwright)。
 // 本物のアプリの代わりに window.Capacitor とプラグイン(DavHttp・App・Filesystem・Share)のふりを入れる。
-//   DavHttp は Node 側で本当に WebDAV サーバーへ送る(ブラウザからは送らない = CORS を通らない)。
+//   DavHttp は Node 側で本当に同期サーバーへ送る(ブラウザからは送らない = CORS を通らない)。
+//   大学ノートはログインしないと使えないので、手元で動かした同期サーバー(test/worker-server.mjs)でアカウントを作ってログインする。
 //
-//   node serve.mjs 8124 &  /  node test/davserver.mjs 8125 &
-//   URL=http://localhost:8124/ DAV=http://localhost:8125/dav/ node test/native-e2e.cjs
+//   node serve.mjs 8124 &  /  node test/worker-server.mjs 8131 &
+//   URL=http://localhost:8124/ API=http://127.0.0.1:8131 node test/native-e2e.cjs
 const { chromium } = require('@playwright/test');
 const URL = process.env.URL || 'http://localhost:8124/';
-const DAV = process.env.DAV || 'http://localhost:8125/dav/';
+const API = process.env.API || 'http://127.0.0.1:8131';
+const EMAIL = `native-${Date.now().toString(36)}@example.com`;
 const log = (...a) => console.log('✓', ...a);
 // テスト用サーバーには前の実行のノートが残っていることがあるので、毎回ちがう名前にする
 const TITLE = 'アプリのノート' + Date.now().toString(36);
@@ -71,33 +73,47 @@ async function device(browser, viewport, errors, name) {
   const page = await ctx.newPage();
   page.on('pageerror', (e) => errors.push(`${name}: ${e.message}`));
   if (process.env.DEBUG) page.on('console', (m) => console.log(`  [${name}]`, m.text()));
-  // ブラウザから WebDAV サーバーへ直接送ったら失敗(アプリ版では OS の通信だけを使うはず)
-  page.on('request', (r) => { if (r.url().startsWith(DAV)) errors.push(`${name}: ブラウザから直接送った ${r.method()} ${r.url()}`); });
+  // ブラウザから同期サーバーへ直接送ったら失敗(アプリ版では OS の通信だけを使うはず)
+  page.on('request', (r) => { if (r.url().startsWith(API)) errors.push(`${name}: ブラウザから直接送った ${r.method()} ${r.url()}`); });
   const sent = [];
+  const dev = { code: '' };
   await page.exposeFunction('__nativeRequest', async (o) => {
     sent.push(o.method);
     const res = await fetch(o.url, { method: o.method, headers: o.headers, body: o.body == null ? undefined : Buffer.from(o.body, 'base64') });
     const headers = {};
     res.headers.forEach((v, k) => { headers[k] = v; });
-    return { status: res.status, headers, body: Buffer.from(await res.arrayBuffer()).toString('base64') };
+    const body = Buffer.from(await res.arrayBuffer());
+    // 番号はメールで送らず、テスト用サーバーの応答(devCode)から読む
+    if (o.url.endsWith('/otp/send')) dev.code = JSON.parse(body.toString('utf8')).devCode || '';
+    return { status: res.status, headers, body: body.toString('base64') };
   });
   await page.addInitScript(fakeCapacitor);
+  await page.addInitScript((api) => localStorage.setItem('daigaku-note.api', api), API);
   await page.goto(URL);
-  await page.waitForSelector('#new-note');
-  return { ctx, page, sent };
+  await page.waitForSelector('#auth:not([hidden])');
+  return { ctx, page, sent, dev };
 }
 
-async function setDav(p) {
+// how: 'signup'(アカウント作成)・'login'。番号を送って入れ、本棚が出るまで
+async function signIn(d, how) {
+  const p = d.page;
+  await p.evaluate((h) => { location.hash = `#/${h}`; }, how);
+  await p.waitForSelector(`#auth-${how}-form:not([hidden])`);
+  await p.fill(`#auth-${how}-email`, EMAIL);
+  d.dev.code = '';
+  await p.click(`#auth-${how}-form button[type=submit]`);
+  await p.waitForSelector('#acct-code-form:not([hidden])');
+  if (!d.dev.code) fail('番号を受け取れない');
+  await p.fill('#acct-code', d.dev.code);
+  await p.waitForSelector('#library:not([hidden])', { timeout: 30000 });
+}
+
+// アカウントで今すぐ同期して、結果の文言を返す
+async function syncNow(p) {
   await p.click('#sync-btn');
-  // 自分のサーバー(WebDAV)の欄はたたんであるので開く
-  if ((await p.locator('#dav-details').getAttribute('open')) === null) await p.click('#dav-details summary');
-  if (await p.locator('#sync-dialog .web-only').isVisible()) fail('アプリ版なのに CORS の説明が出ている');
-  await p.fill('#dav-url', DAV);
-  await p.fill('#dav-user', 'test');
-  await p.fill('#dav-pass', 'pass');
-  await p.click('#dav-form button[type=submit]');
-  await p.waitForFunction(() => /同期しました|失敗/.test(document.querySelector('#dav-form .sync-status').textContent), null, { timeout: 30000 });
-  const s = await p.textContent('#dav-form .sync-status');
+  await p.click('#acct-summary-sync');
+  await p.waitForFunction(() => /同期しました|失敗|できません/.test(document.querySelector('#acct-summary .sync-status').textContent), null, { timeout: 30000 });
+  const s = await p.textContent('#acct-summary .sync-status');
   await p.click('#sync-close');
   if (!/同期しました/.test(s)) fail('同期できない: ' + s);
   return s;
@@ -113,6 +129,17 @@ async function setDav(p) {
     if ((await page.evaluate(() => navigator.serviceWorker.getRegistrations())).length) fail('アプリ版なのにサービスワーカーを登録した');
     if ((await page.getAttribute('#gn-input', 'accept')) !== '') fail('GoodNotes の取り込みで種類を絞っている');
     log('アプリ版として起動(サービスワーカーなし・取り込みの種類を絞らない)');
+
+    // ログインしないと使えない。戻る: アカウント作成のページ → ログインのページ → アプリを裏へ
+    await page.evaluate(() => { location.hash = '#/signup'; });
+    await page.waitForSelector('#auth-signup-form:not([hidden])');
+    await page.evaluate(() => window.__native.back());
+    await page.waitForSelector('#auth-login-form:not([hidden])');
+    await page.evaluate(() => window.__native.back());
+    if ((await page.evaluate(() => window.__native.minimized)) !== 1) fail('ログインのページで戻るを押してもアプリが裏に回らない');
+    await page.evaluate(() => { window.__native.minimized = 0; });
+    await signIn(A, 'signup');
+    log('アカウントを作成してログインした(OS の通信だけで送る)');
 
     // ノートを作って書く
     await page.click('#new-note');
@@ -178,11 +205,12 @@ async function setDav(p) {
     log('戻る: メニュー → ページ一覧 → 本棚 の順に閉じる');
 
     // 同期(OS の通信だけで送る)
-    log('A:', await setDav(page));
+    log('A:', await syncNow(page));
     for (const m of ['MKCOL', 'PUT', 'PROPFIND']) if (!A.sent.includes(m)) fail(`${m} を送っていない`);
 
     // 同期ファイルの書き出しも同じく
     await page.click('#sync-btn');
+    await page.click('.file-sync summary'); // ファイルで同期の欄はたたんである
     await page.click('#sync-export');
     await page.waitForFunction(() => window.__native.saved.length === 2);
     const sj = await page.evaluate(() => window.__native.saved.at(-1));
@@ -203,7 +231,8 @@ async function setDav(p) {
 
     // 別の端末(タブレット)で受け取る
     const B = await device(browser, { width: 800, height: 1280 }, errors, 'B');
-    log('B:', await setDav(B.page));
+    await signIn(B, 'login');
+    log('B:', await syncNow(B.page));
     await B.page.waitForSelector(`.card:has-text("${TITLE}")`);
     await B.page.click(`.card:has-text("${TITLE}") .cover`);
     await B.page.waitForSelector('.page path, .page svg path');

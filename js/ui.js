@@ -164,8 +164,15 @@ function place(el, arrow, anchor, align) {
   left = Math.max(minX, Math.min(maxX - w, left));
   let top = r.bottom + 10;
   let below = true;
+  let over = false;
   if (top + h > maxY && r.top - 10 - h > minY) { top = r.top - 10 - h; below = false; }
+  else if (top + h > maxY && h <= maxY - minY) {
+    // 上にも下にも入らないが、画面には入る(横向きのスマホで大きなボタンから開いたときなど): ボタンに重ねて、全部見えるように出す
+    top = Math.max(minY, Math.min(maxY - h, r.top + 10));
+    over = true;
+  }
   if (top + h > maxY) el.style.maxHeight = maxY - top + 'px';
+  arrow.hidden = over;
   el.style.left = left + 'px';
   el.style.top = top + 'px';
   el.classList.toggle('above', !below);

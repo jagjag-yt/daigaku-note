@@ -5,15 +5,42 @@ import { test, expect } from '@playwright/test';
 // 日付・時刻の表示を毎回同じにする(2026-04-01 10:00 日本時間)
 const NOW = new Date('2026-04-01T10:00:00+09:00');
 
+// 大学ノートはログインしないと使えないので、手元で動かした同期サーバー(test/worker-server.mjs。playwright.config.js が起動する)で
+// アカウントを作ってから本棚を開く。アドレスはテストごとに変える(同じアドレスだと、ほかのテストのログインで端末が外れるため)
+const API = 'http://127.0.0.1:8131';
+let seq = 0;
+const freshEmail = (testInfo) => `s-${testInfo.project.name}-${process.pid}-${Date.now()}-${++seq}@example.com`;
+
+// アカウント作成のページから作る(番号はメールで送らず、サーバーの応答の devCode から読む)
+async function signup(page, email) {
+  await page.locator('#auth-signup-email').fill(email);
+  const sent = page.waitForResponse((r) => r.url() === `${API}/otp/send`);
+  await page.locator('#auth-signup-form button[type=submit]').click();
+  const { devCode } = await (await sent).json();
+  await expect(page.locator('#acct-code-form')).toBeVisible();
+  return devCode;
+}
+
 test.beforeEach(async ({ page }, testInfo) => {
   await page.clock.setFixedTime(NOW);
   // 表紙の色などのでたらめな選び方を、毎回同じ並びにする
-  await page.addInitScript(() => {
+  await page.addInitScript((api) => {
     let seed = 12345;
     Math.random = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296);
-  });
-  await page.goto('./');
-  await expect(page.locator('#new-note')).toBeVisible();
+    localStorage.setItem('daigaku-note.api', api);
+  }, API);
+  // ログイン・アカウント作成のページのテストは、ログインしないまま始める
+  const authPage = testInfo.title.startsWith('ログイン・アカウント作成');
+  await page.goto(authPage ? './' : './#/signup');
+  await expect(page.locator('#auth')).toBeVisible();
+  if (!authPage) {
+    const code = await signup(page, freshEmail(testInfo));
+    await page.locator('#acct-code').fill(code);
+    await expect(page.locator('#new-note')).toBeVisible();
+    // ログインしたあとの最初の同期が終わるまで待つ(本棚の上の同期の文言の行が出るので、それを含めた見た目で比べる)
+    await expect(page.locator('.substatus .sync-status')).toContainText('同期しました');
+    await page.evaluate(() => { document.querySelector('#toast').hidden = true; }); // 「アカウントを作成しました」は撮らない
+  }
   // 切り欠き・ホームバーのある端末のまね: Android のアプリ版で Capacitor がするのと同じく、
   // 読み込んだあとに <html> に画面の端の幅を入れる
   const sa = testInfo.project.metadata.safeArea;
@@ -22,8 +49,8 @@ test.beforeEach(async ({ page }, testInfo) => {
       for (const [k, px] of Object.entries(v)) document.documentElement.style.setProperty(`--safe-area-inset-${k}`, `${px}px`);
     }, sa);
   }
-  // 一部の端末でしか出ない、端末ごとに違う ID などは隠して比べる
-  await page.addStyleTag({ content: '#device-id { visibility: hidden; }' });
+  // 一部の端末でしか出ない、端末ごとに違う ID や、同期の進み具合(いつ終わるかで文言が変わる)は隠して比べる
+  await page.addStyleTag({ content: '#device-id, .substatus .sync-status { visibility: hidden; }' });
 });
 
 // その画面で操作できる部品(いちばん上に出ている層のものだけ)について、崩れを探す。
@@ -188,47 +215,57 @@ test('新しいノートのダイアログ', async ({ page }) => {
 test('同期のダイアログ', async ({ page }) => {
   await page.locator('#sync-btn').click();
   await expect(page.locator('#sync-dialog')).toBeVisible();
-  await page.evaluate(() => document.activeElement?.blur());
+  await expect(page.locator('#acct-summary .sync-status')).toContainText('同期しました');
+  await page.evaluate(() => {
+    document.querySelector('#acct-summary-who').textContent = 'student@example.com';
+    document.querySelector('#acct-summary .sync-status').textContent = 'クラウド同期: 10:00 に同期しました(送信 0件・受信 0件)';
+    document.activeElement?.blur();
+  });
   await check(page, 'sync-dialog');
 });
 
-test('同期のダイアログ(自分のサーバーの欄を開く)', async ({ page }) => {
-  await page.locator('#sync-btn').click();
-  await expect(page.locator('#sync-dialog')).toBeVisible();
-  await page.locator('#dav-details summary').click();
-  await expect(page.locator('#dav-url')).toBeVisible();
-  await page.evaluate(() => document.activeElement?.blur());
-  await check(page, 'sync-dialog-webdav');
+test('ログイン・アカウント作成(ログインのページ)', async ({ page }) => {
+  await page.locator('#auth-to-login').click();
+  await expect(page.locator('#auth-login-form')).toBeVisible();
+  await check(page, 'auth-login');
 });
 
-// アカウントの画面。番号の画面とログイン中の画面は、手元で動かした同期サーバー(test/worker-server.mjs)を使う
-const API = 'http://127.0.0.1:8131';
-async function sendCode(page, email) {
-  await page.evaluate((api) => localStorage.setItem('daigaku-note.api', api), API);
-  await page.locator('#account-btn').click();
-  await page.locator('#acct-email').fill(email);
-  const sent = page.waitForResponse((r) => r.url() === `${API}/otp/send`);
-  await page.locator('#acct-send').click();
-  const { devCode } = await (await sent).json();
-  await expect(page.locator('#acct-code-form')).toBeVisible();
-  return devCode;
-}
-
-test('アカウントの画面(ログイン・新規登録)', async ({ page }) => {
-  await page.locator('#account-btn').click();
-  await expect(page.locator('#acct-email-form')).toBeVisible();
-  await check(page, 'account-login');
+test('ログイン・アカウント作成(アカウント作成のページ)', async ({ page }) => {
+  await expect(page.locator('#auth-signup-form')).toBeVisible(); // この端末で使ったことがなければ、最初はアカウント作成
+  await check(page, 'auth-signup');
 });
 
-test('アカウントの画面(6桁の番号)', async ({ page }) => {
-  await sendCode(page, `layout-code-${test.info().project.name}-${Date.now()}@example.com`);
+test('ログイン・アカウント作成(6桁の番号)', async ({ page }, testInfo) => {
+  await signup(page, freshEmail(testInfo));
+  // アドレスと有効期限はテストごとに変わるので、決まった文字にそろえてから撮る
+  await page.evaluate(() => {
+    document.querySelector('#acct-sent-to').textContent = 'student@example.com';
+    document.querySelector('#acct-expires').textContent = '10:10';
+  });
   await page.locator('#acct-code').fill('12');
-  await check(page, 'account-code');
+  await check(page, 'auth-code');
 });
 
-test('アカウントの画面(ログイン中)', async ({ page }, testInfo) => {
-  const code = await sendCode(page, `layout-${testInfo.project.name}-${Date.now()}@example.com`);
-  await page.locator('#acct-code').fill(code);
+test('ログイン・アカウント作成(ログインしようとしたらアカウントがない)', async ({ page }, testInfo) => {
+  await page.locator('#auth-to-login').click();
+  await page.locator('#auth-login-email').fill(freshEmail(testInfo));
+  const sent = page.waitForResponse((r) => r.url() === `${API}/otp/send`);
+  await page.locator('#auth-login-form button[type=submit]').click();
+  const { devCode } = await (await sent).json();
+  await page.locator('#acct-code').fill(devCode);
+  await expect(page.locator('#acct-noacct')).toBeVisible();
+  await page.evaluate(() => {
+    document.querySelector('#acct-sent-to').textContent = 'student@example.com';
+    document.querySelector('#acct-expires').textContent = '10:10';
+    // 番号は毎回変わるので、マスに見える数字も決まった数字にそろえる
+    [...document.querySelector('#acct-code-form .code-cells').children].forEach((c, i) => { c.textContent = String(i + 1); });
+    document.activeElement?.blur();
+  });
+  await check(page, 'auth-no-account');
+});
+
+test('アカウントの画面', async ({ page }) => {
+  await page.locator('#account-btn').click();
   await expect(page.locator('#acct-devices li').first()).toContainText('この端末');
   await expect(page.locator('#acct-usage')).toContainText('GB');
   await expect(page.locator('#acct-info .sync-status')).toContainText('同期しました');
@@ -241,21 +278,6 @@ test('アカウントの画面(ログイン中)', async ({ page }, testInfo) => 
     while (ul.children.length > 1) ul.lastElementChild.remove();
   });
   await check(page, 'account-info');
-});
-
-test('同期のダイアログ(アカウントでログイン中)', async ({ page }, testInfo) => {
-  const code = await sendCode(page, `layout-sync-${testInfo.project.name}-${Date.now()}@example.com`);
-  await page.locator('#acct-code').fill(code);
-  await expect(page.locator('#acct-info .sync-status')).toContainText('同期しました');
-  await page.locator('#account-dialog .dlg-close').click();
-  await page.locator('#sync-btn').click();
-  await expect(page.locator('#acct-summary-in')).toBeVisible();
-  await page.evaluate(() => {
-    document.querySelector('#acct-summary-who').textContent = 'student@example.com';
-    for (const el of document.querySelectorAll('.sync-status')) el.textContent = 'クラウド同期: 10:00 に同期しました(送信 0件・受信 0件)';
-    document.activeElement?.blur();
-  });
-  await check(page, 'sync-dialog-account');
 });
 
 test('本棚(ノートあり・長い名前)', async ({ page }) => {

@@ -1,11 +1,11 @@
 #!/bin/bash
 # iOS のシミュレーター用にアプリを作り、iPhone と iPad のシミュレーターで起動して確かめる。
 # GitHub Actions の Mac(macos)で動かす。手元の Mac でも動く(Xcode が要る)。
-# 手元で使うと、選んだシミュレーターに入っている大学ノートのデータは消える(空の本棚で確かめるため入れ直す)。
+# 手元で使うと、選んだシミュレーターに入っている大学ノートのデータは消える(ログインしていない状態で確かめるため入れ直す)。
 #
 # 確かめること(端末ごと):
 #   1. 画面のプログラムが動いた … WebView の IndexedDB にファイルができる(フォルダだけなら JS がなくてもできる)
-#   2. プログラムが本棚を描いた … スクショに本棚の地の色が一定の割合あり、プログラムが描く「新規」のカードの
+#   2. プログラムがアカウント作成のページを描いた … スクショに地の色と、プログラムが出す白いカード・ボタンの
 #      アクセント色がある(scripts/screen-check.py。真っ白・起動画面・ホーム画面・HTML だけの画面では失敗)
 #   3. 落ちていない … 起動したプロセスが、画面が出たあとも生きている
 # 出力(ios-out/): daigaku-note-simulator.zip(Appetize.io などに上げられる .app)、<端末名>.png、
@@ -105,11 +105,11 @@ check_device() {
     return 1
   fi
   if [ $ok -ne 1 ]; then
-    echo "::error::$name で本棚の画面が出ません(起動画面のまま・真っ白 など)"
+    echo "::error::$name でアカウント作成のページが出ません(起動画面のまま・真っ白 など)"
     find "$data/Library" -maxdepth 4 | head -n 30
     return 1
   fi
-  echo "$name: 起動して本棚の画面が出た"
+  echo "$name: 起動してアカウント作成のページが出た"
 }
 
 for dev in "$IPHONE|iPhone" "$IPAD|iPad"; do

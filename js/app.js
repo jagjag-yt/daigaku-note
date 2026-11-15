@@ -151,9 +151,26 @@ function route() {
   closePopover();
   if (!$('#toast-act').hidden) $('#toast').hidden = true; // 「元に戻す」付きのトーストだけ、画面が変わったら消す
   for (const d of document.querySelectorAll('dialog[open]')) d.close();
+  // ログインしないと使えない: ログインしていなければ、本棚・ノートの代わりにログイン・アカウント作成のページを出す
+  if (!accountUI.loggedIn()) {
+    closeEditor();
+    $('#library').hidden = true;
+    $('#editor').hidden = true;
+    accountUI.showAuth(location.hash);
+    return;
+  }
+  accountUI.hideAuth();
+  // ログイン済みなら本棚へ(履歴に足さずに置き換える。足すと、戻るでログインのページの住所に戻り、また本棚へ…と抜けられないため)
+  if (/^#\/(login|signup)\b/.test(location.hash)) history.replaceState(null, '', '#/');
   const m = location.hash.match(/^#\/note\/(\w+)(?:\/p\/(\w+))?/);
   if (m) openNote(m[1], m[2]);
   else showLibrary();
+}
+
+// この端末にあるノートの数(ログインのページで、ノートが消えないことを知らせるため)
+async function countNotes() {
+  const lib = buildLibrary(await db.noteLevelOps());
+  return [...lib.values()].filter((n) => !n.deleted && n.titleS).length;
 }
 
 // action: { label, run } を渡すと「元に戻す」などのボタンを付ける
@@ -199,7 +216,8 @@ function bindDialogs() {
 }
 
 // 確かめる(ブラウザ標準の confirm の代わり)。押したのが ok なら true
-function askConfirm({ heading, message, ok, danger = false }) {
+// alt: { label } を渡すと3つめのボタン(取り返せない操作)を左に出し、押されたら 'alt' を返す
+function askConfirm({ heading, message, ok, danger = false, alt = null }) {
   return new Promise((resolve) => {
     const d = $('#confirm-dialog');
     $('#confirm-heading').textContent = heading;
@@ -207,7 +225,11 @@ function askConfirm({ heading, message, ok, danger = false }) {
     const b = $('#confirm-ok');
     b.textContent = ok;
     b.className = danger ? 'primary danger-fill' : 'primary';
+    const a = $('#confirm-alt');
+    a.hidden = $('#confirm-spacer').hidden = !alt;
+    a.textContent = alt ? alt.label : '';
     let result = false;
+    a.onclick = () => { result = 'alt'; d.close(); };
     $('#confirm-form').onsubmit = (e) => { e.preventDefault(); result = true; d.close(); };
     $('#confirm-cancel').onclick = () => d.close();
     d.addEventListener('close', () => resolve(result), { once: true });
@@ -260,6 +282,12 @@ function bindNative() {
     if (d) { if (d.requestClose) d.requestClose(); else d.close(); return true; }
     // ページ一覧は、画面に重なって出ているとき(狭い画面)だけ閉じる。横に並んでいるときはそのまま
     if (!$('#sidebar').hidden && $('#sb-scrim').getClientRects().length) { $('#pages-close').click(); return true; }
+    if (!$('#auth').hidden) {
+      // アカウント作成のページからはログインのページへ。番号の画面からはメールアドレスの画面へ
+      if (!$('#acct-code-form').hidden) { $('#acct-back').click(); return true; }
+      if (/^#\/signup\b/.test(location.hash)) { location.replace('#/login'); return true; }
+      return false;
+    }
     if (/^#\/note\//.test(location.hash)) {
       if (S.sel) { clearSelection(); return true; } // 投げ縄で選んでいるなら、まず選択を外す
       location.hash = '#/';
@@ -419,19 +447,11 @@ async function onRemoteChange(noteIds) {
   }
 }
 
-// 同期のダイアログを開く。webdav: true なら「自分のサーバーを使う」の欄を開いておく
-function openSync({ webdav = false } = {}) {
+// 同期のダイアログを開く
+function openSync() {
   $('#device-id').textContent = S.rec.device;
-  const cfg = dav.config();
-  // アカウントで同期しているときは、WebDAV の欄にアカウントの住所・鍵を出さない
-  const own = cfg.account ? {} : cfg;
-  $('#dav-url').value = own.url || '';
-  $('#dav-user').value = own.user || '';
-  $('#dav-pass').value = own.pass || '';
-  $('#dav-auto').checked = own.auto !== false;
-  $('#dav-details').open = webdav || (!cfg.account && !!cfg.url);
   accountUI.refresh();
-  showDialog($('#sync-dialog'), webdav ? $('#dav-url') : null);
+  showDialog($('#sync-dialog'), null);
 }
 
 // ---------- ノート一覧 ----------
@@ -507,18 +527,8 @@ function bindLibrary() {
     }
   };
   $('#sync-btn').onclick = () => openSync();
-  accountUI.init({ askConfirm, toast, showDialog, coarse, setSyncStatus, openSync });
+  accountUI.init({ askConfirm, toast, showDialog, coarse, setSyncStatus, route, countNotes, penBusy: () => !!(active || penPending) });
   $('#sync-close').onclick = () => $('#sync-dialog').close();
-  $('#dav-form').onsubmit = async (e) => {
-    e.preventDefault();
-    await dav.configure({ url: $('#dav-url').value.trim(), user: $('#dav-user').value.trim(), pass: $('#dav-pass').value, auto: $('#dav-auto').checked });
-    accountUI.refresh();
-    await dav.syncNow(true);
-  };
-  $('#dav-off').onclick = async () => {
-    await dav.configure({ url: '', user: '', pass: '', auto: false });
-    setSyncStatus('クラウド同期はオフです');
-  };
   $('#sync-export').onclick = async () => {
     const json = await buildSyncFile(S.rec.device);
     if ((await download(JSON.stringify(json), `大学ノート同期-${S.rec.device}-${stamp()}.json`, 'application/json')) === 'saved') {
@@ -1147,6 +1157,7 @@ async function openNote(id, pageId) {
     const note = emptyNote(id);
     for (const op of ops) applyOp(note, op);
     if (!note.titleS || note.deleted) { location.hash = '#/'; return; }
+    if (!accountUI.loggedIn()) return; // 読み込んでいるあいだにログインが切れた(ログインのページを出したまま)
     S.note = note;
     S.undo = [];
     S.redo = [];

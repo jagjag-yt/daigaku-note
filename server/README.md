@@ -22,8 +22,8 @@ WebDAV の URL・ユーザー名・アプリパスワードを手で入れなく
 | | | |
 |---|---|---|
 | `GET /health` | 動いている版 | 鍵なし |
-| `POST /otp/send` | `{ email }` → 6桁の番号をメールで送る(10分で切れる) | 鍵なし |
-| `POST /otp/verify` | `{ email, code, label }` → `{ token, userId, deviceId, dav, … }`。初めてのアドレスならここで利用者を作る | 鍵なし |
+| `POST /otp/send` | `{ email, purpose }` → 6桁の番号をメールで送る(10分で切れる)。`purpose` は `login`・`signup` で、メールの件名と本文だけが変わる(登録の有無では変えない) | 鍵なし |
+| `POST /otp/verify` | `{ email, code, label, purpose }` → `{ token, userId, deviceId, dav, existing, … }`。`purpose: 'signup'`(またはなし=以前のアプリ)なら初めてのアドレスはここで利用者を作る。`purpose: 'login'` でアカウントがなければ鍵を出さずに 404 `{ reason: 'no_account' }`(番号は使用済みにしないので、同じ番号を `signup` で送り直せば作れる。番号を確かめたあとなので、登録の有無は本人にしか分からない) | 鍵なし |
 | `GET /me` | メールアドレス・この端末・使っている量(`usage.bytes` / `usage.quota`) | 鍵 |
 | `GET /devices` | ログイン中の端末の一覧 | 鍵 |
 | `DELETE /devices?id=…` | 端末を1台外す | 鍵 |
@@ -145,7 +145,7 @@ wrangler なしで試すなら `node test/worker-server.mjs 8131`(D1・R2 はメ
 
 - `test/server.test.mjs` … ログイン・端末・CORS・WebDAV のまね・容量・退会
 - `test/server-sync.test.mjs` … 本物の `js/webdav.js`・`js/account.js` を2台ぶん動かし、このサーバーを通して変更と PDF を送り合う
-- `test/ui/account.spec.js`(`npm run test:ui`)… 画面でログインし、2台で同期・端末を外す・ログアウト・アカウントの削除
+- `test/ui/account.spec.js`(`npm run test:ui`)… ログインしないと使えないこと、ログインとアカウント作成のページ、2台で同期・端末を外す・ログアウト・アカウントの削除
 
 ## 無料プランの上限で気をつけること
 
