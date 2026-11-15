@@ -73,11 +73,13 @@ async function loadDoc(hash) {
 }
 
 // 背景用キャンバスに PDF のページを描く。task.cancel() で中断できる。
-export async function renderPdfPage(canvas, hash, pageNo, holder) {
+// rot: ページを回したときの、元の PDF の向きに足す角度(90 の倍数)
+export async function renderPdfPage(canvas, hash, pageNo, holder, rot = 0) {
   const doc = await loadDoc(hash);
   const page = await doc.getPage(pageNo);
-  const vp1 = page.getViewport({ scale: 1 });
-  const vp = page.getViewport({ scale: canvas.width / vp1.width });
+  const rotation = (((page.rotate || 0) + rot) % 360 + 360) % 360;
+  const vp1 = page.getViewport({ scale: 1, rotation });
+  const vp = page.getViewport({ scale: canvas.width / vp1.width, rotation });
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -114,14 +116,15 @@ export async function exportPdf(note) {
   for (const pg of pagesOf(note)) {
     const bg = bgOf(pg);
     let page;
-    if (pg.bg && pg.bg.type === 'pdf') {
-      let src = srcDocs.get(pg.bg.hash);
+    if (bg && bg.type === 'pdf') { // 画面と同じく、変更後の背景(bgOf)で決める
+      let src = srcDocs.get(bg.hash);
       if (!src) {
-        const f = await db.getFile(pg.bg.hash);
+        const f = await db.getFile(bg.hash);
         src = await L.PDFDocument.load(await f.data.arrayBuffer(), { ignoreEncryption: true });
-        srcDocs.set(pg.bg.hash, src);
+        srcDocs.set(bg.hash, src);
       }
-      [page] = await out.copyPages(src, [pg.bg.page - 1]);
+      [page] = await out.copyPages(src, [bg.page - 1]);
+      if (bg.rot) page.setRotation(L.degrees((((page.getRotation().angle || 0) + bg.rot) % 360 + 360) % 360)); // 回したページ
       out.addPage(page);
     } else {
       page = out.addPage([pg.w, pg.h]);

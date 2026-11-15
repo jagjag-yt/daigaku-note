@@ -46,7 +46,19 @@ const ACCENT = '#e2a0a0';
 const alias = { lines: 'lines-b' };
 
 // 背景 → 描く物の一覧 { lines: [[x0,y0,x1,y1,太さ,色]], dots: [[x,y,半径,色]] }
+// bg.rot(ページを回したとき): 回す前の向きで作ってから、点を回す
 export function templatePrims(bg, w, h) {
+  const rot = bg && bg.type === 'blank' ? (((bg.rot || 0) % 360) + 360) % 360 : 0;
+  if (!rot) return basePrims(bg, w, h);
+  const [w0, h0] = rot % 180 ? [h, w] : [w, h];
+  const p = basePrims(bg, w0, h0);
+  const f = rot === 90 ? (x, y) => [h0 - y, x] : rot === 180 ? (x, y) => [w0 - x, h0 - y] : (x, y) => [y, w0 - x];
+  return {
+    lines: p.lines.map(([x0, y0, x1, y1, t, c]) => [...f(x0, y0), ...f(x1, y1), t, c]),
+    dots: p.dots.map(([x, y, r, c]) => [...f(x, y), r, c]),
+  };
+}
+function basePrims(bg, w, h) {
   const out = { lines: [], dots: [] };
   if (!bg || bg.type !== 'blank') return out;
   const id = alias[bg.ruling] || bg.ruling;
