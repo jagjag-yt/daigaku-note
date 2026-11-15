@@ -98,6 +98,7 @@
       </div>
     </header>
     <input id="pdf-input" type="file" accept="application/pdf,.pdf" hidden>
+    <input id="tpl-input" type="file" accept="application/pdf,.pdf,image/png,image/jpeg,image/webp" hidden>
     <input id="gn-input" type="file" accept=".goodnotes,application/zip" multiple hidden>
     <div id="results" class="results" hidden></div>
     <div id="notes" class="grid"></div>
@@ -159,7 +160,7 @@
       <h2>新しいノート</h2>
       <label class="field">名前<input id="nn-title" type="text" placeholder="無題のノート"></label>
       <div class="field">表紙<div id="nn-cover" class="cover-pick" role="radiogroup" aria-label="表紙の色"></div></div>
-      <div class="field">用紙<div id="nn-tpl" class="tpl-pick" role="radiogroup" aria-label="テンプレート"></div></div>
+      <div class="field">用紙<div id="nn-tpl" class="tpl-pick" role="radiogroup" aria-label="テンプレート"></div><button type="button" class="tpl-add link-btn" data-for="nn-tpl">+ 自作テンプレートを追加(PDF・画像)…</button></div>
       <div class="field">紙の色<div id="nn-paper" class="paper-pick" role="radiogroup" aria-label="紙の色"></div></div>
       <label class="field">サイズ<select id="nn-size" class="size-select"></select></label>
       <div class="row end">
@@ -177,7 +178,7 @@
         <label><input type="radio" name="pp-where" value="before"><span id="pp-before-label">今のページの前</span></label>
         <label><input type="radio" name="pp-where" value="last"><span>最後</span></label>
       </div></div>
-      <div class="field">用紙<div id="pp-tpl" class="tpl-pick" role="radiogroup" aria-label="テンプレート"></div></div>
+      <div class="field">用紙<div id="pp-tpl" class="tpl-pick" role="radiogroup" aria-label="テンプレート"></div><button type="button" class="tpl-add link-btn" data-for="pp-tpl">+ 自作テンプレートを追加(PDF・画像)…</button></div>
       <div class="field">紙の色<div id="pp-paper" class="paper-pick" role="radiogroup" aria-label="紙の色"></div></div>
       <label class="field">サイズ<select id="pp-size" class="size-select"></select></label>
       <div class="row end">

@@ -7,7 +7,8 @@
 // note.fav: お気に入り / note.purge: ゴミ箱から完全に削除(本棚・ゴミ箱・検索に出さず、開けない。同期の記録の中身は残る)
 // note.move: ノートを入れるフォルダ / folder.*: フォルダ(op の n はフォルダの id。note.create が無いので、古い版の本棚には出ない)
 export const NOTE_TYPES = ['note.create', 'note.rename', 'note.delete', 'note.restore', 'note.cover', 'note.fav', 'note.purge',
-  'note.move', 'folder.create', 'folder.rename', 'folder.move', 'folder.delete'];
+  'note.move', 'folder.create', 'folder.rename', 'folder.move', 'folder.delete',
+  'tpl.add', 'tpl.delete']; // tpl.*: 自作テンプレート(n はテンプレートの id。中身は PDF のページ)
 
 export const PAGE_A4 = { w: 595.28, h: 841.89 };
 
@@ -116,6 +117,14 @@ export function applyOp(note, op) {
       break;
     case 'folder.move':
       if (newer(s, note.parentS)) { note.parent = p.parent || null; note.parentS = s; }
+      break;
+    case 'tpl.add': // 自作テンプレート: { name, hash, page, w, h }
+      note.kind = 'tpl';
+      if (note.created == null || op.ts < note.created) note.created = op.ts;
+      note.tpl = { name: p.name, hash: p.hash, page: p.page, w: p.w, h: p.h };
+      break;
+    case 'tpl.delete':
+      note.tplDeleted = true;
       break;
     case 'folder.delete': // フォルダの削除は取り消さない(中のノートはゴミ箱へ。戻すと本棚のいちばん上に出る)
       note.folderDeleted = true;
@@ -278,6 +287,13 @@ export function foldersOf(lib) {
   }
   return fs;
 }
+// 自作テンプレートの一覧(作った順)
+export function customTemplates(lib) {
+  return [...lib.values()].filter((n) => n.kind === 'tpl' && n.tpl && n.tpl.hash && !n.tplDeleted)
+    .sort((a, b) => (a.created || 0) - (b.created || 0) || (a.id < b.id ? -1 : 1))
+    .map((n) => ({ id: n.id, ...n.tpl }));
+}
+
 // ノートが入っているフォルダ(フォルダが消えていたら null = いちばん上)
 export const folderOfNote = (n, fs) => (n.folder && fs.has(n.folder) ? n.folder : null);
 // フォルダ id とその中のフォルダすべての id
@@ -340,6 +356,8 @@ export function fileRefs(op) {
   if (op.t === 'page.add') {
     const bg = p.page && p.page.bg;
     if (bg && bg.type === 'pdf' && bg.hash) return [{ hash: bg.hash, type: 'application/pdf' }];
+  } else if (op.t === 'tpl.add') {
+    if (p.hash) return [{ hash: p.hash, type: 'application/pdf' }];
   } else if (op.t === 'item.add') {
     const d = p.s;
     if (d && d.tool === 'image' && d.hash) return [{ hash: d.hash, type: d.mime || 'image/png' }];
