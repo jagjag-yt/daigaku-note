@@ -165,6 +165,60 @@ test('ログイン: 登録のあるアドレスとないアドレスで、応答
   assert.equal(env.DB.q('SELECT 1 FROM users WHERE email = ?', 'unknown@example.com').length, 0);
 });
 
+test('ログインとアカウント作成: purpose で文面と扱いが変わる。登録の有無は番号を確かめるまで分からない', async () => {
+  const lastMail = (to) => [...mail.mails].reverse().find((m) => m.to.includes(to));
+  // メールの文面は purpose だけで決まる(登録の有無では変わらない)
+  const sA = await api('/otp/send', { method: 'POST', body: { email: 'new1@example.com', purpose: 'login' } });
+  const sB = await api('/otp/send', { method: 'POST', body: { email: 'known@example.com', purpose: 'login' } });
+  assert.deepEqual(sA.data, sB.data);
+  assert.match(lastMail('new1@example.com').subject, /ログイン番号/);
+  assert.equal(lastMail('new1@example.com').subject.replace(/\d+/, ''), lastMail('known@example.com').subject.replace(/\d+/, ''));
+
+  // ログインなのにアカウントがない: 鍵を出さず、利用者も作らない。同じ番号でアカウント作成に切り替えられる
+  const code = mail.lastCode('new1@example.com');
+  const no = await api('/otp/verify', { method: 'POST', body: { email: 'new1@example.com', code, purpose: 'login' } });
+  assert.equal(no.status, 404);
+  assert.equal(no.data.reason, 'no_account');
+  assert.equal(no.data.token, undefined);
+  assert.equal(env.DB.q('SELECT 1 FROM users WHERE email = ?', 'new1@example.com').length, 0);
+  const made = await api('/otp/verify', { method: 'POST', body: { email: 'new1@example.com', code, purpose: 'signup' } });
+  assert.equal(made.status, 200, JSON.stringify(made.data));
+  assert.equal(made.data.existing, false);
+  assert.ok(made.data.token);
+  // 使った番号は二度と使えない
+  const again = await api('/otp/verify', { method: 'POST', body: { email: 'new1@example.com', code, purpose: 'signup' } });
+  assert.equal(again.status, 400);
+
+  // 違う番号では「アカウントがない」とは言わない(番号を知らない人に登録の有無を漏らさない)
+  await api('/otp/send', { method: 'POST', body: { email: 'new2@example.com', purpose: 'login' } });
+  const right = mail.lastCode('new2@example.com');
+  const wrong = right === '000000' ? '111111' : '000000';
+  const bad = await api('/otp/verify', { method: 'POST', body: { email: 'new2@example.com', code: wrong, purpose: 'login' } });
+  assert.equal(bad.status, 400);
+  assert.equal(bad.data.reason, undefined);
+
+  // 4回間違えたあとに正しい番号を入れても、同じ番号でアカウントを作れる(アカウントがないと知らせた回は数えない)
+  await api('/otp/send', { method: 'POST', body: { email: 'new3@example.com', purpose: 'login' } });
+  const c3 = mail.lastCode('new3@example.com');
+  const w3 = c3 === '000000' ? '111111' : '000000';
+  for (let i = 0; i < 4; i++) assert.equal((await api('/otp/verify', { method: 'POST', body: { email: 'new3@example.com', code: w3, purpose: 'login' } })).status, 400);
+  assert.equal((await api('/otp/verify', { method: 'POST', body: { email: 'new3@example.com', code: c3, purpose: 'login' } })).status, 404);
+  const made3 = await api('/otp/verify', { method: 'POST', body: { email: 'new3@example.com', code: c3, purpose: 'signup' } });
+  assert.equal(made3.status, 200, JSON.stringify(made3.data));
+
+  // アカウント作成の文面。すでにあるアドレスなら、そのままログインして existing: true
+  await api('/otp/send', { method: 'POST', body: { email: 'known@example.com', purpose: 'signup' } });
+  assert.match(lastMail('known@example.com').subject, /アカウント作成の確認番号/);
+  const ex = await api('/otp/verify', { method: 'POST', body: { email: 'known@example.com', code: mail.lastCode('known@example.com'), purpose: 'signup' } });
+  assert.equal(ex.status, 200);
+  assert.equal(ex.data.existing, true);
+  // ログイン: あるアドレスはふつうにログインできる
+  await api('/otp/send', { method: 'POST', body: { email: 'known@example.com', purpose: 'login' } });
+  const li = await api('/otp/verify', { method: 'POST', body: { email: 'known@example.com', code: mail.lastCode('known@example.com'), purpose: 'login' } });
+  assert.equal(li.status, 200);
+  assert.equal(li.data.existing, true);
+});
+
 test('ログイン: 送信の回数の上限(続けての送信・IP ごと)', async () => {
   const burstEnv = fakeEnv(); // OTP_BURST_SECONDS なし = 60秒
   const s2 = await startWorker(worker, burstEnv);

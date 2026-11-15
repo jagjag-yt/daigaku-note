@@ -34,7 +34,8 @@ export const config = () => ({ ...cfg });
 const enabled = () => !!(cfg.url && cfg.user);
 // 大学ノートアカウント(js/account.js)で同期しているか。cfg.account = { email, deviceId }
 const accountMode = () => !!cfg.account;
-// アカウントの鍵がサーバーに断られたか(外された・退会した・長く使わなかった)。設定し直すまで true
+// アカウントの鍵がサーバーに断られたか(外された・退会した・長く使わなかった)。設定し直すまで true。
+// 読み込み直しても続くように、同期の設定(cfg.expired)にも保存する。断られた鍵ではもう同期しない
 export const authExpired = () => expired;
 // 変更してから送るまで待つ長さ。アカウントでは書いている途中に何度も送らないよう長めにする
 // (サーバーの書き込みの回数を抑えるため。画面を離れるとき・ノートを閉じるときは flush() ですぐ送る)
@@ -45,6 +46,7 @@ export async function init(opts) {
   onRemoteChange = opts.onRemoteChange;
   onStatus = opts.onStatus;
   cfg = (await db.getMeta('dav')) || {};
+  expired = !!(cfg.account && cfg.expired);
   const saved = await db.getMeta('davState');
   if (saved && saved.key === stateKey()) st = migrate(saved);
   onStatus(enabled() ? 'クラウド同期: 準備中' : '');
@@ -141,7 +143,7 @@ export async function configure(next) {
 
 // 変更のあと少し待ってから同期する(ms を省くと、変更のあとの待ち: アカウントは約20秒、WebDAV は4秒)
 export function schedule(ms) {
-  if (!enabled() || cfg.auto === false) return;
+  if (!enabled() || expired || cfg.auto === false) return;
   if (ms === undefined) { ms = debounce(); dirty = true; }
   clearTimeout(timer);
   timer = setTimeout(() => { dirty = false; syncNow(); }, ms);
@@ -252,7 +254,7 @@ function addMissing(ref, n) {
 }
 
 export async function syncNow(manual = false) {
-  if (!enabled()) return;
+  if (!enabled() || expired) return;
   if (running) { again = true; againManual ||= manual; return; }
   running = true;
   onStatus('クラウド同期: 同期しています…');
@@ -512,7 +514,15 @@ export async function syncNow(manual = false) {
     if (e instanceof TypeError && isNative && /^http:/i.test(cfg.url)) msg = 'アプリ版は https:// で始まるサーバーにだけ接続できます';
     else if (e instanceof TypeError) msg = isNative ? 'サーバーに接続できません。URL とネット接続を確認してください' : 'サーバーに接続できません。URL・ネット接続・CORS の設定を確認してください';
     else if (e.timeout) msg = 'サーバーからの応答がありません(時間切れ)。しばらくしてからもう一度同期します';
-    else if (e.status === 401 && accountMode()) { msg = 'ログインが切れました。もう一度ログインしてください'; expired = true; }
+    else if (e.status === 401 && accountMode()) {
+      msg = 'ログインが切れました。もう一度ログインしてください';
+      expired = true;
+      // ほかのタブでログインし直した・ログアウトした設定を、古い鍵の設定で上書きしないように、保存されている鍵が同じときだけ書く
+      try {
+        const saved = (await db.getMeta('dav')) || {};
+        if (saved.pass === cfg.pass) { cfg = { ...cfg, expired: true }; await db.setMeta('dav', cfg); }
+      } catch { /* 保存できなくても、開いているあいだは止まる */ }
+    }
     else if (e.status === 507 && accountMode()) msg = '容量の上限(1GB)に達しました';
     else if (e.status === 401) msg = 'ユーザー名またはパスワードが違います';
     else if (e.status === 404 || e.status === 409) msg = 'フォルダのURLが見つかりません';
