@@ -50,7 +50,7 @@ const PEN_NIBS = {
 };
 const PEN_DEFAULTS = { nib: 'fountain', sens: 50, stab: 0, dash: '', shape: '' }; // shape: ドラッグで描く図形(空ならふつうに書く)
 
-const APP_VERSION = 'v50'; // sw.js の VERSION と合わせる
+const APP_VERSION = 'v51'; // sw.js の VERSION と合わせる
 const MAX_TABS = 12; // 開いておけるタブの数
 const DEFAULT_HIDDEN = ['laser']; // 最初は隠しておく道具(設定やその他のメニューから使う)
 
@@ -94,6 +94,7 @@ const S = {
   colorHist: { pen: [], marker: [], tape: [] }, // 最近使った色
   // ツールバー: 道具の並び・隠す道具・置く場所(top / bottom)
   tb: { order: ['pen', 'marker', 'eraser', 'lasso', 'text', 'sticky', 'image', 'laser', 'shapes'], hidden: ['laser'], pos: 'top' },
+  hs: false, // ページを横に 1 枚ずつ送る(設定)
   ro: new Set(), // 閲覧専用にしているノートの id(端末ごと)
   unlocked: new Set(), // この端末でパスコードを入れて開いたロック中のノート(本棚に戻ると閉じる)
   lockHash: null, // ロック用のパスコード { salt, hash }(この端末だけ)
@@ -162,6 +163,7 @@ async function init() {
     if (Array.isArray(hs)) S.colorHist[k] = clean(hs).slice(0, HIST_MAX);
   }
   if (['system', 'light', 'dark'].includes(prefs.theme)) S.theme = prefs.theme;
+  S.hs = prefs.hs === true;
   if (Array.isArray(prefs.ro)) S.ro = new Set(prefs.ro.filter((x) => typeof x === 'string' && /^\w+$/.test(x)).slice(0, 500));
   if (prefs.lockHash && typeof prefs.lockHash.salt === 'string' && typeof prefs.lockHash.hash === 'string') S.lockHash = prefs.lockHash;
   if (Array.isArray(prefs.tabs)) {
@@ -234,7 +236,7 @@ async function init() {
 }
 
 function savePrefs() {
-  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lib: { sort: S.lib.sort, view: S.lib.view }, nn: S.nn, theme: S.theme, tb: S.tb, tabs: S.tabs, ro: [...S.ro], lockHash: S.lockHash, tape: S.tape, markerMode: S.markerMode, straight: S.straight, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text, sticky: S.sticky });
+  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lib: { sort: S.lib.sort, view: S.lib.view }, nn: S.nn, theme: S.theme, hs: S.hs, tb: S.tb, tabs: S.tabs, ro: [...S.ro], lockHash: S.lockHash, tape: S.tape, markerMode: S.markerMode, straight: S.straight, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text, sticky: S.sticky });
 }
 
 function route() {
@@ -1864,6 +1866,7 @@ function openSettings() {
   };
   section('画面');
   choice('画面の色', 'theme', [['system', '端末に合わせる'], ['light', 'ライト'], ['dark', 'ダーク']], S.theme, (v) => { S.theme = v; applyTheme(); savePrefs(); });
+  choice('ページの送り方', 'hs', [['v', '縦にスクロール'], ['h', '横に1ページずつ']], S.hs ? 'h' : 'v', (v) => { S.hs = v === 'h'; savePrefs(); applyHs(); });
   section('書く');
   toggle('指で書く', '切ると、指はスクロールと拡大だけになり、書くのはペンだけ', () => S.fingerDraw, (v) => { S.fingerDraw = v; }, 'set-finger');
   toggle('筆圧で太さを変える', 'ペンで書いたときだけ', () => S.pressure, (v) => { S.pressure = v; }, 'set-pressure');
@@ -2141,6 +2144,11 @@ function bindEditor() {
       if (k === 'ArrowLeft' || k === 'ArrowUp' || k === 'PageUp') { e.preventDefault(); presentGo(-1); return; }
       if (k === 'Escape') { e.preventDefault(); exitPresent(); return; }
     }
+    if (S.hs && !e.ctrlKey && !e.metaKey && ['ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown'].includes(e.key) && !S.sel) {
+      e.preventDefault();
+      hsGo(e.key === 'ArrowRight' || e.key === 'PageDown' ? 1 : -1);
+      return;
+    }
     if (e.repeat) return;
     const mod = e.ctrlKey || e.metaKey;
     const k = e.key.toLowerCase();
@@ -2206,19 +2214,20 @@ async function openNote(id, pageId) {
     if (window.innerWidth <= 700) S.sidebar = false; // スマホではノートを開くたびに閉じた状態から
     $('#sidebar').hidden = !S.sidebar;
     $('#sb-scrim').hidden = !S.sidebar;
+    $('#editor').classList.toggle('hs', S.hs);
     S.zoom = fitZoom();
     S.fit = true;
     renderPages();
     $('#scroller').scrollTop = 0;
     // タブで戻ってきたときは、最後に見ていたページから
     const tab = touchTab(note);
-    if (!pageId && tab.page && S.views.has(tab.page)) S.views.get(tab.page).el.scrollIntoView({ block: 'start' });
+    if (!pageId && tab.page && S.views.has(tab.page)) showPage(S.views.get(tab.page));
     refreshToolbar();
     onScroll();
   }
   renderTabs();
   placeRuler();
-  if (pageId) S.views.get(pageId)?.el.scrollIntoView({ block: 'start' });
+  if (pageId) showPage(S.views.get(pageId));
 }
 
 // ---------- タブ(開いたノート) ----------
@@ -2320,11 +2329,11 @@ function fitZoom() {
   const maxW = Math.max(PAGE_A4.w, ...pages.map((p) => p.w));
   // 左右の余白(切り欠きを避ける幅を含む。#pages の padding)を除いた幅に合わせる
   const ps = getComputedStyle($('#pages'));
-  const pad = (parseFloat(ps.paddingLeft) || 16) + (parseFloat(ps.paddingRight) || 16);
+  const pad = S.hs && !S.present ? 48 : (parseFloat(ps.paddingLeft) || 16) + (parseFloat(ps.paddingRight) || 16); // 横送りの左右の余白は、端のページを真ん中に出すためのもの
   const avail = (sc.clientWidth || window.innerWidth) - pad;
-  if (S.present) { // 発表モード: ページ全体が画面に入る大きさ
+  if (S.present || S.hs) { // 発表モード・横送り: ページ全体が画面に入る大きさ
     const maxH = Math.max(...pages.map((p) => p.h), 1);
-    return clampZoom(Math.min(avail / maxW, ((sc.clientHeight || window.innerHeight) - 24) / maxH, 4));
+    return clampZoom(Math.min(avail / maxW, ((sc.clientHeight || window.innerHeight) - 40) / maxH, 4));
   }
   return clampZoom(Math.min(avail / maxW, 1.5));
 }
@@ -2342,7 +2351,7 @@ function renderPages() {
   S.views.clear();
   S.sel = null;
   wrap.innerHTML = '';
-  S.io = new IntersectionObserver(onIntersect, { root: $('#scroller'), rootMargin: '800px 0px' });
+  S.io = new IntersectionObserver(onIntersect, { root: $('#scroller'), rootMargin: '800px 800px' }); // 横送りでも、となりのページを先に描く
   const pages = pagesOf(S.note);
   pages.forEach((pg, i) => {
     const el = document.createElement('div');
@@ -2418,15 +2427,21 @@ function keepPosition(fn) {
   const pg = currentPage();
   let frac = 0, fx = 0;
   const v = pg && S.views.get(pg.id);
+  const hs = S.hs && !S.present;
   if (v) {
     const r = v.el.getBoundingClientRect(), sr = sc.getBoundingClientRect();
-    frac = (sr.top - r.top) / r.height;
-    fx = sc.scrollWidth > sc.clientWidth ? sc.scrollLeft / (sc.scrollWidth - sc.clientWidth) : 0;
+    if (hs) { frac = (sr.left - r.left) / r.width; fx = sc.scrollHeight > sc.clientHeight ? sc.scrollTop / (sc.scrollHeight - sc.clientHeight) : 0; }
+    else { frac = (sr.top - r.top) / r.height; fx = sc.scrollWidth > sc.clientWidth ? sc.scrollLeft / (sc.scrollWidth - sc.clientWidth) : 0; }
   }
   fn();
   const nv = pg && S.views.get(pg.id);
   if (!nv) return;
   const r = nv.el.getBoundingClientRect(), sr = sc.getBoundingClientRect();
+  if (hs) { // 横送り: 横の位置を戻し、縦は割合で戻す
+    sc.scrollLeft += r.left - sr.left + frac * r.width;
+    sc.scrollTop = fx * Math.max(0, sc.scrollHeight - sc.clientHeight);
+    return;
+  }
   sc.scrollTop += r.top - sr.top + frac * r.height;
   sc.scrollLeft = fx * Math.max(0, sc.scrollWidth - sc.clientWidth);
 }
@@ -2740,6 +2755,7 @@ function presentShow(pg) {
   if (!v) return;
   const r = v.el.getBoundingClientRect(), s = sc.getBoundingClientRect();
   sc.scrollTop += r.top - s.top - (s.height - r.height) / 2;
+  sc.scrollLeft += r.left - s.left - (s.width - r.width) / 2;
   const pages = pagesOf(S.note);
   $('#present-bar .pr-no').textContent = `${pages.indexOf(pg) + 1} / ${pages.length}`;
 }
@@ -3197,6 +3213,12 @@ function bindInput() {
   sc.addEventListener('pointerup', onUp);
   sc.addEventListener('pointercancel', onUp);
   sc.addEventListener('wheel', (e) => {
+    if (S.hs && !e.ctrlKey && !S.present && Math.abs(e.deltaY) > Math.abs(e.deltaX) && sc.scrollHeight <= sc.clientHeight + 1) {
+      // 横送りで、ページが縦に収まっているとき: 縦のホイールでページを送る(続けて回しても 1 枚ずつ)
+      e.preventDefault();
+      if (performance.now() - (hsWheelAt || 0) > 350 && Math.abs(e.deltaY) > 4) { hsWheelAt = performance.now(); hsGo(e.deltaY > 0 ? 1 : -1); }
+      return;
+    }
     if (e.ctrlKey) { // トラックパッドのピンチ
       e.preventDefault();
       const r = sc.getBoundingClientRect();
@@ -4568,7 +4590,50 @@ function gestureUp(e) {
     }
     return;
   }
+  // 横送りで、全体表示の大きさのとき: 指を離したらページに合わせる(慣性は使わない)。拡大しているときは、ふつうにスクロール
+  if (touches.size === 0 && S.hs && !S.present && S.note && S.zoom <= fitZoom() * 1.05) return hsSnap(t && performance.now() - t.t < 80 ? t.vx : 0);
   if (touches.size === 0 && t && performance.now() - t.t < 80) startInertia(t.vx, t.vy);
+}
+// ページを見せる: 縦なら先頭を上に、横送りなら真ん中に
+function showPage(v, smooth = false) {
+  if (!v) return;
+  if (S.hs && !S.present) return hsShow(v.pg, smooth);
+  v.el.scrollIntoView({ block: 'start', behavior: smooth ? 'smooth' : 'auto' });
+}
+// ---------- 横に 1 ページずつ送る ----------
+let hsWheelAt = 0;
+// 画面を回した・大きさが変わったとき、横送りなら今のページを真ん中に戻す
+window.addEventListener('resize', () => {
+  if (!S.hs || S.present || !S.note) return;
+  const pg = currentPage();
+  requestAnimationFrame(() => requestAnimationFrame(() => { if (pg && S.note) hsShow(pg, false); }));
+});
+function applyHs() {
+  $('#editor').classList.toggle('hs', S.hs);
+  if (!S.note) return;
+  const pg = currentPage();
+  S.fit = true;
+  S.zoom = fitZoom();
+  layoutPages();
+  if (pg) hsShow(pg, false);
+}
+// ページを画面の真ん中へ(横送りのとき)
+function hsShow(pg, smooth = true) {
+  const v = S.views.get(pg.id), sc = $('#scroller');
+  if (!v) return;
+  const r = v.el.getBoundingClientRect(), s = sc.getBoundingClientRect();
+  sc.scrollTo({ left: sc.scrollLeft + r.left - s.left - (s.width - r.width) / 2, top: S.hs ? sc.scrollTop : sc.scrollTop + r.top - s.top, behavior: smooth ? 'smooth' : 'auto' });
+}
+function hsGo(d) {
+  const pages = pagesOf(S.note), cur = currentPage();
+  const next = pages[Math.max(0, Math.min(pages.length - 1, pages.indexOf(cur) + d))];
+  if (next) hsShow(next);
+}
+// 指を離したら、いちばん近いページに合わせる。速く払ったら、その向きのとなりへ
+function hsSnap(vx) {
+  if (Math.abs(vx) > 0.4) return hsGo(vx < 0 ? 1 : -1);
+  const pg = currentPage();
+  if (pg) hsShow(pg);
 }
 function startInertia(vx, vy) {
   const sc = $('#scroller');
@@ -4631,11 +4696,14 @@ async function redo() {
 // ---------- ページ ----------
 function currentPage() {
   const sc = $('#scroller');
-  const mid = sc.getBoundingClientRect().top + sc.clientHeight / 2;
+  const sr = sc.getBoundingClientRect();
+  // 縦なら画面の上下の真ん中、横送りなら左右の真ん中に一番近いページ
+  const mid = S.hs ? sr.left + sc.clientWidth / 2 : sr.top + sc.clientHeight / 2;
   let best = null, bestD = Infinity;
   for (const v of S.views.values()) {
     const r = v.el.getBoundingClientRect();
-    const d = mid < r.top ? r.top - mid : mid > r.bottom ? mid - r.bottom : 0;
+    const a = S.hs ? r.left : r.top, b = S.hs ? r.right : r.bottom;
+    const d = mid < a ? a - mid : mid > b ? mid - b : 0;
     if (d < bestD) { bestD = d; best = v.pg; }
   }
   return best;
@@ -4673,7 +4741,7 @@ async function addPage(where = 'after', tpl, sizeId, ref = currentPage(), paper)
   const top = $('#scroller').scrollTop;
   renderPages();
   $('#scroller').scrollTop = top;
-  S.views.get(id)?.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  showPage(S.views.get(id), true);
   return id;
 }
 
@@ -4687,7 +4755,7 @@ async function deletePage(id) {
   toast(`${no}ページ目を削除しました`, 6000, { label: '元に戻す', run: async () => {
     if (S.undo[S.undo.length - 1] !== entry) return;
     await undo();
-    S.views.get(id)?.el.scrollIntoView({ block: 'start' });
+    showPage(S.views.get(id));
   } });
 }
 
@@ -4760,7 +4828,7 @@ async function addPdfPages(e) {
     await commit(ops);
     pushUndo({ undo: ops.map((o) => ['page.delete', { pageId: o.p.page.id }]), redo: ops.map((o) => ['page.restore', { pageId: o.p.page.id }]), relayout: true });
     renderPages();
-    S.views.get(ops[0].p.page.id)?.el.scrollIntoView({ block: 'start' });
+    showPage(S.views.get(ops[0].p.page.id));
     toast(`${sizes.length}ページを追加しました`);
   } catch (err) {
     toast('PDFを読み込めませんでした: ' + err.message, 6000);
@@ -4829,7 +4897,7 @@ function renderSidebar() {
     const go = row.querySelector('.pp-go');
     go.onclick = (e) => {
       if (go._dragged) { go._dragged = false; e.preventDefault(); return; }
-      S.views.get(pg.id)?.el.scrollIntoView({ block: 'start' });
+      showPage(S.views.get(pg.id));
       if (window.innerWidth <= 700) toggleSidebar(false);
     };
     if (canDrag) bindThumbDrag(row, pg);
@@ -5053,7 +5121,7 @@ function renderOutline(list, all, cur) {
     row.querySelector('.ol-title').textContent = pg.title;
     S.thumbs.set(pg.id, row); // スクロールで今のページの印を動かすため(サムネイルは無いので描かない)
     row.querySelector('.ol-go').onclick = () => {
-      S.views.get(pg.id)?.el.scrollIntoView({ block: 'start' });
+      showPage(S.views.get(pg.id));
       if (window.innerWidth <= 700) toggleSidebar(false);
     };
     const mb = row.querySelector('.pp-menu');
@@ -5134,7 +5202,7 @@ async function duplicatePage(pg) {
   await commit(ops);
   pushUndo({ undo: [['page.delete', { pageId: id }]], redo: [['page.restore', { pageId: id }]], relayout: true });
   keepPosition(() => renderPages());
-  S.views.get(id)?.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  showPage(S.views.get(id), true);
   toast(`${i + 1}ページ目を複製しました`);
 }
 
@@ -5157,7 +5225,7 @@ async function movePage(pg, a, b, quiet) {
   if (quiet) return keepPosition(() => renderPages());
   renderPages();
   // メニューで動かしたときは、動かしたページを表示する
-  S.views.get(pg.id)?.el.scrollIntoView({ block: 'start' });
+  showPage(S.views.get(pg.id));
   const n = pagesOf(S.note).indexOf(pg) + 1;
   toast(`${n}ページ目に移動しました`);
 }
@@ -5200,7 +5268,7 @@ function gotoPagePopover(anchor) {
       e.preventDefault();
       const n = Math.max(1, Math.min(pages.length, Math.round(+inp.value || 1)));
       close();
-      S.views.get(pages[n - 1].id)?.el.scrollIntoView({ block: 'start' });
+      showPage(S.views.get(pages[n - 1].id));
     };
     setTimeout(() => { inp.focus(); inp.select(); });
   }, { align: 'end' });
