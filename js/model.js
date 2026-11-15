@@ -5,7 +5,9 @@
 // DOM には依存しない(Node でテストできる)。
 
 // note.fav: お気に入り / note.purge: ゴミ箱から完全に削除(本棚・ゴミ箱・検索に出さず、開けない。同期の記録の中身は残る)
-export const NOTE_TYPES = ['note.create', 'note.rename', 'note.delete', 'note.restore', 'note.cover', 'note.fav', 'note.purge'];
+// note.move: ノートを入れるフォルダ / folder.*: フォルダ(op の n はフォルダの id。note.create が無いので、古い版の本棚には出ない)
+export const NOTE_TYPES = ['note.create', 'note.rename', 'note.delete', 'note.restore', 'note.cover', 'note.fav', 'note.purge',
+  'note.move', 'folder.create', 'folder.rename', 'folder.move', 'folder.delete'];
 
 export const PAGE_A4 = { w: 595.28, h: 841.89 };
 
@@ -89,6 +91,7 @@ export function applyOp(note, op) {
     case 'note.create':
       if (note.created == null || op.ts < note.created) note.created = op.ts;
       if (p.cover && newer(s, note.coverS)) { note.cover = p.cover; note.coverS = s; }
+      if (p.folder && newer(s, note.folderS)) { note.folder = p.folder; note.folderS = s; }
     // fallthrough: 作成時の名前も LWW の一票
     case 'note.rename':
       if (newer(s, note.titleS)) {
@@ -98,6 +101,24 @@ export function applyOp(note, op) {
       break;
     case 'note.cover': // 表紙の色
       if (newer(s, note.coverS)) { note.cover = p.cover; note.coverS = s; }
+      break;
+    case 'note.move': // 入れるフォルダ(null は本棚のいちばん上)
+      if (newer(s, note.folderS)) { note.folder = p.folder || null; note.folderS = s; }
+      break;
+    case 'folder.create':
+      note.kind = 'folder';
+      if (note.created == null || op.ts < note.created) note.created = op.ts;
+      if (newer(s, note.parentS)) { note.parent = p.parent || null; note.parentS = s; }
+    // fallthrough: 作成時の名前も LWW の一票
+    case 'folder.rename':
+      note.kind = 'folder';
+      if (newer(s, note.nameS)) { note.name = p.name; note.nameS = s; }
+      break;
+    case 'folder.move':
+      if (newer(s, note.parentS)) { note.parent = p.parent || null; note.parentS = s; }
+      break;
+    case 'folder.delete': // フォルダの削除は取り消さない(中のノートはゴミ箱へ。戻すと本棚のいちばん上に出る)
+      note.folderDeleted = true;
       break;
     case 'note.fav': // お気に入り
       if (newer(s, note.favS)) { note.fav = !!p.fav; note.favS = s; }
@@ -228,6 +249,36 @@ export function buildLibrary(noteOps) {
     applyOp(n, op);
   }
   return map;
+}
+
+// 生きているフォルダ: id -> {id, name, parent, created}。親が無い・消えた・輪になっているものは、いちばん上に置く
+export function foldersOf(lib) {
+  const fs = new Map();
+  for (const n of lib.values()) if (n.kind === 'folder' && n.nameS && !n.folderDeleted) fs.set(n.id, { id: n.id, name: n.name, parent: n.parent || null, created: n.created });
+  for (const f of fs.values()) if (f.parent && !fs.has(f.parent)) f.parent = null;
+  for (const f of fs.values()) {
+    // 親をたどって自分に戻ってきたら輪(別々の端末で同時に移動したとき)。輪の中で id のいちばん小さいものを上に出す
+    const seen = [];
+    let c = f;
+    while (c && c.parent && !seen.includes(c.id)) { seen.push(c.id); c = fs.get(c.parent); }
+    if (c && seen.includes(c.id)) {
+      const ring = seen.slice(seen.indexOf(c.id));
+      fs.get(ring.sort()[0]).parent = null;
+    }
+  }
+  return fs;
+}
+// ノートが入っているフォルダ(フォルダが消えていたら null = いちばん上)
+export const folderOfNote = (n, fs) => (n.folder && fs.has(n.folder) ? n.folder : null);
+// フォルダ id とその中のフォルダすべての id
+export function folderTree(fs, id) {
+  const out = new Set([id]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const f of fs.values()) if (f.parent && out.has(f.parent) && !out.has(f.id)) { out.add(f.id); grew = true; }
+  }
+  return out;
 }
 
 export function bboxOf(d) {

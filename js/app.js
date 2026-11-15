@@ -1,6 +1,6 @@
 import * as db from './db.js';
 import {
-  Recorder, emptyNote, applyOp, pagesOf, strokesOf, buildLibrary, newId, strokeHit, styleOf, bgOf, PAGE_A4, addType,
+  Recorder, emptyNote, applyOp, foldersOf, folderOfNote, folderTree, pagesOf, strokesOf, buildLibrary, newId, strokeHit, styleOf, bgOf, PAGE_A4, addType,
 } from './model.js';
 import { drawStroke, recognizeShape, strokeInLasso, geometry, strokeSvg, pointInPolygon } from './ink.js';
 import { isItem, itemSvg, drawItem, itemInLasso, onImageReady, releaseImages, itemRect, cornerPts, textHeight, fontFamily, LINE_HEIGHT } from './items.js';
@@ -88,7 +88,7 @@ const S = {
   edit: null, // 書いている途中のテキストボックス { v, id(書き直しのとき), d, ta }
   palettes: { pen: [...PEN_PALETTE], marker: [...MARKER_PALETTE], tape: [...TAPE_PALETTE] }, // 色のプリセット(編集できる)
   colorHist: { pen: [], marker: [], tape: [] }, // 最近使った色
-  lib: { filter: 'all', sort: 'updated', view: 'grid' }, // 本棚: 表示するノート・並べ替え・並べ方
+  lib: { filter: 'all', sort: 'updated', view: 'grid', folder: null }, // 本棚: 表示するノート・並べ替え・並べ方
   clip: null, // コピーしたもの { items: [線・部品のデータ], pageId, cx, cy, n: 同じ場所に貼った回数 }
 };
 const CLIP_KEY = 'daigaku-note-clip';
@@ -215,8 +215,12 @@ function route() {
   // ログイン済みなら本棚へ(履歴に足さずに置き換える。足すと、戻るでログインのページの住所に戻り、また本棚へ…と抜けられないため)
   if (/^#\/(login|signup)\b/.test(location.hash)) history.replaceState(null, '', '#/');
   const m = location.hash.match(/^#\/note\/(\w+)(?:\/p\/(\w+))?/);
-  if (m) openNote(m[1], m[2]);
-  else showLibrary();
+  if (m) return openNote(m[1], m[2]);
+  // 本棚: #/f/<id> はフォルダの中
+  const fm = location.hash.match(/^#\/f\/(\w+)/);
+  S.lib.folder = fm ? fm[1] : null;
+  if (fm) S.lib.filter = 'all';
+  showLibrary();
 }
 
 // この端末にあるノートの数(ログインのページで、ノートが消えないことを知らせるため)
@@ -518,6 +522,7 @@ function bindLibrary() {
   // 「新規」: ノートを作るか、ファイルを読み込むかを選ぶ
   S.newMenu = (anchor) => openPopover(anchor, (body, close) => menu(body, [
     { icon: 'notebook', label: 'ノート', id: 'new-notebook', onClick: newNote },
+    { icon: 'folder', label: 'フォルダ', id: 'new-folder', onClick: newFolder },
     { icon: 'pdf', label: 'PDF を読み込む', id: 'open-pdf', onClick: () => $('#pdf-input').click() },
     { icon: 'import', label: 'GoodNotes から取り込む(.goodnotes)', id: 'open-gn', onClick: () => $('#gn-input').click() },
   ], close), { className: 'new-menu' });
@@ -530,7 +535,7 @@ function bindLibrary() {
     const cover = $('#nn-cover').dataset.value;
     const id = newId();
     const ops = [
-      S.rec.make(id, 'note.create', { title, cover }),
+      S.rec.make(id, 'note.create', { title, cover, ...(curFolder() ? { folder: curFolder() } : {}) }),
       S.rec.make(id, 'page.add', { page: { id: newId(), w: size.w, h: size.h, order: 1, bg: { type: 'blank', ruling } } }),
     ];
     await db.putOps(ops, S.rec.clock);
@@ -544,9 +549,10 @@ function bindLibrary() {
     if (!file) return;
     try {
       toast('PDFを読み込んでいます…', 60000);
+      const into = curFolder(); // 読み込んでいるあいだに別のフォルダを開いても、押したときのフォルダに入れる
       const { hash, sizes } = await importPdf(file);
       const id = newId();
-      const ops = [S.rec.make(id, 'note.create', { title: file.name.replace(/\.pdf$/i, '') })];
+      const ops = [S.rec.make(id, 'note.create', { title: file.name.replace(/\.pdf$/i, ''), ...(into ? { folder: into } : {}) })];
       sizes.forEach((sz, i) => ops.push(S.rec.make(id, 'page.add', { page: { id: newId(), w: sz.w, h: sz.h, order: i + 1, bg: { type: 'pdf', hash, page: i + 1 } } })));
       await db.putOps(ops, S.rec.clock);
       dav.schedule();
@@ -564,7 +570,9 @@ function bindLibrary() {
       try {
         toast(`「${file.name}」を読み込んでいます…`, 120000);
         const { importGoodnotes } = await import('./goodnotes.js');
+        const into = curFolder();
         const r = await importGoodnotes(file, S.rec);
+        if (into) await db.putOps([S.rec.make(r.noteId, 'note.move', { folder: into })], S.rec.clock); // 開いていたフォルダに入れる
         dav.schedule();
         for (const pid of r.pageIds) search.markDirty(r.noteId, pid);
         const parts = [`${r.pages}ページ`, `手書き${r.strokes}本`];
@@ -675,20 +683,32 @@ async function showLibrary() {
   const lib = buildLibrary(ops);
   const upd = new Map(metas.map((m) => [m.id, m.updatedAt]));
   const f = S.lib.filter, trash = f === 'trash';
+  const fs = foldersOf(lib);
+  if (S.lib.folder && !fs.has(S.lib.folder)) { // 開いていたフォルダが消えた(ほかの端末で削除など)
+    S.lib.folder = null;
+    history.replaceState(null, '', '#/');
+  }
+  const here = f === 'all' ? S.lib.folder : null; // フォルダで分けるのは「すべて」のときだけ
   const all = [...lib.values()].filter((n) => n.titleS && !n.purged);
-  const notes = all.filter((n) => (trash ? n.deleted : !n.deleted && (f !== 'fav' || n.fav)));
+  const notes = all.filter((n) => (trash ? n.deleted : !n.deleted && (f !== 'fav' || n.fav) && (f !== 'all' || folderOfNote(n, fs) === here)));
   // 並べ替え: 最終変更日(新しい順)/ 作成日(新しい順)/ 名前(あいうえお順)
   const byName = new Intl.Collator('ja', { numeric: true, sensitivity: 'base' });
   const cmpFn = S.lib.sort === 'name' ? (a, b) => byName.compare(a.title, b.title)
     : S.lib.sort === 'created' ? (a, b) => (b.created || upd.get(b.id) || 0) - (a.created || upd.get(a.id) || 0)
     : (a, b) => (upd.get(b.id) || 0) - (upd.get(a.id) || 0);
   notes.sort(cmpFn);
+  // この場所のフォルダ(名前順。作成日の並べ替えのときは新しい順)
+  const subs = f === 'all' ? [...fs.values()].filter((x) => x.parent === here) : [];
+  subs.sort(S.lib.sort === 'created' ? (a, b) => (b.created || 0) - (a.created || 0) : (a, b) => byName.compare(a.name, b.name));
+  const liveNotes = all.filter((n) => !n.deleted);
   refreshLibBar(all.filter((n) => n.deleted).length);
+  renderCrumbs(fs, here);
   const grid = $('#notes');
   grid.innerHTML = '';
   grid.classList.toggle('list', S.lib.view === 'list');
-  $('#empty').hidden = notes.length > 0 || !$('#results').hidden;
-  $('#empty').textContent = trash ? 'ゴミ箱は空です。' : f === 'fav' ? 'お気に入りのノートはまだありません。ノートの☆を押すと、ここに並びます。' : 'ノートはまだありません。「新規」から作成するか、PDF を読み込んでください。';
+  $('#empty').hidden = notes.length + subs.length > 0 || !$('#results').hidden;
+  $('#empty').textContent = trash ? 'ゴミ箱は空です。' : f === 'fav' ? 'お気に入りのノートはまだありません。ノートの☆を押すと、ここに並びます。'
+    : here ? 'このフォルダは空です。「新規」からノートを作るか、ノートのメニューの「移動」で入れてください。' : 'ノートはまだありません。「新規」から作成するか、PDF を読み込んでください。';
   // 先頭は「新規」(ゴミ箱では、空にするボタン)
   if (!trash) {
     const nt = document.createElement('div');
@@ -696,6 +716,7 @@ async function showLibrary() {
     nt.innerHTML = `<button id="new-note" class="cover new-cover" aria-haspopup="menu">${icon('plus', 40)}</button><div class="meta"><div class="name">新規</div></div>`;
     nt.querySelector('#new-note').onclick = (e) => S.newMenu(e.currentTarget);
     grid.appendChild(nt);
+    for (const fo of subs) grid.appendChild(folderCard(fo, fs, liveNotes));
   } else if (notes.length) {
     const bar = document.createElement('div');
     bar.className = 'trash-bar';
@@ -773,6 +794,7 @@ function noteMenu(anchor, n) {
       showLibrary();
     } },
     { icon: 'copy', label: '複製', attrs: { 'data-act': 'dup' }, onClick: () => duplicateNote(n) },
+    { icon: 'move', label: '移動…', attrs: { 'data-act': 'move' }, onClick: () => moveNote(anchor, n) },
     { icon: 'star', label: n.fav ? 'お気に入りから外す' : 'お気に入りにする', attrs: { 'data-act': 'fav' }, onClick: () => setFav(n, !n.fav) },
     { icon: 'export', label: '同期ファイルとして書き出す', attrs: { 'data-act': 'export' }, onClick: async () => {
       const json = await buildSyncFile(S.rec.device, n.id);
@@ -792,6 +814,136 @@ function noteMenu(anchor, n) {
       } });
     } },
   ], close), { align: 'start' });
+}
+
+// ---------- フォルダ ----------
+// 新しいノート・読み込んだノートを入れるフォルダ(「すべて」でフォルダを開いているときだけ)
+const curFolder = () => (S.lib.filter === 'all' ? S.lib.folder : null);
+
+async function newFolder() {
+  const name = await askName('新しいフォルダ', '');
+  if (!name) return;
+  await db.putOps([S.rec.make(newId(), 'folder.create', { name, parent: curFolder() })], S.rec.clock);
+  dav.schedule();
+  showLibrary();
+}
+
+// 書類 › 親 › 今のフォルダ
+function renderCrumbs(fs, here) {
+  const nav = $('#crumbs');
+  nav.hidden = !here;
+  if (!here) return;
+  const path = [];
+  for (let c = fs.get(here); c && path.length < 64; c = c.parent ? fs.get(c.parent) : null) path.unshift(c);
+  nav.innerHTML = '';
+  const add = (label, href) => {
+    if (nav.childNodes.length) nav.insertAdjacentHTML('beforeend', '<span class="crumb-sep" aria-hidden="true">›</span>');
+    const el = document.createElement(href ? 'a' : 'span');
+    el.className = 'crumb';
+    el.title = label;
+    if (href) el.href = href; else el.setAttribute('aria-current', 'page');
+    el.textContent = label;
+    nav.appendChild(el);
+  };
+  add('書類', '#/');
+  path.forEach((c, i) => add(c.name, i < path.length - 1 ? '#/f/' + c.id : null));
+  document.title = `${path[path.length - 1].name} - 大学ノート`;
+}
+
+function folderCard(fo, fs, liveNotes) {
+  const tree = folderTree(fs, fo.id);
+  const count = liveNotes.filter((n) => tree.has(folderOfNote(n, fs))).length;
+  const inner = [...fs.values()].filter((x) => x.parent === fo.id).length;
+  const card = document.createElement('div');
+  card.className = 'card folder-card';
+  card.innerHTML = `
+    <a class="cover folder-cover" href="#/f/${fo.id}">${icon('folder', 64)}</a>
+    <div class="meta">
+      <button class="name-btn" aria-haspopup="menu" title="フォルダの操作"><span class="name"></span>${icon('chevron', 16)}</button>
+      <div class="date"></div>
+    </div>`;
+  card.querySelector('.name').textContent = fo.name;
+  card.querySelector('.cover').setAttribute('aria-label', `フォルダ「${fo.name}」`);
+  card.querySelector('.date').textContent = [count ? `${count}冊` : 'ノートなし', inner ? `フォルダ${inner}個` : ''].filter(Boolean).join('・');
+  const nb = card.querySelector('.name-btn');
+  nb.onclick = () => folderMenu(nb, fo);
+  longPress(card.querySelector('.cover'), () => folderMenu(nb, fo));
+  return card;
+}
+
+function folderMenu(anchor, fo) {
+  openPopover(anchor, (body, close) => menu(body, [
+    { icon: 'rename', label: '名前を変更', attrs: { 'data-act': 'frename' }, onClick: async () => {
+      const name = await askName('フォルダの名前を変更', fo.name);
+      if (!name || name === fo.name) return;
+      await db.putOps([S.rec.make(fo.id, 'folder.rename', { name })], S.rec.clock);
+      dav.schedule();
+      showLibrary();
+    } },
+    { icon: 'move', label: '移動…', attrs: { 'data-act': 'fmove' }, onClick: () => moveFolder(anchor, fo) },
+    '-',
+    { icon: 'trash', label: '削除…', danger: true, attrs: { 'data-act': 'fdelete' }, onClick: () => deleteFolder(fo) },
+  ], close));
+}
+
+// 移動先を選ぶメニュー。skip: 選べないフォルダ(自分と、その中のフォルダ)
+async function pickFolder(anchor, current, skip = new Set()) {
+  const fs = foldersOf(buildLibrary(await db.noteLevelOps()));
+  const byName = new Intl.Collator('ja', { numeric: true, sensitivity: 'base' });
+  const rows = [];
+  const walk = (parent, depth) => {
+    for (const fo of [...fs.values()].filter((x) => x.parent === parent).sort((a, b) => byName.compare(a.name, b.name))) {
+      if (skip.has(fo.id)) continue;
+      rows.push({ fo, depth });
+      walk(fo.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  return new Promise((resolve) => {
+    let picked;
+    openPopover(anchor, (body, close) => {
+      body.insertAdjacentHTML('beforeend', '<div class="menu-cap">移動先</div>');
+      menu(body, [
+        { icon: 'notebook', label: '書類(いちばん上)', disabled: current == null, attrs: { 'data-dest': '' }, keepOpen: true, onClick: () => { picked = null; close(); } },
+        ...rows.map(({ fo, depth }) => ({ icon: 'folder', label: fo.name, disabled: fo.id === current, attrs: { 'data-dest': fo.id, style: `padding-left:${10 + depth * 18}px` }, keepOpen: true, onClick: () => { picked = fo.id; close(); } })),
+      ], close);
+    }, { className: 'folder-pick', onClose: () => resolve(picked) });
+  });
+}
+
+async function moveNote(anchor, n) {
+  const fs = foldersOf(buildLibrary(await db.noteLevelOps()));
+  const dest = await pickFolder(anchor, folderOfNote(n, fs));
+  if (dest === undefined) return;
+  await db.putOps([S.rec.make(n.id, 'note.move', { folder: dest })], S.rec.clock);
+  dav.schedule();
+  showLibrary();
+  toast(`「${n.title}」を「${dest ? fs.get(dest)?.name : '書類'}」に移動しました`);
+}
+async function moveFolder(anchor, fo) {
+  const fs = foldersOf(buildLibrary(await db.noteLevelOps()));
+  const dest = await pickFolder(anchor, fo.parent, folderTree(fs, fo.id));
+  if (dest === undefined) return;
+  await db.putOps([S.rec.make(fo.id, 'folder.move', { parent: dest })], S.rec.clock);
+  dav.schedule();
+  showLibrary();
+  toast(`「${fo.name}」を「${dest ? fs.get(dest)?.name : '書類'}」に移動しました`);
+}
+// フォルダを消す: 中のフォルダも消し、中のノートはゴミ箱へ(ゴミ箱から戻すと、いちばん上に出る)
+async function deleteFolder(fo) {
+  const lib = buildLibrary(await db.noteLevelOps());
+  const fs = foldersOf(lib);
+  const tree = folderTree(fs, fo.id);
+  const inside = [...lib.values()].filter((n) => n.titleS && !n.purged && !n.deleted && tree.has(folderOfNote(n, fs)));
+  const subs = tree.size - 1;
+  const msg = `フォルダ「${fo.name}」${subs ? `と、中のフォルダ ${subs} 個` : ''}を削除します。`
+    + (inside.length ? `中のノート ${inside.length} 冊はゴミ箱に入ります。ゴミ箱から戻すと、本棚のいちばん上に出ます。` : '');
+  if (!(await askConfirm({ heading: 'フォルダを削除', message: msg, ok: '削除', danger: true }))) return;
+  await db.putOps([...inside.map((n) => S.rec.make(n.id, 'note.delete', {})), ...[...tree].map((id) => S.rec.make(id, 'folder.delete', {}))], S.rec.clock);
+  dav.schedule();
+  if (tree.has(S.lib.folder)) location.hash = fo.parent ? '#/f/' + fo.parent : '#/';
+  else showLibrary();
+  toast(`フォルダ「${fo.name}」を削除しました`);
 }
 
 // 本棚の上の帯: 表示するノート・並べ替え・並べ方
@@ -851,7 +1003,7 @@ async function duplicateNote(n) {
   for (const op of await db.opsForNote(n.id)) applyOp(src, op);
   const id = newId();
   const title = `${n.title} のコピー`;
-  const ops = [S.rec.make(id, 'note.create', { title, cover: coverColor(n) })];
+  const ops = [S.rec.make(id, 'note.create', { title, cover: coverColor(n), ...(n.folder ? { folder: n.folder } : {}) })];
   let order = 1;
   for (const pg of pagesOf(src)) {
     const pid = newId();
