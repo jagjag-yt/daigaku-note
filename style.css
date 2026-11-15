@@ -623,3 +623,7 @@ dialog::backdrop { background: rgba(15,23,42,.35); }
 /* スマホ幅では今の色だけを出し、押すと全部の色を出す */
 @media (max-width: 800px) { #sticky-opts .sticky-c:not(.on) { display: none; } }
 .sticky-grid .pal-c { border-radius: 6px; }
+
+/* マスキングテープ: めくったテープは薄くして下を見せる */
+.page svg.ink .tape.revealed { opacity: .22; }
+#tool-marker.tape-on::before { content: ''; position: absolute; right: 6px; top: 6px; width: 9px; height: 5px; border-radius: 1px; background: var(--tc); transform: rotate(-20deg); }

@@ -33,7 +33,11 @@ const MARKER_PALETTE = [
   '#d8b4fe', '#a5b4fc', '#93c5fd', '#67e8f9', '#86efac',
   '#bef264', '#d1d5db',
 ];
-const WIDTH_RANGE = { pen: [0.5, 8, 0.1], marker: [4, 32, 1] };
+// マスキングテープ(暗記用): 下の文字を隠す太い帯。押すとめくれて(薄くなって)下が見える
+const TAPE_COLORS = ['#ef4444', '#f97316', '#22c55e'];
+const TAPE_WIDTHS = [10, 16, 24];
+const TAPE_PALETTE = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#0ea5e9', '#6366f1', '#a855f7', '#ec4899', '#ffffff', '#9ca3af', '#374151'];
+const WIDTH_RANGE = { pen: [0.5, 8, 0.1], marker: [4, 32, 1], tape: [6, 40, 1] };
 const COVERS = ['#2f5d9e', '#b33a3a', '#2f7d5b', '#7a4fa0', '#c27c1a', '#3a6f7a', '#4b5563', '#a8556f'];
 const COVER_NAMES = ['紺', '赤', '緑', '紫', '黄土', '青緑', '灰', '桃'];
 const MAX_CANVAS_PX = 4_000_000; // iPad Safari のキャンバス上限を避ける
@@ -53,14 +57,19 @@ const S = {
   tool: 'pen', // pen | marker | eraser | lasso
   pen: { color: PEN_COLORS[0], width: PEN_WIDTHS[1] },
   marker: { color: MARKER_COLORS[0], width: MARKER_WIDTHS[1] },
+  tape: { color: TAPE_COLORS[0], width: TAPE_WIDTHS[1] },
+  markerMode: 'marker', // 蛍光ペンの道具で描くもの: marker(蛍光ペン)/ tape(マスキングテープ)
+  straight: false, // 蛍光ペン・テープを直線で描く
+  revealed: new Set(), // めくったテープ(このノートを開いている間だけ)
   slots: {
     pen: { colors: [...PEN_COLORS], widths: [...PEN_WIDTHS] },
     marker: { colors: [...MARKER_COLORS], widths: [...MARKER_WIDTHS] },
+    tape: { colors: [...TAPE_COLORS], widths: [...TAPE_WIDTHS] },
   },
   sidebar: false,
   // 消しゴム: mode = stroke(線ごと)/ normal(なぞった所だけ)/ precise(なぞった所だけ・細かく)。
   // pick = 消すものの種類。back = 消し終わったら前の道具に戻す
-  eraser: { si: 1, mode: 'stroke', pick: { pen: true, marker: true }, back: false },
+  eraser: { si: 1, mode: 'stroke', pick: { pen: true, marker: true, tape: true }, back: false },
   prevTool: 'pen', // 消しゴムに切り替える前の道具
   fit: true, // 幅に合わせた拡大率のままか(手で拡大したら false)
   fingerDraw: false,
@@ -72,13 +81,13 @@ const S = {
   io: null,
   sel: null, // 投げ縄で選んだ線 { pageId, ids:Set, box }
   // 投げ縄の囲み方(free: 自由な形 / rect: 長方形)と、選ぶものの種類
-  lasso: { mode: 'free', pick: { pen: true, marker: true, image: true, text: true } },
+  lasso: { mode: 'free', pick: { pen: true, marker: true, tape: true, image: true, text: true } },
   // テキストの道具で新しく置く文字の設定(書いている途中のテキストボックスは S.edit の中に持つ)
   text: { color: '#1f2937', size: 16, font: '', bold: false, italic: false, underline: false, strike: false, align: '', bg: 'none' },
   sticky: { color: '#fef08a' }, // 次に貼る付箋の色
   edit: null, // 書いている途中のテキストボックス { v, id(書き直しのとき), d, ta }
-  palettes: { pen: [...PEN_PALETTE], marker: [...MARKER_PALETTE] }, // 色のプリセット(編集できる)
-  colorHist: { pen: [], marker: [] }, // 最近使った色
+  palettes: { pen: [...PEN_PALETTE], marker: [...MARKER_PALETTE], tape: [...TAPE_PALETTE] }, // 色のプリセット(編集できる)
+  colorHist: { pen: [], marker: [], tape: [] }, // 最近使った色
   clip: null, // コピーしたもの { items: [線・部品のデータ], pageId, cx, cy, n: 同じ場所に貼った回数 }
 };
 const CLIP_KEY = 'daigaku-note-clip';
@@ -105,8 +114,11 @@ async function init() {
   if (!['', 'dash', 'dot'].includes(S.pen.dash)) S.pen.dash = '';
   if (S.pen.shape && !SHAPES[S.pen.shape]) S.pen.shape = '';
   if (prefs.marker) S.marker = prefs.marker;
+  if (prefs.tape && isHex(prefs.tape.color) && Number(prefs.tape.width) >= WIDTH_RANGE.tape[0] && Number(prefs.tape.width) <= WIDTH_RANGE.tape[1]) S.tape = prefs.tape;
+  if (prefs.markerMode === 'tape') S.markerMode = 'tape';
+  if (prefs.straight === true) S.straight = true;
   if (prefs.sidebar) S.sidebar = true;
-  for (const k of ['pen', 'marker']) {
+  for (const k of ['pen', 'marker', 'tape']) {
     const sl = prefs.slots?.[k];
     if (sl && sl.colors?.length === 3 && sl.widths?.length === 3) S.slots[k] = sl;
     // 前の版で選んでいた色・太さが並びになければ、先頭に入れておく
@@ -125,7 +137,7 @@ async function init() {
     if (!ERASER_MODES[S.eraser.mode]) S.eraser.mode = 'stroke';
     if (!S.eraser.pick.pen && !S.eraser.pick.marker) S.eraser.pick = { pen: true, marker: true }; // 何も消せない設定にはしない
   }
-  for (const k of ['pen', 'marker']) {
+  for (const k of ['pen', 'marker', 'tape']) {
     const pl = prefs.palettes?.[k], hs = prefs.colorHist?.[k];
     const clean = (a) => [...new Set(a.filter((c) => typeof c === 'string' && isHex(c)).map((c) => c.toLowerCase()))];
     if (Array.isArray(pl) && clean(pl).length) S.palettes[k] = clean(pl).slice(0, PALETTE_MAX);
@@ -176,7 +188,7 @@ async function init() {
 }
 
 function savePrefs() {
-  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text, sticky: S.sticky });
+  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, tape: S.tape, markerMode: S.markerMode, straight: S.straight, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text, sticky: S.sticky });
 }
 
 function route() {
@@ -740,7 +752,7 @@ function noteMenu(anchor, n) {
 // ---------- エディタのツールバー ----------
 const ERASER_SIZES = [5, 10, 22]; // 画面上の半径(px)
 const narrow = () => window.innerWidth <= 520;
-const inkTool = () => (S.tool === 'marker' ? 'marker' : 'pen');
+const inkTool = () => (S.tool === 'marker' ? (S.markerMode === 'tape' ? 'tape' : 'marker') : 'pen');
 const toolState = () => S[inkTool()];
 
 // ツールバーのボタンは最初に作って使い回す(作り直すと、開いているポップオーバーの位置がずれるため)
@@ -793,7 +805,9 @@ function refreshToolbar() {
   // 図形を描く設定のときは、ペンのボタンに印を付ける
   $('#tool-pen').classList.toggle('shape-on', !!S.pen.shape);
   $('#tool-pen').title = S.pen.shape ? `ペン: ${SHAPES[S.pen.shape]}を描く (P)。もう一度押すと設定` : 'ペン (P)';
-  $('#tool-marker').style.setProperty('--tc', S.marker.color);
+  $('#tool-marker').style.setProperty('--tc', S.markerMode === 'tape' ? S.tape.color : S.marker.color);
+  $('#tool-marker').classList.toggle('tape-on', S.markerMode === 'tape');
+  $('#tool-marker').title = S.markerMode === 'tape' ? 'マスキングテープ (H)。もう一度押すと設定' : '蛍光ペン (H)。もう一度押すと設定';
   const sh = $('#shapes');
   sh.classList.toggle('on', S.shapes);
   sh.setAttribute('aria-pressed', S.shapes);
@@ -957,7 +971,7 @@ function colorPopover(anchor, k, i) {
           render();
         }));
         const rs = main.querySelector('.cp-reset');
-        if (rs) rs.onclick = () => { S.palettes[k] = [...(k === 'marker' ? MARKER_PALETTE : PEN_PALETTE)]; savePrefs(); render(); };
+        if (rs) rs.onclick = () => { S.palettes[k] = [...(k === 'marker' ? MARKER_PALETTE : k === 'tape' ? TAPE_PALETTE : PEN_PALETTE)]; savePrefs(); render(); };
       } else if (tab === 'custom') {
         main.innerHTML = `<div class="cp-table">${COLOR_TABLE.map((row) => row.map((c) => `<button type="button" class="cp-cell" data-c="${c}" style="--c:${c}" aria-label="${c}"></button>`).join('')).join('')}</div>
           <div class="cp-row"><span class="cp-swatch" style="--c:${cur}"></span><label class="cp-hex">HEX <input type="text" maxlength="7" spellcheck="false" autocomplete="off" value="${isHex(cur) ? cur : ''}" aria-label="色の HEX"></label>
@@ -1108,6 +1122,7 @@ function eraserPopover(anchor) {
       { el: head },
       { icon: 'pen', label: 'ペン', on: S.eraser.pick.pen, keepOpen: true, attrs: { 'data-pick': 'pen' }, onClick: toggle('pen') },
       { icon: 'marker', label: '蛍光ペン', on: S.eraser.pick.marker, keepOpen: true, attrs: { 'data-pick': 'marker' }, onClick: toggle('marker') },
+      { icon: 'tape', label: 'マスキングテープ', on: S.eraser.pick.tape !== false, keepOpen: true, attrs: { 'data-pick': 'tape' }, onClick: toggle('tape') },
       '-',
       { icon: 'back', label: '消したら前の道具に戻す', id: 'eraser-back', on: S.eraser.back, keepOpen: true, onClick: (b) => {
         S.eraser.back = !S.eraser.back;
@@ -1188,7 +1203,7 @@ function penPopover(anchor) {
 }
 
 // 投げ縄の設定: 囲み方と、選ぶものの種類
-const LASSO_PICKS = [['pen', 'pen', '手書き(ペン)'], ['marker', 'marker', '蛍光ペン'], ['image', 'file', '画像'], ['text', 'rename', 'テキストボックス・付箋']];
+const LASSO_PICKS = [['pen', 'pen', '手書き(ペン)'], ['marker', 'marker', '蛍光ペン'], ['tape', 'tape', 'マスキングテープ'], ['image', 'file', '画像'], ['text', 'rename', 'テキストボックス・付箋']];
 function lassoPopover(anchor) {
   openPopover(anchor, (body, close) => {
     const head = document.createElement('div');
@@ -1230,7 +1245,7 @@ function setTool(t) {
   // 選んでいる道具をもう一度押すと、その道具の設定を出す
   if (S.tool === t) {
     if (t === 'pen') penPopover($('#tool-pen'));
-    else if (t === 'marker') colorPopover($('#tool-' + t), t, Math.max(0, S[t].ci));
+    else if (t === 'marker') markerPopover($('#tool-marker'));
     else if (t === 'eraser') eraserPopover($('#tool-eraser'));
     else if (t === 'lasso') lassoPopover($('#tool-lasso'));
     else if (t === 'text') textStylePopover($('#tool-text'));
@@ -1433,6 +1448,7 @@ async function openNote(id, pageId) {
 }
 
 function closeEditor() {
+  S.revealed.clear();
   if (S.edit) commitText();
   if (S.io) S.io.disconnect();
   for (const v of S.views.values()) releaseView(v);
@@ -1663,7 +1679,10 @@ function layered(list) {
 }
 function inkSvg(e) {
   const d = styleOf(e);
-  return isItem(d) ? itemSvg(e.id, d, e.off) : strokeSvg(e.id, d, geoOf(e), e.off);
+  if (isItem(d)) return itemSvg(e.id, d, e.off);
+  const svg = strokeSvg(e.id, d, geoOf(e), e.off);
+  // めくったテープは薄くして、下の文字を見せる
+  return d.tool === 'tape' && S.revealed.has(e.id) ? svg.replace('class="tape"', 'class="tape revealed"') : svg;
 }
 // 画像を読み終えたら、その画像のあるページとサムネイルを描き直す
 let laterHashes = null;
@@ -1783,7 +1802,7 @@ function debugCount(k) {
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:99;margin:0;padding:6px 8px;font:12px monospace;background:rgba(255,255,255,.9);border:1px solid #ccc;border-radius:6px;pointer-events:none';
     document.body.appendChild(el);
   }
-  el.textContent = 'v34\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
+  el.textContent = 'v35\n' + Object.entries(debugCounts).map(([a, b]) => `${a} ${b}`).join('\n') + '\n' + debugGaps.join('\n');
 }
 // 図形補正の様子(最後の数本): オン/オフ、最後に止めていた時間と揺れ、整えた結果
 const debugShapes = [];
@@ -1968,7 +1987,8 @@ function onDown(e) {
       active = { id: e.pointerId, v, kind: 'shape', x0: x, y0: y, x1: x, y1: y };
       return;
     }
-    const d = { id: newId(), pageId: v.pg.id, tool: S.tool, color: st.color, width: st.width, pr: e.pointerType === 'pen' && S.tool === 'pen' && S.pen.nib !== 'ball', pts: [] };
+    const d = { id: newId(), pageId: v.pg.id, tool: inkTool(), color: st.color, width: st.width, pr: e.pointerType === 'pen' && S.tool === 'pen' && S.pen.nib !== 'ball', pts: [] };
+    if (S.tool === 'marker' && S.straight) d.straight = true; // 書いている間だけ使う印(保存の前に外す)
     if (S.tool === 'pen') {
       // ペン先の種類と線の種類(古い版は知らない項目を無視して、ふつうのペンとして描く)
       if (S.pen.nib !== 'fountain') d.nib = S.pen.nib;
@@ -2153,6 +2173,7 @@ function addPoint(e, main = e) {
       p = now - a.pT0 < 60 ? a.pMax : q;
     } else if (d.pr === 2 && n0) p = d.pts[d.pts.length - 1];
   }
+  if (d.straight && d.pts.length >= 3) d.pts.length = 3; // 直線で描く: 書き始めと今の位置の2点だけ
   d.pts.push(Math.round(x * 100) / 100, Math.round(y * 100) / 100, Math.round(p * 100) / 100);
   requestLive(() => paintLive(a.v, strokeSvg('live', d, geometry(d))));
 }
@@ -2187,7 +2208,7 @@ function holdCheck(a, e) {
 }
 
 // 消しゴムが消せる線か(画像・テキストは消さない。消すものの種類で絞る)
-const erasable = (d) => !isItem(d) && (d.tool === 'marker' ? S.eraser.pick.marker : S.eraser.pick.pen);
+const erasable = (d) => !isItem(d) && (d.tool === 'marker' ? S.eraser.pick.marker : d.tool === 'tape' ? S.eraser.pick.tape !== false : S.eraser.pick.pen);
 
 function eraseAt(e) {
   const a = active;
@@ -2281,7 +2302,7 @@ async function onUp(e) {
     if (!a.dragged) { if (S.clip) showPasteChip(a.v, a.sx, a.sy); return; }
     if (a.poly.length < 3) return;
     const pick = S.lasso.pick;
-    const kind = (d) => (d.tool === 'image' ? 'image' : d.tool === 'text' ? 'text' : d.tool === 'marker' ? 'marker' : 'pen');
+    const kind = (d) => (d.tool === 'image' ? 'image' : d.tool === 'text' ? 'text' : d.tool === 'marker' ? 'marker' : d.tool === 'tape' ? 'tape' : 'pen');
     const inLasso = (st) => pick[kind(st.data)] !== false && (isItem(st.data) ? itemInLasso(st, a.poly, pointInPolygon) : strokeInLasso(st, a.poly));
     const ids = new Set(strokesOf(S.note, a.v.pg.id).filter(inLasso).map((st) => st.id));
     if (ids.size) {
@@ -2339,6 +2360,13 @@ function strokeScreenSize(d) {
 
 async function finishStroke(a) {
   const d = a.d;
+  if (d.straight) { delete d.straight; if (d.pts.length >= 6) d.shape = 'line'; } // 直線は角を残す(なめらかにしない)
+  // テープの道具で、テープを軽く押しただけ: 新しく描かずに、そのテープをめくる・戻す
+  if (d.tool === 'tape' && strokeScreenSize(d) < 6 && d.pts.length) {
+    toggleTapeAt(a.v, d.pts[0], d.pts[1]);
+    paintLive(a.v, ''); // 押しただけの小さなテープは残さない(外れた所を押したときも)
+    return;
+  }
   // 手ぶれ補正で遅れていた分を、ペンを離した位置まで足す
   if (a.raw && d.pts.length && !a.shaped) {
     const lx = d.pts[d.pts.length - 3], ly = d.pts[d.pts.length - 2];
@@ -2431,6 +2459,63 @@ function shapeData(a) {
   const d = { id: a.did || (a.did = newId()), pageId: a.v.pg.id, tool: 'pen', color: S.pen.color, width: S.pen.width, pr: false, shape: S.pen.shape, pts };
   if (S.pen.dash) d.dash = S.pen.dash;
   return d;
+}
+
+// ---------- マスキングテープ ----------
+// (x, y) にあるテープをめくる・戻す。テープがあれば true
+function toggleTapeAt(v, x, y) {
+  const hit = strokesOf(S.note, v.pg.id).reverse().find((st) => st.data.tool === 'tape' && strokeHit(st, x, y, 2 / S.zoom));
+  if (!hit) return false;
+  if (S.revealed.has(hit.id)) S.revealed.delete(hit.id); else S.revealed.add(hit.id);
+  paintInk(v);
+  return true;
+}
+function tapeIds(pageOnly) {
+  const ids = [];
+  for (const pg of pageOnly ? [pageOnly] : pagesOf(S.note)) for (const st of strokesOf(S.note, pg.id)) if (st.data.tool === 'tape') ids.push(st.id);
+  return ids;
+}
+// 蛍光ペンの道具の設定: 蛍光ペン / マスキングテープ、直線で描く、色、テープをまとめて操作
+function markerPopover(anchor) {
+  openPopover(anchor, (body, close) => {
+    const head = document.createElement('div');
+    head.className = 'lasso-head';
+    head.innerHTML = '<span class="menu-cap">描くもの</span><div class="seg lasso-mode mk-mode" role="radiogroup" aria-label="描くもの"></div><p class="menu-note mk-note"></p>';
+    const seg = head.querySelector('.mk-mode'), note = head.querySelector('.mk-note');
+    const show = () => {
+      for (const b of seg.children) { const on = b.dataset.v === S.markerMode; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); }
+      note.textContent = S.markerMode === 'tape' ? '下の文字を隠す帯。押すとめくれて下が見えます(暗記用)' : '下の文字が透けて見えるペン';
+    };
+    for (const [v, label] of [['marker', '蛍光ペン'], ['tape', 'マスキングテープ']]) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.dataset.v = v; b.textContent = label; b.setAttribute('role', 'radio');
+      b.onclick = () => { S.markerMode = v; savePrefs(); show(); refreshToolbar(); };
+      seg.appendChild(b);
+    }
+    show();
+    const v = S.views.get(currentPage()?.id);
+    const setAll = (ids, reveal) => { for (const id of ids) reveal ? S.revealed.add(id) : S.revealed.delete(id); for (const w of S.views.values()) if (w.ready) paintInk(w); };
+    menu(body, [
+      { el: head },
+      { icon: 'pen', label: '直線で描く', id: 'mk-straight', on: S.straight, keepOpen: true, onClick: (b) => {
+        S.straight = !S.straight;
+        b.classList.toggle('checked', S.straight); b.setAttribute('aria-checked', S.straight); b.querySelector('.switch')?.classList.toggle('on', S.straight);
+        savePrefs();
+      } },
+      { icon: 'palette', label: '色を選ぶ…', onClick: () => { const k = inkTool(); colorPopover($('#colors').querySelectorAll('.swatch')[Math.max(0, S[k].ci)], k, Math.max(0, S[k].ci)); } },
+      '-',
+      { icon: 'tape', label: 'テープを全部めくる', onClick: () => setAll(tapeIds(), true) },
+      { icon: 'tape', label: 'テープを全部戻す', onClick: () => setAll(tapeIds(), false) },
+      { icon: 'trash', label: 'このページのテープをすべて削除…', danger: true, disabled: !v, onClick: async () => {
+        const ids = tapeIds(v.pg);
+        if (!ids.length) return toast('このページにテープはありません');
+        if (!(await askConfirm({ heading: 'テープをすべて削除', message: `このページのマスキングテープ ${ids.length} 本を削除します。あとで「元に戻す」で戻せます。`, ok: '削除', danger: true }))) return;
+        pushUndo({ undo: [['stroke.undel', { ids }]], redo: [['stroke.del', { ids }]], pages: [v.pg.id] });
+        await commit([mk('stroke.del', { ids })]);
+        paintInk(v);
+      } },
+    ], close);
+  });
 }
 
 // ---------- テキストボックス ----------
@@ -2995,8 +3080,8 @@ async function recolorSelection(color) {
 // 指: 1本でスクロール(慣性つき)、2本でズーム
 function gestureDown(e) {
   const sc = $('#scroller');
-  // テキストの道具では、指で軽く押しても文字を打てるようにする(動かしたらスクロール)
-  if ((S.tool === 'text' || S.tool === 'sticky') && touches.size === 0) tapStart = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), target: e.target };
+  // 指で軽く押したとき(動かしたらスクロール): テープならめくる、テキスト・付箋の道具なら文字を打つ(gestureUp)
+  if (touches.size === 0) tapStart = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), target: e.target };
   else tapStart = null;
   try { sc.setPointerCapture(e.pointerId); } catch {}
   stopInertia();
@@ -3038,8 +3123,12 @@ function gestureUp(e) {
     if (S.edit) { commitText(); return; } // 書いている途中なら、外を押したら書き終えるだけ
     const pageEl = ts.target.closest?.('.page');
     const v = pageEl && S.views.get(pageEl.dataset.id);
-    if (v && v.ready && !ts.target.closest('.page-foot')) { const [x, y] = pagePoint(v, e); textTap(v, x, y); }
-    return;
+    if (v && v.ready && !ts.target.closest('.page-foot')) {
+      const [x, y] = pagePoint(v, e);
+      // 指で軽く押した: テープならめくる・戻す。テキスト・付箋の道具なら文字を打つ
+      if (toggleTapeAt(v, x, y)) return;
+      if (S.tool === 'text' || S.tool === 'sticky') { textTap(v, x, y); return; }
+    }
   }
   if (pinch) {
     if (touches.size < 2) {
