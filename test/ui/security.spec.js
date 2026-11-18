@@ -43,3 +43,28 @@ test('細工したノートを取り込んでも、スクリプトは動かず�
   expect(await page.title()).toBe('大学ノート');
   expect(violations).toEqual([]);
 });
+
+test('iPhone の Safari では「ホーム画面に追加」の案内を出し、閉じたら次から出さない', async ({ browser }) => {
+  const ctx = await browser.newContext({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1' });
+  await ctx.addInitScript(() => localStorage.setItem('daigaku-note.local-only', '1'));
+  const page = await ctx.newPage();
+  await page.goto('./');
+  await expect(page.locator('#library')).toBeVisible();
+  await expect(page.locator('#home-tip')).toBeVisible();
+  await page.locator('.home-tip-close').click();
+  await expect(page.locator('#home-tip')).toBeHidden();
+  await page.reload();
+  await expect(page.locator('#library')).toBeVisible();
+  await expect(page.locator('#home-tip')).toBeHidden();
+  await ctx.close();
+});
+
+test('パソコンのブラウザでは「ホーム画面に追加」の案内を出さない', async ({ browser }) => {
+  const ctx = await browser.newContext();
+  await ctx.addInitScript(() => localStorage.setItem('daigaku-note.local-only', '1'));
+  const page = await ctx.newPage();
+  await page.goto('./');
+  await expect(page.locator('#library')).toBeVisible();
+  await expect(page.locator('#home-tip')).toBeHidden();
+  await ctx.close();
+});

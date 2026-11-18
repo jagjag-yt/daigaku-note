@@ -222,6 +222,7 @@ async function init() {
   bindDialogs();
   fillSelects();
   bindLibrary();
+  bindHomeTip();
   bindLibBar();
   $('#settings-btn').onclick = openSettings;
   applyToolbarLayout();
@@ -698,6 +699,24 @@ function openSync() {
 }
 
 // ---------- ノート一覧 ----------
+// iPhone・iPad の Safari では、7日ほど開かないとサイトの保存(IndexedDB)が消されることがある。
+// ホーム画面に追加して開いた Web アプリは対象外なので、Safari で開いているときだけ案内を出す
+const HOME_TIP_KEY = 'daigaku-note.home-tip-closed';
+function bindHomeTip() {
+  const tip = $('#home-tip');
+  const ua = navigator.userAgent;
+  const ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+  let closed = false;
+  try { closed = localStorage.getItem(HOME_TIP_KEY) === '1'; } catch {}
+  if (!tip || native.isNative || !ios || standalone || closed) return;
+  tip.hidden = false;
+  tip.querySelector('.home-tip-close').addEventListener('click', () => {
+    tip.hidden = true;
+    try { localStorage.setItem(HOME_TIP_KEY, '1'); } catch {}
+  });
+}
+
 function bindLibrary() {
   const newNote = async () => {
     await loadCustomTpl();
