@@ -366,3 +366,19 @@ test('ログインせずに、この端末だけで使える。あとからア�
   await a.locator('#auth-login-form .auth-skip').click();
   await expect(a.locator('#notes .card', { hasText: 'ローカルのノート' })).toBeVisible();
 });
+
+test('プラン: Pro のクーポンを使うと、アカウントの画面のプラン・容量・端末の数が変わる', async ({ browser, request }, testInfo) => {
+  const a = await open(browser);
+  await signup(a, freshEmail('plan', testInfo));
+  await a.locator('#account-btn').click();
+  await expect(a.locator('#acct-plan')).toHaveText('無料プラン');
+  await expect(a.locator('#acct-usage')).toContainText('/ 1 GB');
+  const { code } = await (await request.post(`${API}/__test/coupon`, { data: { perk: 'pro', days: 30 } })).json();
+  await a.locator('#acct-coupon').fill(code);
+  await a.locator('#acct-coupon-use').click();
+  await expect(a.locator('#acct-coupon-msg')).toContainText('「Pro プラン」の特典が付きました');
+  await expect(a.locator('#acct-plan')).toHaveText('Proプラン');
+  await expect(a.locator('#acct-usage')).toContainText('/ 30 GB');
+  await expect(a.locator('#acct-devices-note')).toContainText('10台まで');
+  expect(await a.evaluate(() => JSON.parse(localStorage.getItem('daigaku-note.perks')).adFree)).toBe(true);
+});

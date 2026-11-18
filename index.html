@@ -281,7 +281,10 @@
         <p class="small sync-status"></p>
       </section>
       <section class="acct-card">
-        <h3>使っている容量</h3>
+        <div class="acct-card-head">
+          <h3>使っている容量</h3>
+          <span class="acct-plan" id="acct-plan" hidden></span>
+        </div>
         <div class="acct-meter" id="acct-meter" role="meter" aria-label="使っている容量" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
         <p class="small" id="acct-usage">読み込んでいます…</p>
       </section>
@@ -300,7 +303,7 @@
       <section class="acct-card">
         <h3>ログイン中の端末</h3>
         <ul id="acct-devices" class="acct-devices"></ul>
-        <p class="small">ログインできるのは5台までです。6台目でログインすると、いちばん長く使っていない端末が外れます。</p>
+        <p class="small" id="acct-devices-note">ログインできるのは5台までです。6台目でログインすると、いちばん長く使っていない端末が外れます。</p>
       </section>
       <p class="acct-msg" id="acct-msg" role="alert"></p>
       <div class="acct-actions">

@@ -46,17 +46,18 @@ import {
   readJson,
   safeEqual,
 } from './lib.js';
-import { QUOTA_BYTES, handleDav, parseDavPath } from './dav.js';
+import { handleDav, parseDavPath } from './dav.js';
 import { activePerks, handleCouponRedeem } from './coupon.js';
+import { planFromPerks, userPlan } from './plan.js';
 
 /**
  * 配信されている版。/health に載せて、外から「どれが動いているか」を確かめられるようにする。
  * 受け口を足したり応答を変えたりしたら、この文字列も更新すること。
  */
-export const API_VERSION = '2026-11-18-coupon';
+export const API_VERSION = '2026-11-18-plans';
 
-/** 1人が同時にログインできる端末の数。超えたら、いちばん長く使っていない端末を外す。 */
-const MAX_DEVICES = 5;
+// 1人が同時にログインできる端末の数はプランで決まる(src/plan.js。無料5台・Pro と Max は10台)。
+// 超えたら、いちばん長く使っていない端末を外す。
 
 /** この日数使われなかった端末の鍵は無効にして消す。長い休みでも切れない長さにする。 */
 const TOKEN_IDLE_DAYS = 180;
@@ -295,7 +296,8 @@ async function handleOtpVerify(request, env) {
 
   // 端末が多いときは、いちばん長く使っていないものを外す
   const devices = await env.DB.prepare('SELECT id FROM devices WHERE user_id = ? ORDER BY last_used_at ASC, created_at ASC').bind(user.id).all();
-  const over = devices.results.length - (MAX_DEVICES - 1);
+  const maxDevices = (await userPlan(env, user.id)).devices;
+  const over = devices.results.length - (maxDevices - 1);
   const removed = over > 0 ? devices.results.slice(0, over).map((d) => d.id) : [];
   for (const id of removed) await env.DB.prepare('DELETE FROM devices WHERE id = ?').bind(id).run();
 
@@ -323,6 +325,9 @@ async function handleOtpVerify(request, env) {
 // ---- ログイン中の操作 -----------------------------------------------------
 
 async function handleMe(env, device) {
+  // クーポンなどで付いた特典 [{ perk, name, expiresAt }]。表がまだない(schema.sql を流す前に配信した)ときは空にして、ほかは返す
+  const perks = await activePerks(env.DB, device.user_id).catch((err) => (console.log('perks failed', String(err)), []));
+  const plan = planFromPerks(perks, env);
   return json({
     ok: true,
     email: device.email,
@@ -330,9 +335,10 @@ async function handleMe(env, device) {
     createdAt: device.user_created_at,
     deviceId: device.id,
     deviceLabel: device.label,
-    usage: { bytes: device.bytes_used, quota: Number(env.QUOTA_BYTES) || QUOTA_BYTES },
-    // クーポンなどで付いた特典 [{ perk, name, expiresAt }]。表がまだない(schema.sql を流す前に配信した)ときは空にして、ほかは返す
-    perks: await activePerks(env.DB, device.user_id).catch((err) => (console.log('perks failed', String(err)), [])),
+    usage: { bytes: device.bytes_used, quota: plan.quota },
+    perks,
+    plan: { id: plan.id, name: plan.name, devices: plan.devices }, // 無料・Pro・Max
+    adFree: plan.adFree, // 広告を出さない(Pro・Max・広告なしの特典)
   });
 }
 

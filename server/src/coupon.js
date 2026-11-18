@@ -17,6 +17,8 @@ import { allowRate, fail, json, nowIso, readJson } from './lib.js';
 /** 特典の種類と、画面に出す名前。足すときはここと、アプリの js/account-ui.js の PERK_NAMES に足す。 */
 export const PERKS = {
   adfree: '広告なし',
+  pro: 'Pro プラン',
+  max: 'Max プラン',
 };
 
 /** コードに使う文字。見間違えやすい 0・O・1・I は使わない(32 種類)。 */

@@ -64,10 +64,10 @@ export const redeemCoupon = (token, code) => call('/coupon', { method: 'POST', b
 // 特典(クーポンなどで付いたもの)を端末に覚えておく。オフラインでも「広告なし」などを判断できるように。
 // サーバーの /me・/coupon の perks を受け取るたびに書き直す。ログアウトしたら消す。
 const PERKS_KEY = 'daigaku-note.perks';
-export function savePerks(userId, perks) {
+export function savePerks(userId, perks, adFree) {
   try {
     if (!userId) globalThis.localStorage?.removeItem(PERKS_KEY);
-    else globalThis.localStorage?.setItem(PERKS_KEY, JSON.stringify({ userId, perks: Array.isArray(perks) ? perks : [] }));
+    else globalThis.localStorage?.setItem(PERKS_KEY, JSON.stringify({ userId, perks: Array.isArray(perks) ? perks : [], adFree: !!adFree }));
   } catch { /* 保存できない環境では、毎回サーバーに聞く */ }
 }
 /** 端末に覚えた特典の一覧。そのアカウントのものがなければ null */
@@ -77,6 +77,18 @@ export function cachedPerks(userId) {
     return v && userId && v.userId === userId && Array.isArray(v.perks) ? v.perks : null;
   } catch {
     return null;
+  }
+}
+/**
+ * 広告を出さないか(Pro・Max・広告なしの特典)。端末に覚えたものだけで決める。
+ * 広告を出すときに使う予定(広告はまだ入っていない)。userId は今ログインしているアカウント。ログインしていなければ false
+ */
+export function adFree(userId) {
+  try {
+    const v = JSON.parse(globalThis.localStorage?.getItem(PERKS_KEY) || 'null');
+    return !!(v && userId && v.userId === userId && (v.adFree || hasPerk('adfree', userId)));
+  } catch {
+    return false;
   }
 }
 /**

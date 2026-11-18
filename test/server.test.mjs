@@ -655,3 +655,55 @@ test('クーポン: 退会すると特典は消え、使ったコードは使用
   const again = await login('coupon-f@example.com');
   assert.equal((await api('/coupon', { method: 'POST', token: again.token, body: { code } })).status, 400);
 });
+
+test('プラン: Pro・Max の特典で容量と端末の数が増え、広告なしになる', async () => {
+  const u = await login('plan@example.com');
+  let me = (await api('/me', { token: u.token })).data;
+  assert.deepEqual(me.plan, { id: 'free', name: '無料', devices: 5 });
+  assert.equal(me.adFree, false);
+
+  const pro = await issueCoupon({ perk: 'pro', days: 30 });
+  assert.equal((await api('/coupon', { method: 'POST', token: u.token, body: { code: pro } })).status, 200);
+  me = (await api('/me', { token: u.token })).data;
+  assert.equal(me.plan.id, 'pro');
+  assert.equal(me.usage.quota, 30 * 1024 ** 3);
+  assert.equal(me.adFree, true);
+
+  // Pro は10台までログインできる
+  const tokens = [u.token];
+  for (let i = 0; i < 9; i++) tokens.push((await login('plan@example.com')).token);
+  for (const t of tokens) assert.equal((await api('/me', { token: t })).status, 200);
+  await login('plan@example.com'); // 11台目: いちばん古い端末が外れる
+  assert.equal((await api('/me', { token: tokens[0] })).status, 401);
+
+  const max = await issueCoupon({ perk: 'max' });
+  const t = tokens[1];
+  assert.equal((await api('/coupon', { method: 'POST', token: t, body: { code: max } })).status, 200);
+  me = (await api('/me', { token: t })).data;
+  assert.equal(me.plan.id, 'max');
+  assert.equal(me.usage.quota, 200 * 1024 ** 3);
+
+  // 期限が切れたら無料に戻る
+  env.DB.x('UPDATE perks SET expires_at = ? WHERE user_id = ?', '2000-01-01T00:00:00.000Z', u.userId);
+  me = (await api('/me', { token: t })).data;
+  assert.equal(me.plan.id, 'free');
+  assert.equal(me.adFree, false);
+});
+
+test('プラン: 書き込みの容量の上限はプランで決まる', async () => {
+  const qEnv = fakeEnv({ QUOTA_BYTES: '10', OTP_BURST_SECONDS: '0' });
+  const s2 = await startWorker(worker, qEnv);
+  try {
+    const post = (p, body, token) => fetch(s2.url + p, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) }).then((r) => r.json());
+    await post('/otp/send', { email: 'q@example.com' });
+    const acc = await post('/otp/verify', { email: 'q@example.com', code: mail.lastCode('q@example.com') });
+    const putOp = () => fetch(s2.url + '/dav/daigaku-note/ops/dev1/000000001-000000001.json', { method: 'PUT', headers: { authorization: `Bearer ${acc.token}` }, body: '{"x":"0123456789"}' });
+    assert.equal((await putOp()).status, 507);
+    const code = newCouponCode();
+    qEnv.DB.x('INSERT INTO coupons (code_hash, perk, note, created_at) VALUES (?, ?, ?, ?)', await couponHash(normalizeCoupon(code)), 'pro', 't', new Date().toISOString());
+    assert.equal((await post('/coupon', { code }, acc.token)).ok, true);
+    assert.equal((await putOp()).status, 201);
+  } finally {
+    await s2.close();
+  }
+});

@@ -425,7 +425,7 @@ async function refreshPerks() {
   const user = dav.config().user;
   try {
     const me = await account.me(token());
-    if (Array.isArray(me.perks) && dav.config().user === user) account.savePerks(user, me.perks);
+    if (Array.isArray(me.perks) && dav.config().user === user) account.savePerks(user, me.perks, me.adFree);
   } catch { /* オフラインなど。次の機会に */ }
 }
 
@@ -554,8 +554,9 @@ async function loadDetails() {
   }
 
   if (me.status === 'fulfilled' && Array.isArray(me.value.perks)) {
-    account.savePerks(dav.config().user, me.value.perks);
+    account.savePerks(dav.config().user, me.value.perks, me.value.adFree);
     renderPerks(me.value.perks);
+    renderPlan(me.value.plan);
   } else {
     // 読み込めなかった(オフラインなど): 端末に覚えた特典を出す
     const cached = account.cachedPerks(dav.config().user);
@@ -600,6 +601,16 @@ async function loadDetails() {
     }
     return li;
   }));
+}
+
+// プラン(無料・Pro・Max)と、ログインできる端末の数
+function renderPlan(plan) {
+  const tag = $('#acct-plan');
+  tag.hidden = !plan;
+  if (!plan) return;
+  tag.textContent = `${plan.name}プラン`;
+  const n = Number(plan.devices) || 5;
+  $('#acct-devices-note').textContent = `ログインできるのは${n}台までです。${n + 1}台目でログインすると、いちばん長く使っていない端末が外れます。`;
 }
 
 // 特典の一覧。null は読み込めなかったとき。old は端末に覚えた前回の情報を出しているとき
@@ -755,8 +766,8 @@ export function init(helpers) {
       return;
     }
     coupon.value = '';
-    account.savePerks(dav.config().user, r.perks);
     renderPerks(r.perks);
+    loadDetails(); // プラン・容量も変わることがある(読み直して、端末にも覚え直す)
     el.classList.add('ok');
     msg(el, `「${r.name}」の特典が付きました${r.expiresAt ? `(${new Date(r.expiresAt).toLocaleDateString('ja-JP')} まで)` : ''}。`);
     h.toast(`クーポンを使いました: ${r.name}`);
