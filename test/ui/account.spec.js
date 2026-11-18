@@ -496,7 +496,12 @@ test('Apple から(持ち主を確かめずに)作られたアカウントのア
   await expect(a.locator('#acct-noacct-text')).toContainText('Appleのアカウントから作られたアカウントがあります');
   await expect(a.locator('#acct-noacct-create')).toHaveText('新しいアカウントを作成');
   await expect(a.locator('#library')).toBeHidden();
-  // 新しく作る: この端末には前のアカウントのノートがあるので、確かめる
+  // 新しく作る: この端末には前のアカウントのノートがあるので、送る前に確かめる。キャンセルすれば何も作られない
+  await a.locator('#acct-noacct-create').click();
+  await expect(a.locator('#confirm-dialog')).toContainText('新しいアカウントを作成しますか?');
+  await a.locator('#confirm-cancel').click();
+  await expect(a.locator('#library')).toBeHidden();
+  await expect(a.locator('#acct-noacct-create')).toBeVisible();
   await a.locator('#acct-noacct-create').click();
   await expect(a.locator('#confirm-ok')).toBeVisible();
   await a.locator('#confirm-ok').click();

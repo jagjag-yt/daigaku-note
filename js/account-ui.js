@@ -382,8 +382,8 @@ async function verify(how) {
   }
   const email = pending.email;
   const replace = !!how && noAccountReplace;
-  // 「新しいアカウントを作成」: サーバーに送ると、すぐに作られる(取り消せない)ので、この端末のノートをどうするかは送る前に確かめる
-  if (replace && !(await confirmOtherAccount(email, 'signup', { userId: 'new', sameEmail: true }))) return;
+  // 「アカウントを作成」のボタン: サーバーに送ると、すぐに作られる(取り消せない)ので、この端末のノートをどうするかは送る前に確かめる
+  if (how && !(await confirmOtherAccount(email, 'signup', { userId: 'new', sameEmail: true }))) return;
   const r = await run(el, () => account.verify(email, code, asPurpose, replace));
   if (!r) {
     const err = run.lastError;
@@ -411,7 +411,7 @@ async function verify(how) {
   // アドレスは前と同じでも、別のアカウントになった(Apple・Google から作られたアカウントではなく、新しいアカウントを作った):
   // この端末のノートをどうするか、別のアカウントのときと同じく確かめる
   const discard = () => account.logout(r.token).catch(() => {});
-  if (!replace && !(await confirmOtherAccount(email, asPurpose, { userId: r.userId, discard, sameEmail: true }))) {
+  if (!how && !(await confirmOtherAccount(email, asPurpose, { userId: r.userId, discard, sameEmail: true }))) {
     await discard();
     return;
   }
