@@ -1,5 +1,6 @@
 // IndexedDB への保存。op は追記するだけで、書き換えない。
 import { NOTE_TYPES } from './model.js';
+import { cleanOps } from './validate.js';
 
 const DB_NAME = 'daigaku-note';
 const VERSION = 2;
@@ -91,21 +92,22 @@ export async function putOps(ops, clock) {
   return added;
 }
 
+// 読み出した op も確かめる(この確かめを入れる前の版で取り込んだ、細工した op が残っていても使わないため。js/validate.js)
 export async function opsForNote(noteId) {
   const db = await openDB();
-  return req(db.transaction('ops').objectStore('ops').index('n').getAll(noteId));
+  return cleanOps(await req(db.transaction('ops').objectStore('ops').index('n').getAll(noteId)));
 }
 
 export async function noteLevelOps() {
   const db = await openDB();
   const idx = db.transaction('ops').objectStore('ops').index('t');
   const lists = await Promise.all(NOTE_TYPES.map((t) => req(idx.getAll(t))));
-  return lists.flat();
+  return cleanOps(lists.flat());
 }
 
 export async function allOps() {
   const db = await openDB();
-  return req(db.transaction('ops').objectStore('ops').getAll());
+  return cleanOps(await req(db.transaction('ops').objectStore('ops').getAll()));
 }
 
 export async function allNoteMeta() {
@@ -131,7 +133,7 @@ export async function hasFile(hash) {
 
 export async function opsByDevice(device) {
   const db = await openDB();
-  return req(db.transaction('ops').objectStore('ops').index('d').getAll(device));
+  return cleanOps(await req(db.transaction('ops').objectStore('ops').index('d').getAll(device)));
 }
 
 export async function putSearch(rec) {

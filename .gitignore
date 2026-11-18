@@ -8,3 +8,5 @@ test/ui/__screenshots__/
 /build/
 /ios-out/
 /ios-ipa/
+/server/coupons/
+/server/.wrangler/

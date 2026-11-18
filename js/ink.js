@@ -162,14 +162,18 @@ export function geometry(d) {
   return { kind: 'stroke', d: linePath(line), w: d.width };
 }
 
+// 属性に入れる文字を逃がす(ほかの端末から届いた値がそのまま HTML にならないように)
+const attr = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
 // SVG の要素(文字列)
 export function strokeSvg(id, d, geo, off = [0, 0]) {
-  const tf = off[0] || off[1] ? ` transform="translate(${off[0]} ${off[1]})"` : '';
+  const ox = Number(off?.[0]) || 0, oy = Number(off?.[1]) || 0;
+  const tf = ox || oy ? ` transform="translate(${ox} ${oy})"` : '';
   const mk = d.tool === 'marker' ? ' class="marker"' : d.tool === 'tape' ? ' class="tape"' : d.nib === 'pencil' ? ' class="pencil"' : '';
-  if (geo.kind === 'fill') return `<path data-id="${id}"${mk}${tf} d="${geo.d}" fill="${d.color}"/>`;
+  if (geo.kind === 'fill') return `<path data-id="${attr(id)}"${mk}${tf} d="${attr(geo.d)}" fill="${attr(d.color)}"/>`;
   const da = dashArray(d, geo.w);
   const dash = da ? ` stroke-dasharray="${da.map((v) => +v.toFixed(3)).join(' ')}"` : '';
-  return `<path data-id="${id}"${mk}${tf} d="${geo.d}" fill="none" stroke="${d.color}" stroke-width="${geo.w}" stroke-linecap="round" stroke-linejoin="round"${dash}/>`;
+  return `<path data-id="${attr(id)}"${mk}${tf} d="${attr(geo.d)}" fill="none" stroke="${attr(d.color)}" stroke-width="${Number(geo.w) || 0}" stroke-linecap="round" stroke-linejoin="round"${dash}/>`;
 }
 
 // キャンバスに1本描く(サムネイル用)

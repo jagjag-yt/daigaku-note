@@ -89,3 +89,35 @@ CREATE TABLE IF NOT EXISTS rate_limits (
   count      INTEGER NOT NULL,
   reset_at   TEXT NOT NULL
 );
+
+-- クーポンコード(テストに協力してくれた人への特典など)。発行は scripts/coupon.mjs だけ(サーバーに発行の受け口はない)。
+-- コードそのものは持たず、ハッシュだけ(src/coupon.js の couponHash)。1つのコードは1回だけ使える。
+CREATE TABLE IF NOT EXISTS coupons (
+  code_hash   TEXT PRIMARY KEY,
+  perk        TEXT NOT NULL,              -- 付ける特典。'adfree'(広告なし)・'pro'・'max'
+  days        INTEGER,                    -- 特典の日数。NULL ならずっと
+  expires_at  TEXT,                       -- このコードを使える期限。NULL なら期限なし
+  note        TEXT NOT NULL DEFAULT '',   -- 発行したときのメモ(「テスト協力 2026-11」など)。利用者には見せない
+  created_at  TEXT NOT NULL,
+  redeemed_by TEXT,                       -- 使った利用者(users.id)。退会したら 'deleted' にする(NULL に戻すと、もう一度使えてしまうため)
+  redeemed_at TEXT
+);
+
+-- 利用者が持っている特典。特典1種類につき1行。
+CREATE TABLE IF NOT EXISTS perks (
+  user_id     TEXT NOT NULL,
+  perk        TEXT NOT NULL,
+  granted_at  TEXT NOT NULL,
+  expires_at  TEXT,                       -- NULL ならずっと
+  coupon_hash TEXT,                       -- どのコードで付いたか
+  PRIMARY KEY (user_id, perk),
+  FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);
+
+-- 長いあいだ使われていないアカウントに、削除のお知らせを送った記録(src/inactive.js)。使われたら消す。
+CREATE TABLE IF NOT EXISTS inactive_notices (
+  user_id TEXT PRIMARY KEY,
+  sent_at TEXT NOT NULL,
+  purging INTEGER NOT NULL DEFAULT 0,   -- 1 = 消している途中で失敗した(次の回に、使われたかどうかに関係なく続きから消す)
+  FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);

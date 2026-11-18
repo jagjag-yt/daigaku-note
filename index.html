@@ -2,6 +2,9 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
+  <!-- 読み込めるもの・通信できる先を絞る(他人のノートなどに仕込まれたスクリプトを動かさない・鍵をよそへ送らせないため)。
+       通信先は同期サーバーと、開発・試験用の手元のサーバーだけ。広告などを足すときは、ここに足す -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' blob: https://note-api.quiz-make.com http://localhost:* http://127.0.0.1:*; frame-src 'self' blob:; worker-src 'self' blob:; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>大学ノート</title>
   <meta name="description" content="無料・オフラインで使える手書きノート">
@@ -16,7 +19,7 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- ログイン・アカウント作成(ログインしていないときは、ここだけが出る) -->
+  <!-- ログイン・アカウント作成(ログインしていないときに最初に出る。ログインせずに、この端末だけで使うこともできる) -->
   <section id="auth" class="auth" hidden>
     <div class="auth-wrap">
       <div class="auth-brand"><img src="icons/icon.svg" alt="" width="40" height="40"><span>大学ノート</span></div>
@@ -30,12 +33,13 @@
           <p class="acct-msg" id="auth-login-msg" role="alert"></p>
           <button type="submit" class="primary acct-wide">番号を送る</button>
           <p class="auth-switch">アカウントをお持ちでない方は、<a href="#/signup" id="auth-to-signup">アカウントを作成</a></p>
+          <button type="button" class="auth-skip link">ログインせずに、この端末だけで使う</button>
         </form>
 
         <!-- アカウント作成 -->
         <form id="auth-signup-form" class="acct-step" novalidate hidden>
           <h1 id="auth-signup-heading" class="acct-title" tabindex="-1">アカウントを作成</h1>
-          <p class="acct-lead">大学ノートを使うには、無料のアカウントが必要です。</p>
+          <p class="acct-lead">無料のアカウントを作ると、ノートをほかの端末と同期できます。</p>
           <ul class="acct-points">
             <li data-icon="check" data-icon-size="18"><span>メールアドレスだけで作れます。パスワードは不要です</span></li>
             <li data-icon="check" data-icon-size="18"><span>iPad・スマホ・パソコンのノートが自動で同期されます</span></li>
@@ -45,6 +49,7 @@
           <p class="acct-msg" id="auth-signup-msg" role="alert"></p>
           <button type="submit" class="primary acct-wide">番号を送る</button>
           <p class="auth-switch">すでにアカウントをお持ちの方は、<a href="#/login" id="auth-to-login">ログイン</a></p>
+          <button type="button" class="auth-skip link">ログインせずに、この端末だけで使う</button>
         </form>
 
         <!-- 6桁の番号(ログイン・アカウント作成の共通) -->
@@ -99,6 +104,13 @@
         <button id="lib-view" class="icon-btn" type="button" title="リスト表示に切り替え" aria-label="リスト表示に切り替え"></button>
       </div>
     </header>
+    <div id="home-tip" class="home-tip" role="note" hidden>
+      <p>Safari では、しばらく開かないとこの端末のノートが消えることがあります。ログインして同期しておくと、消えても戻せます。</p>
+      <div class="home-tip-btns">
+        <button type="button" class="home-tip-signup">アカウントを作る</button>
+        <button type="button" class="home-tip-close">閉じる</button>
+      </div>
+    </div>
     <input id="pdf-input" type="file" accept="application/pdf,.pdf" hidden>
     <input id="tpl-input" type="file" accept="application/pdf,.pdf,image/png,image/jpeg,image/webp" hidden>
     <input id="gn-input" type="file" accept=".goodnotes,application/zip" multiple hidden>
@@ -224,6 +236,13 @@
     <h2>同期</h2>
     <section id="acct-summary" class="acct-summary">
       <h3>大学ノートアカウント</h3>
+      <div id="acct-summary-out" hidden>
+        <p>ログインしていません。ノートはこの端末だけに保存されています。ログインすると、ほかの端末と同期できます。</p>
+        <div class="row">
+          <button type="button" id="acct-summary-signup" class="primary">アカウントを作成</button>
+          <button type="button" id="acct-summary-login">ログイン</button>
+        </div>
+      </div>
       <div id="acct-summary-in">
         <p><strong id="acct-summary-who"></strong> で同期しています。</p>
         <p class="small sync-status"></p>
@@ -269,14 +288,29 @@
         <p class="small sync-status"></p>
       </section>
       <section class="acct-card">
-        <h3>使っている容量</h3>
+        <div class="acct-card-head">
+          <h3>使っている容量</h3>
+          <span class="acct-plan" id="acct-plan" hidden></span>
+        </div>
         <div class="acct-meter" id="acct-meter" role="meter" aria-label="使っている容量" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
         <p class="small" id="acct-usage">読み込んでいます…</p>
+      </section>
+      <section class="acct-card" id="acct-perks-card">
+        <h3>特典</h3>
+        <ul id="acct-perks" class="acct-perks"></ul>
+        <form id="acct-coupon-form" class="acct-coupon" novalidate>
+          <label for="acct-coupon" class="small">クーポンコードをお持ちの方は入力してください。</label>
+          <div class="acct-coupon-row">
+            <input id="acct-coupon" type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" enterkeyhint="done" maxlength="40" placeholder="XXXX-XXXX-XXXX" aria-describedby="acct-coupon-msg">
+            <button type="submit" id="acct-coupon-use">使う</button>
+          </div>
+          <p class="acct-msg" id="acct-coupon-msg" role="alert"></p>
+        </form>
       </section>
       <section class="acct-card">
         <h3>ログイン中の端末</h3>
         <ul id="acct-devices" class="acct-devices"></ul>
-        <p class="small">ログインできるのは5台までです。6台目でログインすると、いちばん長く使っていない端末が外れます。</p>
+        <p class="small" id="acct-devices-note">ログインできるのは5台までです。6台目でログインすると、いちばん長く使っていない端末が外れます。</p>
       </section>
       <p class="acct-msg" id="acct-msg" role="alert"></p>
       <div class="acct-actions">

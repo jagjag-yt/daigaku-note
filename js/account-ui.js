@@ -1,13 +1,15 @@
 // 大学ノートアカウントの画面(ログイン・アカウント作成・アカウントの管理)。
 // 通信は js/account.js、同期そのものは js/webdav.js。ここは画面だけを受け持つ。
 //
-// 大学ノートはログインしないと使えない。ログインしていないときは、本棚・ノートの代わりに次のページだけを出す(js/app.js の route())。
+// ログインしていないときは、はじめに次のページを出す(js/app.js の route())。
+// 「ログインせずに、この端末だけで使う」を選ぶと、ログインしないまま本棚・ノートを使える(同期はしない。LOCAL_KEY に覚える)。
+// あとから本棚の人のボタン・同期のダイアログから、ログイン・アカウント作成のページへ行ける。
 //   ログインのページ(#/login)          … メールアドレス → 6桁の番号。アカウントがなければ、同じ番号のままアカウントを作れる
 //   アカウント作成のページ(#/signup)   … メールアドレス → 6桁の番号。すでにアカウントがあれば、そのままログインする
 // ログインしたあと:
 //   本棚の右上の人のボタン(#account-btn) … 頭文字を出す。押すとアカウントの画面
 //   同期のダイアログ(#sync-dialog)      … アカウントの要約(#acct-summary)
-//   アカウントの画面(#account-dialog)   … 容量・端末・ログアウト・削除
+//   アカウントの画面(#account-dialog)   … 容量・特典(クーポンコード)・端末・ログアウト・削除
 //
 // ログインの状態は端末の中に持つ(同期の設定 dav.config().account)ので、オフラインでもログインしたまま使える。
 // ログアウトしたとき・サーバーに鍵を断られたとき(ほかの端末から外された・退会した)に、ログインのページに戻る。
@@ -23,6 +25,7 @@ import { clearExports } from './native.js';
 const $ = (s) => document.querySelector(s);
 const PENDING_KEY = 'daigaku-note.otp';
 const LAST_KEY = 'daigaku-note.last-account'; // この端末で最後にログインしていたアカウント(別のアカウントでログインするときに確かめるため)
+const LOCAL_KEY = 'daigaku-note.local-only'; // 「ログインせずに、この端末だけで使う」を選んだ(ログインしたら消す)
 const WIPED_KEY = 'daigaku-note.wiped'; // この端末のノートを消して読み込み直したあとに、続きのアドレスを入れておくため { email, how }
 const CODE_MINUTES = 10; // サーバーの番号の有効期限(server/src/index.js の OTP_MINUTES)
 const RESEND_SECONDS = 60; // 同じアドレスへ続けて送れない長さ(server/src/index.js の otpBurstSeconds)
@@ -42,6 +45,20 @@ let noAccountCode = ''; // ログインしようとしたらアカウントが�
 const now = () => Date.now();
 /** ログインしているか(端末の中の設定だけで決める。通信はしない) */
 export const loggedIn = () => !!dav.config().account && !dav.authExpired();
+/** ログインせずに、この端末だけで使うことを選んでいるか */
+export function localOnly() {
+  try { return localStorage.getItem(LOCAL_KEY) === '1'; } catch { return false; }
+}
+function setLocalOnly(on) {
+  try { if (on) localStorage.setItem(LOCAL_KEY, '1'); else localStorage.removeItem(LOCAL_KEY); } catch { /* 覚えられなくても、今は使える */ }
+}
+/**
+ * 本棚・ノートを出してよいか。ログインしている、またはこの端末だけで使うと決めた。
+ * ただしログインが切れた(ほかの端末から外された・退会した)ときは、まずログインのページを出す
+ */
+/** この端末で前にログインしたことがある(ログアウトした・ログインが切れた) */
+export const hadAccount = () => !!(dav.config().account || loadLast());
+export const canUse = () => loggedIn() || (localOnly() && !(dav.config().account && dav.authExpired()));
 const token = () => dav.config().pass;
 const fresh = (v) => v && now() - v.sentAt < CODE_MINUTES * 60_000;
 
@@ -100,7 +117,7 @@ const initial = (email) => (String(email || '?').trim()[0] || '?').toUpperCase()
 
 function msg(el, text) { el.textContent = text || ''; }
 const emailMsg = () => $(`#auth-${purpose}-msg`);
-function clearMsgs() { for (const id of ['#auth-login-msg', '#auth-signup-msg', '#acct-code-msg', '#acct-msg']) msg($(id), ''); }
+function clearMsgs() { for (const id of ['#auth-login-msg', '#auth-signup-msg', '#acct-code-msg', '#acct-msg', '#acct-coupon-msg']) msg($(id), ''); }
 
 // 通信のあいだは、画面のボタンを押せないようにする(2回押されないように)。失敗したら el に文言を出す
 async function run(el, fn) {
@@ -147,6 +164,8 @@ export function refresh() {
   btn.title = label;
   btn.setAttribute('aria-label', label);
   if (ok) $('#acct-summary-who').textContent = acc.email;
+  $('#acct-summary-in').hidden = !ok;
+  $('#acct-summary-out').hidden = ok;
 
   // 本棚・ノートを出しているときにログインが切れた: ログインのページへ。
   // ペンで書いている最中なら、書き終わるまで待つ(途中で画面を替えると、書いている線が消えてしまうため。待ったあとの線は route() が保存する)
@@ -155,7 +174,7 @@ export function refresh() {
 let kickTimer = 0;
 function kickToAuth() {
   clearTimeout(kickTimer);
-  if (loggedIn() || ($('#library').hidden && $('#editor').hidden)) return;
+  if (canUse() || ($('#library').hidden && $('#editor').hidden)) return;
   if (h.penBusy?.()) { kickTimer = setTimeout(kickToAuth, 500); return; }
   h.route?.();
 }
@@ -359,6 +378,12 @@ async function verify(how) {
   await finishLogin(r, asPurpose);
 }
 
+/** ログイン・アカウント作成のページへ(この端末だけで使っているときに、本棚などから) */
+export function goAuth(how) {
+  for (const d of document.querySelectorAll('dialog[open]')) d.close();
+  location.hash = how === 'signup' ? '#/signup' : '#/login';
+}
+
 // 鍵を受け取ったあと: 同期の設定を入れて本棚へ
 async function finishLogin(r, asked) {
   // (以前の版で自分のサーバー(WebDAV)と同期していた端末は、ログインのページを出しているあいだも WebDAV との自動同期を続けている。
@@ -376,12 +401,13 @@ async function finishLogin(r, asked) {
   });
   if (!ok) return;
   saveLast({ userId: r.userId, email: r.email });
+  setLocalOnly(false);
   savePending(null);
   editing = false;
   for (const id of ['#auth-login-email', '#auth-signup-email']) $(id).value = '';
   const created = r.existing === false; // 以前のサーバーは existing を返さない
   h.toast(
-    r.removedDevices ? 'ログインしました。ログインできる端末は5台までのため、いちばん長く使っていない端末を外しました'
+    r.removedDevices ? `ログインしました。ログインできる端末は${r.maxDevices || 5}台までのため、いちばん長く使っていない端末を外しました`
       : asked === 'signup' && r.existing ? 'このメールアドレスはすでに登録されていたため、ログインしました'
         : created ? 'アカウントを作成しました。この端末のノートは自動で同期されます'
           : 'ログインしました。この端末のノートとほかの端末のノートを同期します',
@@ -392,6 +418,17 @@ async function finishLogin(r, asked) {
   if (!/^#\/note\//.test(location.hash)) history.replaceState(null, '', '#/');
   h.route();
   dav.syncNow(true);
+  refreshPerks();
+}
+
+/** サーバーの特典を端末に覚え直す(ログインしたとき・起動したとき)。失敗しても前に覚えたものを使う */
+async function refreshPerks() {
+  if (!loggedIn()) return;
+  const user = dav.config().user;
+  try {
+    const me = await account.me(token());
+    if (Array.isArray(me.perks) && dav.config().user === user) account.savePerks(user, me.perks, me.adFree);
+  } catch { /* オフラインなど。次の機会に */ }
 }
 
 // 前の人のアドレスは伏せる(共有の端末で、ほかの人に見えないように)。先頭の1文字と @ から後ろだけ
@@ -469,7 +506,7 @@ function resumeAfterWipe() {
 
 /** アカウントの画面を開く */
 export function open() {
-  if (!loggedIn()) { h.route(); return; }
+  if (!loggedIn()) { goAuth(hadAccount() ? 'login' : 'signup'); return; }
   renderInfo();
   h.showDialog($('#account-dialog'), null);
 }
@@ -477,6 +514,9 @@ export function open() {
 function renderInfo() {
   const acc = dav.config().account;
   msg($('#acct-msg'), '');
+  msg($('#acct-coupon-msg'), '');
+  $('#acct-coupon-msg').classList.remove('ok');
+  $('#acct-coupon').value = '';
   $('#acct-avatar').textContent = initial(acc.email);
   $('#acct-who').textContent = acc.email;
   $('#acct-since').textContent = acc.deviceLabel ? `この端末: ${acc.deviceLabel}` : '';
@@ -513,6 +553,16 @@ async function loadDetails() {
     meter.querySelector('span').style.width = '0%';
     meter.removeAttribute('aria-valuetext');
     $('#acct-usage').textContent = '容量を読み込めませんでした。';
+  }
+
+  if (me.status === 'fulfilled' && Array.isArray(me.value.perks)) {
+    account.savePerks(dav.config().user, me.value.perks, me.value.adFree);
+    renderPerks(me.value.perks);
+    renderPlan(me.value.plan);
+  } else {
+    // 読み込めなかった(オフラインなど): 端末に覚えた特典を出す
+    const cached = account.cachedPerks(dav.config().user);
+    renderPerks(cached, !!cached);
   }
 
   if (list.status !== 'fulfilled') {
@@ -555,10 +605,37 @@ async function loadDetails() {
   }));
 }
 
+// プラン(無料・Pro・Max)と、ログインできる端末の数
+function renderPlan(plan) {
+  const tag = $('#acct-plan');
+  tag.hidden = !plan;
+  if (!plan) return;
+  tag.textContent = `${plan.name}プラン`;
+  const n = Number(plan.devices) || 5;
+  $('#acct-devices-note').textContent = `ログインできるのは${n}台までです。${n + 1}台目でログインすると、いちばん長く使っていない端末が外れます。`;
+}
+
+// 特典の一覧。null は読み込めなかったとき。old は端末に覚えた前回の情報を出しているとき
+function renderPerks(perks, old = false) {
+  const ul = $('#acct-perks');
+  const li = (text, cls) => { const e = document.createElement('li'); if (cls) e.className = cls; e.textContent = text; return e; };
+  if (!perks) { ul.replaceChildren(li('特典を読み込めませんでした。', 'none')); return; }
+  const live = perks.filter((p) => !p.expiresAt || Date.parse(p.expiresAt) > Date.now());
+  if (!live.length) { ul.replaceChildren(li(old ? '付いている特典はありません(前回の情報)。' : '付いている特典はありません。', 'none')); return; }
+  ul.replaceChildren(...(old ? [li('サーバーに接続できないため、前回の情報を表示しています。', 'none')] : []), ...live.map((p) => {
+    const e = li(p.name || p.perk);
+    const when = document.createElement('small');
+    when.textContent = p.expiresAt ? `${new Date(p.expiresAt).toLocaleDateString('ja-JP')} まで` : '期限なし';
+    e.append(when);
+    return e;
+  }));
+}
+
 // ログアウト・退会のあと: この端末の同期を止めて、ログインのページに戻す(端末の中のノートはそのまま)
 async function accountOff() {
   const cfg = dav.config();
   if (cfg.account) saveLast({ userId: cfg.user, email: cfg.account.email });
+  account.savePerks(null);
   await dav.configure({ url: '', user: '', pass: '', auto: false });
   h.setSyncStatus('');
   refresh();
@@ -570,8 +647,26 @@ export function init(helpers) {
   h = helpers;
   pending = loadPending();
   resumeAfterWipe();
+  refreshPerks();
 
   $('#account-btn').onclick = open;
+  $('#acct-summary-signup').onclick = () => goAuth('signup');
+  $('#acct-summary-login').onclick = () => goAuth('login');
+  // ログインせずに、この端末だけで使う(通信の途中は押せない)
+  for (const b of document.querySelectorAll('#auth .auth-skip')) {
+    b.onclick = async () => {
+      if (busy) return;
+      // ログインが切れたアカウントの同期の設定は外す(残すと、またログインのページに戻されるため。ノートは消えない)。
+      // 以前の版で設定した WebDAV(自分のサーバー)の同期も外す(もう使えないと案内しているのに、裏で同期し続けないように)
+      const cfg = dav.config();
+      if ((cfg.account && dav.authExpired()) || (cfg.url && !cfg.account)) await accountOff();
+      setLocalOnly(true);
+      savePending(null);
+      editing = false;
+      history.replaceState(null, '', /^#\/note\//.test(location.hash) ? location.hash : '#/');
+      h.route();
+    };
+  }
   $('#acct-open-manage').onclick = () => { $('#sync-dialog').close(); open(); };
   $('#acct-summary-sync').onclick = () => dav.syncNow(true);
   $('#account-dialog').addEventListener('cancel', (e) => { if (busy) e.preventDefault(); }); // 通信の途中は Esc で閉じない
@@ -661,6 +756,26 @@ export function init(helpers) {
   };
 
   $('#acct-sync').onclick = () => dav.syncNow(true);
+  const coupon = $('#acct-coupon');
+  coupon.oninput = () => { msg($('#acct-coupon-msg'), ''); $('#acct-coupon-msg').classList.remove('ok'); };
+  $('#acct-coupon-form').onsubmit = async (e) => {
+    e.preventDefault();
+    if (busy) return;
+    const el = $('#acct-coupon-msg');
+    el.classList.remove('ok');
+    if (!coupon.value.trim()) { msg(el, 'コードを入力してください。'); coupon.focus(); return; }
+    const r = await run(el, () => account.redeemCoupon(token(), coupon.value));
+    if (!r) {
+      if (run.lastError?.status === 401) dav.syncNow(true); // 鍵が断られた: ログインのページに戻る
+      return;
+    }
+    coupon.value = '';
+    renderPerks(r.perks);
+    loadDetails(); // プラン・容量も変わることがある(読み直して、端末にも覚え直す)
+    el.classList.add('ok');
+    msg(el, `「${r.name}」の特典が付きました${r.expiresAt ? `(${new Date(r.expiresAt).toLocaleDateString('ja-JP')} まで)` : ''}。`);
+    h.toast(`クーポンを使いました: ${r.name}`);
+  };
   $('#acct-logout').onclick = async () => {
     const yes = await h.askConfirm({
       heading: 'ログアウトしますか?',

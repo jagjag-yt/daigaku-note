@@ -3,9 +3,10 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import worker, { cleanup } from '../server/src/index.js';
+import worker, { cleanup, ipv6Prefix64 } from '../server/src/index.js';
 import { parseDavPath } from '../server/src/dav.js';
 import { fakeEnv, startWorker, captureMail } from './cf-fakes.mjs';
+import { couponHash, newCouponCode, normalizeCoupon } from '../server/src/coupon.js';
 
 const ORIGIN = 'https://jagjag-yt.github.io';
 let env, srv, mail;
@@ -219,8 +220,33 @@ test('ログインとアカウント作成: purpose で文面と扱いが変わ�
   assert.equal(li.data.existing, true);
 });
 
+test('ログイン: 他人が同じアドレスへ送り続けても、別の IP の本人は送れる。サービス全体の上限', async () => {
+  const e2 = fakeEnv({ OTP_DAILY_LIMIT: '25' });
+  const s2 = await startWorker(worker, e2);
+  try {
+    const send = (email, ip) => fetch(s2.url + '/otp/send', { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': ip }, body: JSON.stringify({ email }) });
+    e2.OTP_BURST_SECONDS = '0';
+    // 攻撃する人: 1つの IP から同じアドレスへ10回まで
+    const codes = [];
+    for (let i = 0; i < 11; i++) codes.push((await send('victim@example.com', '203.0.113.50')).status);
+    assert.deepEqual(codes.slice(0, 10), Array(10).fill(200));
+    assert.equal(codes[10], 429);
+    // 本人(別の IP)はまだ送れる
+    assert.equal((await send('victim@example.com', '198.51.100.7')).status, 200);
+    // サービス全体: 1日25通(ここまで11通)。ほかの上限で断られたものは数えない
+    let st;
+    for (let i = 0; i < 14; i++) st = (await send(`other${i}@example.com`, `192.0.2.${i}`)).status;
+    assert.equal(st, 200);
+    const over = await send('late@example.com', '192.0.2.200');
+    assert.equal(over.status, 503);
+    assert.match((await over.json()).message, /この端末だけで使う/);
+  } finally {
+    await s2.close();
+  }
+});
+
 test('ログイン: 送信の回数の上限(続けての送信・IP ごと)', async () => {
-  const burstEnv = fakeEnv(); // OTP_BURST_SECONDS なし = 60秒
+  const burstEnv = fakeEnv({ OTP_DAILY_LIMIT: '100' }); // OTP_BURST_SECONDS なし = 60秒。IP ごとの1日の上限は30通
   const s2 = await startWorker(worker, burstEnv);
   try {
     const send = (email, ip) => fetch(s2.url + '/otp/send', { method: 'POST', headers: { 'content-type': 'application/json', ...(ip ? { 'cf-connecting-ip': ip } : {}) }, body: JSON.stringify({ email }) });
@@ -228,10 +254,19 @@ test('ログイン: 送信の回数の上限(続けての送信・IP ごと)', a
     const r = await send('burst@example.com');
     assert.equal(r.status, 429);
     assert.match((await r.json()).message, /続けて/);
-    // IP ごと: 1時間に30回まで(アドレスを変えても)
-    let last;
-    for (let i = 0; i < 31; i++) last = await send(`ip${i}@example.com`, '203.0.113.9');
-    assert.equal(last.status, 429);
+    // 同じアドレスへの連打は「続けて」で断り、IP の枠は使わない(同じ IP のほかの人を締め出さない)
+    for (let i = 0; i < 50; i++) await send('mash@example.com', '203.0.113.9');
+    // IP ごと: 1日30回まで(アドレスを変えても)。連打のあとでも、まだ29通送れる
+    const st = [];
+    for (let i = 0; i < 30; i++) st.push((await send(`ip${i}@example.com`, '203.0.113.9')).status);
+    assert.deepEqual(st.slice(0, 29), Array(29).fill(200));
+    assert.equal(st[29], 429);
+    // IPv6 は /64 ごとにまとめて数える(下の64ビットを変えても同じ枠)
+    const st6 = [];
+    for (let i = 0; i < 31; i++) st6.push((await send(`v6-${i}@example.com`, `2001:db8:1:2::${(i + 1).toString(16)}`)).status);
+    assert.deepEqual(st6.slice(0, 30), Array(30).fill(200));
+    assert.equal(st6[30], 429);
+    assert.equal((await send('v6-other@example.com', '2001:db8:1:3::1')).status, 200);
     // 本番(cf-connecting-ip あり)では DEV_ECHO_OTP を入れても番号を返さない
     burstEnv.DEV_ECHO_OTP = '1';
     const echoed = await (await send('echo@example.com')).json();
@@ -241,6 +276,121 @@ test('ログイン: 送信の回数の上限(続けての送信・IP ごと)', a
   } finally {
     await s2.close();
   }
+});
+
+test('ログイン: 他人が同じアドレスへ続けて送っても、本人は別の IP から待たずに送れる', async () => {
+  const e7 = fakeEnv(); // 続けての送信の間隔は60秒
+  const s7 = await startWorker(worker, e7);
+  try {
+    const send = (ip) => fetch(s7.url + '/otp/send', { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': ip }, body: JSON.stringify({ email: 'victim2@example.com' }) });
+    assert.equal((await send('203.0.113.60')).status, 200);
+    assert.equal((await send('203.0.113.60')).status, 429);
+    assert.equal((await send('198.51.100.60')).status, 200);
+  } finally {
+    await s7.close();
+  }
+});
+
+test('ログイン: 片づけが途中で止まっていたアカウントは、ログインの前に消し切って新しく作る', async () => {
+  const u = await login('purging@example.com');
+  await call('/dav/daigaku-note/files/' + '3'.repeat(64) + '.pdf', { method: 'PUT', body: 'pdf', headers: { authorization: basic(u.token) } });
+  env.DB.x("INSERT INTO inactive_notices (user_id, sent_at, purging) VALUES (?, '2020-01-01T00:00:00.000Z', 1)", u.userId);
+  // ログインのつもりでも、アカウントは消えたので「ありません」(同じ番号で作り直せる)
+  await api('/otp/send', { method: 'POST', body: { email: 'purging@example.com', purpose: 'login' } });
+  const code = mail.lastCode('purging@example.com');
+  const v = await api('/otp/verify', { method: 'POST', body: { email: 'purging@example.com', code, purpose: 'login' } });
+  assert.equal(v.status, 404);
+  assert.equal(env.DB.q('SELECT COUNT(*) AS n FROM users WHERE id = ?', u.userId)[0].n, 0);
+  assert.ok(![...env.FILES.objects.keys()].some((k) => k.startsWith(`u/${u.userId}/`)));
+  const again = await api('/otp/verify', { method: 'POST', body: { email: 'purging@example.com', code, purpose: 'signup' } });
+  assert.equal(again.status, 200);
+  assert.notEqual(again.data.userId, u.userId);
+});
+
+test('ログイン: 片づけの続きに失敗したら 503。番号は使えるまま、印も残る', async () => {
+  const u = await login('purging2@example.com');
+  env.DB.x("INSERT INTO inactive_notices (user_id, sent_at, purging) VALUES (?, '2020-01-01T00:00:00.000Z', 1)", u.userId);
+  await api('/otp/send', { method: 'POST', body: { email: 'purging2@example.com', purpose: 'signup' } });
+  const code = mail.lastCode('purging2@example.com');
+  const realList = env.FILES.list;
+  env.FILES.list = async () => { throw new Error('R2 の障害(テスト)'); };
+  try {
+    const v = await api('/otp/verify', { method: 'POST', body: { email: 'purging2@example.com', code, purpose: 'signup' } });
+    assert.equal(v.status, 503);
+  } finally {
+    env.FILES.list = realList;
+  }
+  assert.equal(env.DB.q('SELECT purging FROM inactive_notices WHERE user_id = ?', u.userId)[0].purging, 1);
+  const again = await api('/otp/verify', { method: 'POST', body: { email: 'purging2@example.com', code, purpose: 'signup' } });
+  assert.equal(again.status, 200);
+  assert.notEqual(again.data.userId, u.userId);
+  assert.equal(env.DB.q('SELECT COUNT(*) AS n FROM inactive_notices WHERE user_id = ?', u.userId)[0].n, 0);
+});
+
+test('ログイン: 他人が4つの IP からアドレスの枠を使い切っても、本人は自分の IP から受け取れる', async () => {
+  const e8 = fakeEnv({ OTP_BURST_SECONDS: '0' });
+  const s8 = await startWorker(worker, e8);
+  try {
+    const send = (ip) => fetch(s8.url + '/otp/send', { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': ip }, body: JSON.stringify({ email: 'owner@example.com' }) });
+    const st = [];
+    for (let k = 0; k < 4; k++) for (let i = 0; i < 10; i++) st.push((await send(`203.0.113.${100 + k}`)).status);
+    assert.ok(st.includes(429), 'アドレスの枠は使い切られる');
+    assert.equal((await send('198.51.100.200')).status, 200);
+    assert.equal((await send('198.51.100.200')).status, 200);
+    assert.equal((await send('198.51.100.200')).status, 429);
+    // 数えない分もアドレスごとに1日10通まで(たくさんの IP から受信箱を埋められない)
+    const fresh = [];
+    for (let i = 0; i < 10; i++) fresh.push((await send(`192.0.2.${i + 10}`)).status);
+    assert.equal(fresh.filter((x) => x === 200).length, 0); // 他人の4つの IP の8通と本人の2通で、もう10通
+  } finally {
+    await s8.close();
+  }
+});
+
+test('IP: IPv6 の /64 の取り出し', () => {
+  assert.equal(ipv6Prefix64('2001:db8:1:2::5'), '2001:db8:1:2');
+  assert.equal(ipv6Prefix64('2001:0db8:0001:0002:aaaa:bbbb:cccc:dddd'), '2001:db8:1:2');
+  assert.equal(ipv6Prefix64('2001:db8::1'), '2001:db8:0:0');
+  assert.equal(ipv6Prefix64('::ffff:1'), '0:0:0:0');
+  assert.equal(ipv6Prefix64('fe80::1%eth0'), 'fe80:0:0:0');
+});
+
+test('ログイン: 1つの IP からは1日に全体の枠の3割、IPv6 の /48 からは45%まで(全体の枠を1か所で使い切れない)', async () => {
+  const e3 = fakeEnv({ OTP_BURST_SECONDS: '0', OTP_DAILY_LIMIT: '90' }); // 1つの IP は27通、/48 は40通
+  const s3 = await startWorker(worker, e3);
+  try {
+    const send = (email, ip) => fetch(s3.url + '/otp/send', { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': ip }, body: JSON.stringify({ email }) });
+    const st = [];
+    for (let i = 0; i < 28; i++) st.push((await send(`d${i}@example.com`, '203.0.113.77')).status);
+    assert.deepEqual(st.slice(0, 27), Array(27).fill(200));
+    assert.equal(st[27], 429);
+    // /48 の中で /64 を変えていく: 合わせて40通まで
+    const st6 = [];
+    for (let i = 0; i < 41; i++) st6.push((await send(`e${i}@example.com`, `2001:db8:aa:${(i + 1).toString(16)}::1`)).status);
+    assert.deepEqual(st6.slice(0, 40), Array(40).fill(200));
+    assert.equal(st6[40], 429);
+    assert.equal((await send('e-other@example.com', '2001:db8:ab:1::1')).status, 200);
+  } finally {
+    await s3.close();
+  }
+});
+
+test('定期実行: 消している途中で失敗したら、次の回に続きから消す(途中でログインされても)', async () => {
+  const e6 = fakeEnv();
+  const D = e6.DB;
+  D.x("INSERT INTO users (id, email, created_at, last_seen_at) VALUES ('ux', 'x6@example.com', '2020-01-01T00:00:00.000Z', '2020-01-01T00:00:00.000Z')");
+  D.x("INSERT INTO inactive_notices (user_id, sent_at) VALUES ('ux', '2020-02-01T00:00:00.000Z')");
+  await e6.FILES.put('u/ux/files/a.pdf', 'pdf');
+  const realList = e6.FILES.list;
+  e6.FILES.list = async () => { throw new Error('R2 の障害(テスト)'); };
+  await cleanup(e6);
+  assert.equal(D.q("SELECT purging FROM inactive_notices WHERE user_id = 'ux'")[0].purging, 1);
+  // その間に使われた
+  D.x("UPDATE users SET last_seen_at = ? WHERE id = 'ux'", new Date().toISOString());
+  e6.FILES.list = realList;
+  await cleanup(e6);
+  assert.equal(D.q("SELECT COUNT(*) AS n FROM users WHERE id = 'ux'")[0].n, 0);
+  assert.equal(e6.FILES.objects.size, 0);
 });
 
 test('端末: 5台まで(6台目でいちばん古い端末が外れる)。一覧・外す・ログアウト', async () => {
@@ -255,6 +405,7 @@ test('端末: 5台まで(6台目でいちばん古い端末が外れる)。一�
   }
   const sixth = await login(email, '端末5');
   assert.equal(sixth.removedDevices, 1);
+  assert.equal(sixth.maxDevices, 5);
   assert.equal((await api('/me', { token: tokens[0] })).status, 401);
   assert.equal((await api('/me', { token: tokens[1] })).status, 200);
 
@@ -520,4 +671,268 @@ test('定期実行: 期限切れの行を消し、使っている量を数え直
   assert.equal(env.DB.q("SELECT COUNT(*) AS n FROM rate_limits WHERE bucket = 'old'")[0].n, 0);
   assert.equal(env.DB.q("SELECT COUNT(*) AS n FROM otp_requests WHERE id = 'o1'")[0].n, 0);
   assert.equal(env.DB.q('SELECT bytes_used FROM users WHERE id = ?', userId)[0].bytes_used, 0);
+});
+
+test('定期実行: 長く使われていないアカウントは、お知らせから30日後に消す。使われたら取り消す', async () => {
+  const old = '2020-01-01T00:00:00.000Z';
+  const a = await login('idle-a@example.com'); // お知らせ → 消す
+  const b = await login('idle-b@example.com'); // お知らせ → ログインし直したので残す
+  const c = await login('idle-c@example.com'); // Max なので片づけない
+  const c2 = await login('idle-c2@example.com'); // 広告なしの買い切りなので片づけない
+  const d = await login('idle-d@example.com'); // 最近使っている
+  await call('/dav/daigaku-note/files/' + '2'.repeat(64) + '.pdf', { method: 'PUT', body: 'pdf', headers: { authorization: basic(a.token) } });
+  for (const u of [a, b, c, c2]) env.DB.x('UPDATE users SET last_seen_at = ? WHERE id = ?', old, u.userId);
+  env.DB.x("INSERT INTO perks (user_id, perk, granted_at) VALUES (?, 'max', ?)", c.userId, old);
+  env.DB.x("INSERT INTO perks (user_id, perk, granted_at) VALUES (?, 'adfree', ?)", c2.userId, old);
+  const ids = [a, b, c, c2, d].map((u) => u.userId);
+  const notices = () => env.DB.q(`SELECT user_id FROM inactive_notices WHERE user_id IN (${ids.map(() => '?').join(',')}) ORDER BY user_id`, ...ids).map((r) => r.user_id);
+  const users = () => env.DB.q(`SELECT id FROM users WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).length;
+
+  const before = mail.mails.length;
+  await cleanup(env);
+  const sent = mail.mails.slice(before).filter((m) => /idle-/.test(m.to[0]));
+  assert.deepEqual(sent.map((m) => m.to[0]).sort(), ['idle-a@example.com', 'idle-b@example.com']);
+  assert.match(sent[0].subject, /削除のお知らせ/);
+  assert.deepEqual(notices(), [a.userId, b.userId].sort());
+
+  // 2回目では、まだ30日たっていないので消さない。お知らせも二重には送らない
+  const before2 = mail.mails.length;
+  await cleanup(env);
+  assert.equal(mail.mails.slice(before2).filter((m) => /idle-/.test(m.to[0])).length, 0);
+  assert.equal(users(), 5);
+
+  // 31日たった。b はその間にログインした
+  env.DB.x('UPDATE inactive_notices SET sent_at = ? WHERE user_id IN (?, ?)', '2020-06-01T00:00:00.000Z', a.userId, b.userId);
+  await login('idle-b@example.com');
+  await cleanup(env);
+  assert.equal(env.DB.q('SELECT COUNT(*) AS n FROM users WHERE id = ?', a.userId)[0].n, 0);
+  assert.ok(![...env.FILES.objects.keys()].some((k) => k.startsWith(`u/${a.userId}/`)));
+  assert.equal(users(), 4);
+  assert.deepEqual(notices(), []);
+});
+
+test('定期実行: メールに書いた日までは消さない。お知らせのメールはサービス全体の枠を使う', async () => {
+  const u = await login('idle-time@example.com');
+  env.DB.x('UPDATE users SET last_seen_at = ? WHERE id = ?', '2020-01-01T00:00:00.000Z', u.userId);
+  const before = mail.mails.length;
+  const dayBucket = () => env.DB.q('SELECT count FROM rate_limits WHERE bucket = ?', `mail:day:${new Date().toISOString().slice(0, 10)}`)[0]?.count ?? 0;
+  const used = dayBucket();
+  await cleanup(env);
+  const m = mail.mails.slice(before).find((x) => x.to[0] === 'idle-time@example.com');
+  assert.ok(dayBucket() > used, 'お知らせのメールも数える');
+  const promised = /(\d{4}-\d{2}-\d{2}) 以降に/.exec(m.text)[1];
+  const sentAt = env.DB.q('SELECT sent_at FROM inactive_notices WHERE user_id = ?', u.userId)[0].sent_at;
+  const shift = (days) => env.DB.x('UPDATE inactive_notices SET sent_at = ? WHERE user_id = ?', new Date(Date.now() - days * 86_400_000).toISOString(), u.userId);
+  const alive = () => env.DB.q('SELECT COUNT(*) AS n FROM users WHERE id = ?', u.userId)[0].n === 1;
+  // 30日と半日: メールに書いた日(日本時間)の当日なので、まだ消さない
+  env.DB.x('UPDATE users SET last_seen_at = ? WHERE id = ?', '2020-01-01T00:00:00.000Z', u.userId);
+  shift(30.5);
+  await cleanup(env);
+  assert.ok(alive());
+  // 31日と少し: 消す。消した時刻(日本時間の日付)は、メールに書いた日より後
+  shift(31.1);
+  await cleanup(env);
+  assert.ok(!alive());
+  const todayJst = new Date(Date.now() + 9 * 3_600_000).toISOString().slice(0, 10);
+  const promisedFor = new Date(Date.parse(sentAt) + 30 * 86_400_000 + 9 * 3_600_000).toISOString().slice(0, 10);
+  assert.equal(promised, promisedFor);
+  assert.ok(new Date(Date.now() - 31.1 * 86_400_000 + 30 * 86_400_000 + 9 * 3_600_000).toISOString().slice(0, 10) < todayJst);
+});
+
+test('定期実行: お知らせのメールは、1日の枠の半分を超えては送らない(ログインの番号のために残す)', async () => {
+  const e4 = fakeEnv({ OTP_DAILY_LIMIT: '4' });
+  const D = e4.DB;
+  for (let i = 0; i < 5; i++) D.x("INSERT INTO users (id, email, created_at, last_seen_at) VALUES (?, ?, '2020-01-01T00:00:00.000Z', '2020-01-01T00:00:00.000Z')", `uh${i}`, `half${i}@example.com`);
+  const before = mail.mails.length;
+  await cleanup(e4);
+  assert.equal(mail.mails.slice(before).filter((x) => /^half/.test(x.to[0])).length, 2);
+  assert.equal(D.q('SELECT COUNT(*) AS n FROM inactive_notices')[0].n, 2);
+});
+
+test('表がまだない(schema.sql を流す前に配信した)ときも、ログイン・同期・定期実行は動く', async () => {
+  const e5 = fakeEnv({ OTP_BURST_SECONDS: '0' });
+  for (const t of ['perks', 'inactive_notices', 'coupons']) e5.DB.x(`DROP TABLE ${t}`);
+  const s5 = await startWorker(worker, e5);
+  try {
+    const post = (p, body) => fetch(s5.url + p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    assert.equal((await post('/otp/send', { email: 'old@example.com' })).status, 200);
+    const acc = await (await post('/otp/verify', { email: 'old@example.com', code: mail.lastCode('old@example.com') })).json();
+    assert.ok(acc.token);
+    const me = await (await fetch(s5.url + '/me', { headers: { authorization: `Bearer ${acc.token}` } })).json();
+    assert.equal(me.plan.id, 'free');
+    const put = await fetch(s5.url + '/dav/daigaku-note/ops/dev1/000000001-000000001.json', { method: 'PUT', headers: { authorization: `Bearer ${acc.token}` }, body: '{}' });
+    assert.ok(put.status < 300, String(put.status));
+    await cleanup(e5);
+  } finally {
+    await s5.close();
+  }
+});
+
+test('定期実行: お知らせのメールが送れなかった人は、記録も削除もしない', async () => {
+  const u = await login('idle-fail@example.com');
+  env.DB.x('UPDATE users SET last_seen_at = ? WHERE id = ?', '2020-01-01T00:00:00.000Z', u.userId);
+  mail.fail = true;
+  try { await cleanup(env); } finally { mail.fail = false; }
+  assert.equal(env.DB.q('SELECT COUNT(*) AS n FROM inactive_notices WHERE user_id = ?', u.userId)[0].n, 0);
+  assert.equal(env.DB.q('SELECT COUNT(*) AS n FROM users WHERE id = ?', u.userId)[0].n, 1);
+});
+
+// ---- クーポンコード -------------------------------------------------------
+
+
+// scripts/coupon.mjs と同じ形で D1 に入れる(サーバーには発行の受け口がない)
+async function issueCoupon({ perk = 'adfree', days = null, expiresAt = null } = {}) {
+  const code = newCouponCode();
+  env.DB.x('INSERT INTO coupons (code_hash, perk, days, expires_at, note, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    await couponHash(normalizeCoupon(code)), perk, days, expiresAt, 'test', new Date().toISOString());
+  return code;
+}
+
+test('クーポン: コードの形とそろえ方', () => {
+  const c = newCouponCode();
+  assert.match(c, /^[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}$/);
+  assert.equal(normalizeCoupon(c.toLowerCase().replace(/-/g, ' ')), c.replace(/-/g, ''));
+  // 全角・長音記号のハイフンも受ける
+  const wide = c.replace(/[A-Z0-9]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) + 0xfee0)).replace(/-/g, 'ー');
+  assert.equal(normalizeCoupon(wide), c.replace(/-/g, ''));
+  assert.equal(normalizeCoupon('ABCD-EFGH-IJKL'), null); // I は使わない文字
+  assert.equal(normalizeCoupon('ABCD-EFGH-JKL'), null); // 短い
+  assert.equal(normalizeCoupon(''), null);
+});
+
+test('クーポン: 1回だけ使える。特典が /me に載る。ほかの人は使えない', async () => {
+  const a = await login('coupon-a@example.com');
+  const b = await login('coupon-b@example.com');
+  assert.deepEqual((await api('/me', { token: a.token })).data.perks, []);
+  const code = await issueCoupon();
+
+  const r = await api('/coupon', { method: 'POST', token: a.token, body: { code: code.toLowerCase() } });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.perk, 'adfree');
+  assert.equal(r.data.expiresAt, null);
+  assert.deepEqual((await api('/me', { token: a.token })).data.perks, [{ perk: 'adfree', name: '広告なし', expiresAt: null }]);
+
+  const again = await api('/coupon', { method: 'POST', token: a.token, body: { code } });
+  assert.equal(again.status, 409);
+  const other = await api('/coupon', { method: 'POST', token: b.token, body: { code } });
+  assert.equal(other.status, 400);
+  assert.deepEqual((await api('/me', { token: b.token })).data.perks, []);
+  const row = env.DB.q('SELECT redeemed_by FROM coupons WHERE code_hash = ?', await couponHash(normalizeCoupon(code)))[0];
+  assert.equal(row.redeemed_by, a.userId);
+
+  // 鍵がなければ使えない
+  assert.equal((await api('/coupon', { method: 'POST', body: { code } })).status, 401);
+});
+
+test('クーポン: 同時に2人が送っても、使えるのは1人だけ', async () => {
+  const users = await Promise.all([1, 2, 3, 4].map((i) => login(`race${i}@example.com`)));
+  const code = await issueCoupon();
+  const rs = await Promise.all(users.map((u) => api('/coupon', { method: 'POST', token: u.token, body: { code } })));
+  assert.equal(rs.filter((r) => r.status === 200).length, 1);
+  assert.equal(env.DB.q("SELECT COUNT(*) AS n FROM perks WHERE perk = 'adfree' AND user_id IN (?, ?, ?, ?)", ...users.map((u) => u.userId))[0].n, 1);
+});
+
+test('クーポン: 期限切れ・存在しない・形が違う・止めたコード。ずっと持っている特典では使い切らない', async () => {
+  const u = await login('coupon-c@example.com');
+  const expired = await issueCoupon({ expiresAt: '2000-01-01T00:00:00.000Z' });
+  assert.equal((await api('/coupon', { method: 'POST', token: u.token, body: { code: expired } })).status, 400);
+  assert.equal((await api('/coupon', { method: 'POST', token: u.token, body: { code: newCouponCode() } })).status, 400);
+  assert.equal((await api('/coupon', { method: 'POST', token: u.token, body: { code: 'hello' } })).status, 400);
+  assert.equal((await api('/coupon', { method: 'POST', token: u.token, body: { code: '' } })).status, 400);
+
+  const first = await issueCoupon();
+  assert.equal((await api('/coupon', { method: 'POST', token: u.token, body: { code: first } })).status, 200);
+  const second = await issueCoupon();
+  const dup = await api('/coupon', { method: 'POST', token: u.token, body: { code: second } });
+  assert.equal(dup.status, 409);
+  assert.equal(env.DB.q('SELECT redeemed_by FROM coupons WHERE code_hash = ?', await couponHash(normalizeCoupon(second)))[0].redeemed_by, null);
+});
+
+test('クーポン: 日数つきの特典。期限つきどうしは遅いほう、切れたら /me から消える', async () => {
+  const u = await login('coupon-d@example.com');
+  const c30 = await issueCoupon({ perk: 'adfree', days: 30 });
+  const r = await api('/coupon', { method: 'POST', token: u.token, body: { code: c30 } });
+  assert.equal(r.status, 200);
+  const exp = Date.parse(r.data.expiresAt);
+  assert.ok(Math.abs(exp - (Date.now() + 30 * 86_400_000)) < 60_000, r.data.expiresAt);
+  const c10 = await issueCoupon({ perk: 'adfree', days: 10 });
+  const r2 = await api('/coupon', { method: 'POST', token: u.token, body: { code: c10 } });
+  assert.equal(r2.status, 200);
+  assert.equal(r2.data.expiresAt, r.data.expiresAt); // 短いほうでは縮まない
+  env.DB.x("UPDATE perks SET expires_at = '2000-01-01T00:00:00.000Z' WHERE user_id = ?", u.userId);
+  assert.deepEqual((await api('/me', { token: u.token })).data.perks, []);
+  // 切れたあとに使えば、そこから数え直す
+  const c5 = await issueCoupon({ perk: 'adfree', days: 5 });
+  const r3 = await api('/coupon', { method: 'POST', token: u.token, body: { code: c5 } });
+  assert.ok(Math.abs(Date.parse(r3.data.expiresAt) - (Date.now() + 5 * 86_400_000)) < 60_000);
+});
+
+test('クーポン: 試す回数は1時間に10回まで', async () => {
+  const u = await login('coupon-e@example.com');
+  for (let i = 0; i < 10; i++) assert.equal((await api('/coupon', { method: 'POST', token: u.token, body: { code: newCouponCode() } })).status, 400);
+  const good = await issueCoupon();
+  assert.equal((await api('/coupon', { method: 'POST', token: u.token, body: { code: good } })).status, 429);
+});
+
+test('クーポン: 退会すると特典は消え、使ったコードは使用済みのまま残る', async () => {
+  const u = await login('coupon-f@example.com');
+  const code = await issueCoupon();
+  assert.equal((await api('/coupon', { method: 'POST', token: u.token, body: { code } })).status, 200);
+  assert.equal((await api('/account', { method: 'DELETE', token: u.token })).status, 200);
+  assert.equal(env.DB.q('SELECT COUNT(*) AS n FROM perks WHERE user_id = ?', u.userId)[0].n, 0);
+  assert.equal(env.DB.q('SELECT redeemed_by FROM coupons WHERE code_hash = ?', await couponHash(normalizeCoupon(code)))[0].redeemed_by, 'deleted');
+  const again = await login('coupon-f@example.com');
+  assert.equal((await api('/coupon', { method: 'POST', token: again.token, body: { code } })).status, 400);
+});
+
+test('プラン: Pro・Max の特典で容量と端末の数が増え、広告なしになる', async () => {
+  const u = await login('plan@example.com');
+  let me = (await api('/me', { token: u.token })).data;
+  assert.deepEqual(me.plan, { id: 'free', name: '無料', devices: 5 });
+  assert.equal(me.adFree, false);
+
+  const pro = await issueCoupon({ perk: 'pro', days: 30 });
+  assert.equal((await api('/coupon', { method: 'POST', token: u.token, body: { code: pro } })).status, 200);
+  me = (await api('/me', { token: u.token })).data;
+  assert.equal(me.plan.id, 'pro');
+  assert.equal(me.usage.quota, 30 * 1024 ** 3);
+  assert.equal(me.adFree, true);
+
+  // Pro は10台までログインできる
+  const tokens = [u.token];
+  for (let i = 0; i < 9; i++) tokens.push((await login('plan@example.com')).token);
+  for (const t of tokens) assert.equal((await api('/me', { token: t })).status, 200);
+  await login('plan@example.com'); // 11台目: いちばん古い端末が外れる
+  assert.equal((await api('/me', { token: tokens[0] })).status, 401);
+
+  const max = await issueCoupon({ perk: 'max' });
+  const t = tokens[1];
+  assert.equal((await api('/coupon', { method: 'POST', token: t, body: { code: max } })).status, 200);
+  me = (await api('/me', { token: t })).data;
+  assert.equal(me.plan.id, 'max');
+  assert.equal(me.usage.quota, 200 * 1024 ** 3);
+
+  // 期限が切れたら無料に戻る
+  env.DB.x('UPDATE perks SET expires_at = ? WHERE user_id = ?', '2000-01-01T00:00:00.000Z', u.userId);
+  me = (await api('/me', { token: t })).data;
+  assert.equal(me.plan.id, 'free');
+  assert.equal(me.adFree, false);
+});
+
+test('プラン: 書き込みの容量の上限はプランで決まる', async () => {
+  const qEnv = fakeEnv({ QUOTA_BYTES: '10', OTP_BURST_SECONDS: '0' });
+  const s2 = await startWorker(worker, qEnv);
+  try {
+    const post = (p, body, token) => fetch(s2.url + p, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) }).then((r) => r.json());
+    await post('/otp/send', { email: 'q@example.com' });
+    const acc = await post('/otp/verify', { email: 'q@example.com', code: mail.lastCode('q@example.com') });
+    const putOp = () => fetch(s2.url + '/dav/daigaku-note/ops/dev1/000000001-000000001.json', { method: 'PUT', headers: { authorization: `Bearer ${acc.token}` }, body: '{"x":"0123456789"}' });
+    assert.equal((await putOp()).status, 507);
+    const code = newCouponCode();
+    qEnv.DB.x('INSERT INTO coupons (code_hash, perk, note, created_at) VALUES (?, ?, ?, ?)', await couponHash(normalizeCoupon(code)), 'pro', 't', new Date().toISOString());
+    assert.equal((await post('/coupon', { code }, acc.token)).ok, true);
+    assert.equal((await putOp()).status, 201);
+  } finally {
+    await s2.close();
+  }
 });

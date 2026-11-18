@@ -11,7 +11,8 @@ export const API_BASE = 'https://note-api.quiz-make.com';
 export function apiBase() {
   try {
     const v = globalThis.localStorage?.getItem('daigaku-note.api');
-    if (v && /^https?:\/\/[^/]+$/.test(v)) return v;
+    // 開発・試験用に変えられるのは、手元のサーバーだけ(ほかの住所にすると、ログインの番号や鍵がそこへ送られるため)
+    if (v && /^http:\/\/(localhost|127\.0\.0\.1)(:\d{1,5})?$/.test(v)) return v;
   } catch { /* 使えない環境(プライベートブラウズなど)ではふだんの住所 */ }
   return API_BASE;
 }
@@ -49,7 +50,7 @@ const label = () => (isNative ? (platform === 'ios' ? 'iPhone・iPad のアプ�
 
 // purpose: 'login'(ログイン)・'signup'(アカウント作成)
 export const sendCode = (email, purpose) => call('/otp/send', { method: 'POST', body: { email, purpose } });
-// → { token, email, userId, deviceId, deviceLabel, dav, removedDevices, existing }
+// → { token, email, userId, deviceId, deviceLabel, dav, removedDevices, maxDevices, existing }
 // ログインでアカウントがなければ、reason: 'no_account' のエラー(番号は使用済みにならない)
 export const verify = (email, code, purpose) => call('/otp/verify', { method: 'POST', body: { email, code, purpose, label: label() } });
 export const me = (token) => call('/me', { token });
@@ -57,3 +58,49 @@ export const devices = (token) => call('/devices', { token }).then((d) => d.devi
 export const revoke = (token, id) => call(`/devices?id=${encodeURIComponent(id)}`, { method: 'DELETE', token });
 export const logout = (token) => call('/logout', { method: 'POST', token });
 export const deleteAccount = (token) => call('/account', { method: 'DELETE', token });
+// クーポンコードを使う → { perk, name, expiresAt, perks }
+export const redeemCoupon = (token, code) => call('/coupon', { method: 'POST', body: { code }, token });
+
+// 特典(クーポンなどで付いたもの)を端末に覚えておく。オフラインでも「広告なし」などを判断できるように。
+// サーバーの /me・/coupon の perks を受け取るたびに書き直す。ログアウトしたら消す。
+const PERKS_KEY = 'daigaku-note.perks';
+export function savePerks(userId, perks, adFree) {
+  try {
+    if (!userId) globalThis.localStorage?.removeItem(PERKS_KEY);
+    else globalThis.localStorage?.setItem(PERKS_KEY, JSON.stringify({ userId, perks: Array.isArray(perks) ? perks : [], adFree: !!adFree }));
+  } catch { /* 保存できない環境では、毎回サーバーに聞く */ }
+}
+/** 端末に覚えた特典の一覧。そのアカウントのものがなければ null */
+export function cachedPerks(userId) {
+  try {
+    const v = JSON.parse(globalThis.localStorage?.getItem(PERKS_KEY) || 'null');
+    return v && userId && v.userId === userId && Array.isArray(v.perks) ? v.perks : null;
+  } catch {
+    return null;
+  }
+}
+/**
+ * 広告を出さないか(Pro・Max・広告なしの特典)。端末に覚えたものだけで決める。
+ * 広告を出すときに使う予定(広告はまだ入っていない)。userId は今ログインしているアカウント。ログインしていなければ false
+ */
+export function adFree(userId) {
+  try {
+    const v = JSON.parse(globalThis.localStorage?.getItem(PERKS_KEY) || 'null');
+    return !!(v && userId && v.userId === userId && (v.adFree || hasPerk('adfree', userId)));
+  } catch {
+    return false;
+  }
+}
+/**
+ * その特典をいま持っているか(端末に覚えたものだけで決める。通信はしない)。
+ * 広告を出すときに使う予定(広告はまだ入っていない)。userId は今ログインしているアカウント
+ */
+export function hasPerk(perk, userId) {
+  try {
+    const v = JSON.parse(globalThis.localStorage?.getItem(PERKS_KEY) || 'null');
+    if (!v || !userId || v.userId !== userId) return false;
+    return v.perks.some((p) => p.perk === perk && (!p.expiresAt || Date.parse(p.expiresAt) > Date.now()));
+  } catch {
+    return false;
+  }
+}
