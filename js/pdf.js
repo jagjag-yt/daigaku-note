@@ -72,7 +72,7 @@ export async function importPdf(file) {
     await db.putFile({ hash, name: file.name, type: 'application/pdf', data: new Blob([buf], { type: 'application/pdf' }) });
   }
   const lib = await pdfjs();
-  const doc = await lib.getDocument({ data: new Uint8Array(buf.slice(0)) }).promise;
+  const doc = await lib.getDocument({ data: new Uint8Array(buf.slice(0)), isEvalSupported: false }).promise;
   const sizes = [];
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i);
@@ -91,7 +91,7 @@ async function loadDoc(hash) {
       if (!f) throw new Error('PDFが見つかりません。同期ファイルに含まれていなかった可能性があります');
       const buf = await f.data.arrayBuffer();
       const lib = await pdfjs();
-      return lib.getDocument({ data: new Uint8Array(buf) }).promise;
+      return lib.getDocument({ data: new Uint8Array(buf), isEvalSupported: false }).promise;
     })());
   }
   return docCache.get(hash);

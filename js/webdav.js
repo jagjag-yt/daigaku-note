@@ -20,6 +20,7 @@
 import * as db from './db.js';
 import { fileRefs, fileExt } from './model.js';
 import { http, isNative } from './native.js';
+import { cleanOps } from './validate.js';
 
 const FORMAT = 'daigaku-note-ops';
 let cfg = {};
@@ -430,7 +431,7 @@ export async function syncNow(manual = false) {
           newer = stopped = true; // 新しい版のアプリが書いた形。読んだことにはせず、アプリの更新を待つ
           break;
         }
-        const ops = (json.ops || []).filter((o) => o && typeof o.id === 'string' && typeof o.l === 'number' && o.n && o.t);
+        const ops = cleanOps(json.ops); // ほかの端末から届いたものも信用しない(js/validate.js)
         for (const op of ops) {
           for (const ref of fileRefs(op)) {
             if ((await fetchFile(ref)) !== true) { addMissing(ref, op.n); missedNow.add(ref.hash); }
@@ -499,7 +500,7 @@ export async function syncNow(manual = false) {
     }
     if (gapSince) note += '。保存の終わっていない変更があるので、送るのを少し待っています';
     if (sendErr && sendErr.status === 507 && accountMode()) {
-      note += '。容量の上限(1GB)に達したため、この端末の変更を送れませんでした。変更はこの端末に保存されています';
+      note += '。保存できる量の上限に達したため、この端末の変更を送れませんでした。アカウントの画面で使っている量を確かめてください。変更はこの端末に保存されています';
     } else if (sendErr) note += `。この端末の変更を送れませんでした(${sendErr.timeout ? '時間切れ' : sendErr instanceof TypeError ? 'サーバーに断られたか、接続が切れました' : sendErr.message})。次の同期でもう一度送ります`;
     if (st.tooBig && st.tooBig.length) {
       note += `。PDF・画像のうち ${st.tooBig.length} 個はサーバーに送れませんでした(大きさの上限を超えた可能性があります)`;
@@ -523,7 +524,7 @@ export async function syncNow(manual = false) {
         if (saved.pass === cfg.pass) { cfg = { ...cfg, expired: true }; await db.setMeta('dav', cfg); }
       } catch { /* 保存できなくても、開いているあいだは止まる */ }
     }
-    else if (e.status === 507 && accountMode()) msg = '容量の上限(1GB)に達しました';
+    else if (e.status === 507 && accountMode()) msg = '保存できる量の上限に達しました。アカウントの画面で使っている量を確かめてください';
     else if (e.status === 401) msg = 'ユーザー名またはパスワードが違います';
     else if (e.status === 404 || e.status === 409) msg = 'フォルダのURLが見つかりません';
     onStatus('クラウド同期に失敗しました: ' + msg);

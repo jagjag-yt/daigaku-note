@@ -42,10 +42,11 @@ async function draw(page, pts, { hold = 0, steps = 4, jitter = 0 } = {}) {
   } else if (hold) await page.waitForTimeout(hold);
   await page.mouse.up();
 }
-const idb = (page, fn) => page.evaluate((src) => new Promise((res) => {
+// 中身は文字列のまま Playwright に渡す(ページの中で new Function を使うと、アプリの CSP で止められるため)
+const idb = (page, fn) => page.evaluate(`new Promise((res) => {
   const r = indexedDB.open('daigaku-note');
-  r.onsuccess = () => { const q = r.result.transaction('ops').objectStore('ops').getAll(); q.onsuccess = () => res(new Function('ops', src)(q.result)); };
-}), fn);
+  r.onsuccess = () => { const q = r.result.transaction('ops').objectStore('ops').getAll(); q.onsuccess = () => res(((ops) => { ${fn} })(q.result)); };
+})`);
 // 線を書いた順に(op の id は文字列なので並び順が書いた順にならない。ランポート時計で並べる)
 const STROKES = "const s = ops.filter(o => o.t === 'stroke.add').sort((a, b) => a.l - b.l).map(o => o.p.s);";
 // アカウントを作る(how: 'signup')・ログインする(how: 'login')。番号はサーバーの応答(devCode)から読む

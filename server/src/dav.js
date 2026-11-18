@@ -23,6 +23,7 @@
 //   PDF・画像 … 名前(中身の SHA-256)と大きさ
 // どれにも利用者 ID の一部を入れ、退会して作り直したときに、前の利用者の ETag と同じにならないようにする。
 
+import { userPlan } from './plan.js';
 import { allowRate, fail, newId, nowIso, xmlEscape } from './lib.js';
 
 /** 1人が使える量(変更のファイル + PDF・画像)。超える書き込みは 507(容量不足)で断る。 */
@@ -57,7 +58,8 @@ const FILE_NAME = /^([a-z0-9]{1,128})\.(pdf|png|jpg|gif|webp|bin)$/;
 const FILE_TYPES = { pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bin: 'application/octet-stream' };
 const pad = (n) => String(n).padStart(9, '0');
 
-const quota = (env) => Number(env.QUOTA_BYTES) || QUOTA_BYTES;
+// 利用者の容量。プランで決まり(src/plan.js。PUT の前に user.quota に入れる)、なければ無料の容量
+const quota = (env, user) => user?.quota || Number(env.QUOTA_BYTES) || QUOTA_BYTES;
 const maxFile = (env) => Number(env.MAX_FILE_BYTES) || MAX_FILE_BYTES;
 const maxOp = (env) => Number(env.MAX_OP_BYTES) || MAX_OP_BYTES;
 
@@ -130,7 +132,9 @@ export async function handleDav(request, env, user, path) {
       if (!(await allowRate(env.DB, `dav:w:${user.user_id}`, WRITES_PER_HOUR, 60 * 60))) {
         return fail(429, '書き込みの回数が上限に達しました。しばらく待ってからお試しください。');
       }
-      return request.method === 'PUT' ? put(request, env, user, path) : mkcol(env, user, path);
+      if (request.method === 'MKCOL') return mkcol(env, user, path);
+      user = { ...user, quota: (await userPlan(env, user.user_id)).quota };
+      return put(request, env, user, path);
     }
     default:
       return notAllowed(allowFor(path));
@@ -276,7 +280,10 @@ async function put(request, env, user, path) {
 }
 
 const tooBig = (what) => fail(413, `${what}が大きすぎます。`);
-const quotaFull = (env) => fail(507, `保存できる量(${Math.round(quota(env) / 1024 / 1024)}MB)を超えます。`);
+const quotaFull = (env, user) => {
+  const mb = Math.round(quota(env, user) / 1024 / 1024);
+  return fail(507, `保存できる量(${mb >= 1024 ? `${Math.round(mb / 1024)}GB` : `${mb}MB`})を超えます。`);
+};
 
 /** 本文の長さ(Content-Length)。ないか、おかしければ null(長さの分からない本文は R2 に流し込めない) */
 function contentLength(request) {
@@ -309,9 +316,9 @@ async function putOpFile(request, env, user, path) {
         `WHERE id = ?1 AND bytes_used + ?5 - ${old} <= ?6 ` +
         // 新しい端末のフォルダを作ることになるなら、フォルダの数の上限も見る
         'AND (EXISTS (SELECT 1 FROM op_logs WHERE user_id = ?1 AND device = ?2) OR (SELECT COUNT(*) FROM op_logs WHERE user_id = ?1) < ?7)',
-    ).bind(uid, path.device, path.from, path.to, len, quota(env), MAX_OP_DIRS),
+    ).bind(uid, path.device, path.from, path.to, len, quota(env, user), MAX_OP_DIRS),
   ]);
-  if (!reserved.meta.changes) return quotaFull(env);
+  if (!reserved.meta.changes) return quotaFull(env, user);
   const before = prev.results[0]?.bytes ?? null;
   const refund = () => db.prepare('UPDATE users SET bytes_used = bytes_used - ?2 + ?3 WHERE id = ?1').bind(uid, len, before ?? 0).run()
     .catch((e) => console.log('refund failed', String(e)));
@@ -363,13 +370,13 @@ async function putBlob(request, env, user, path) {
   const [prev, reserved] = await db.batch([
     db.prepare('SELECT bytes FROM blobs WHERE user_id = ? AND name = ?').bind(uid, path.name),
     db.prepare(`UPDATE users SET bytes_used = bytes_used + ?3 - ${old}, ver = ver + 1, write_id = ?4 WHERE id = ?1 AND bytes_used + ?3 - ${old} <= ?5`)
-      .bind(uid, path.name, len, nonce, quota(env)),
+      .bind(uid, path.name, len, nonce, quota(env, user)),
     db.prepare(
       'INSERT INTO blobs (user_id, name, bytes, created_at) SELECT ?1, ?2, ?3, ?4 WHERE (SELECT write_id FROM users WHERE id = ?1) = ?5 ' +
         'ON CONFLICT (user_id, name) DO UPDATE SET bytes = excluded.bytes, created_at = excluded.created_at',
     ).bind(uid, path.name, len, nowIso(), nonce),
   ]);
-  if (!reserved.meta.changes) return quotaFull(env);
+  if (!reserved.meta.changes) return quotaFull(env, user);
   const before = prev.results[0]?.bytes ?? null;
   let stored;
   try {

@@ -2,6 +2,7 @@ import * as db from './db.js';
 import {
   Recorder, emptyNote, applyOp, customTemplates, foldersOf, folderOfNote, folderTree, pagesOf, strokesOf, buildLibrary, newId, strokeHit, styleOf, bgOf, PAGE_A4, addType,
 } from './model.js';
+import { isColor } from './validate.js';
 import { drawStroke, recognizeShape, strokeInLasso, geometry, strokeSvg, pointInPolygon } from './ink.js';
 import { isItem, itemSvg, drawItem, itemInLasso, onImageReady, releaseImages, imageElement, itemRect, cornerPts, textHeight, fontFamily, fontOf, LINE_HEIGHT } from './items.js';
 import { TEMPLATES, SIZES, PAPERS, templatePrims, sizeById, paperColor } from './templates.js';
@@ -50,7 +51,7 @@ const PEN_NIBS = {
 };
 const PEN_DEFAULTS = { nib: 'fountain', sens: 50, stab: 0, dash: '', shape: '' }; // shape: ドラッグで描く図形(空ならふつうに書く)
 
-const APP_VERSION = 'v51'; // sw.js の VERSION と合わせる
+const APP_VERSION = 'v53'; // sw.js の VERSION と合わせる
 const MAX_TABS = 12; // 開いておけるタブの数
 const DEFAULT_HIDDEN = ['laser']; // 最初は隠しておく道具(設定やその他のメニューから使う)
 
@@ -221,6 +222,7 @@ async function init() {
   bindDialogs();
   fillSelects();
   bindLibrary();
+  bindHomeTip();
   bindLibBar();
   $('#settings-btn').onclick = openSettings;
   applyToolbarLayout();
@@ -240,13 +242,15 @@ function savePrefs() {
 }
 
 function route() {
+  updateHomeTip();
   flushPen();
   dav.flush(); // アカウントで同期しているとき、ノートを閉じたら待っている変更をすぐ送る
   closePopover();
   if (!$('#toast-act').hidden) $('#toast').hidden = true; // 「元に戻す」付きのトーストだけ、画面が変わったら消す
   for (const d of document.querySelectorAll('dialog[open]')) d.close();
-  // ログインしないと使えない: ログインしていなければ、本棚・ノートの代わりにログイン・アカウント作成のページを出す
-  if (!accountUI.loggedIn()) {
+  // ログインしていない(この端末だけで使うとも決めていない)なら、本棚・ノートの代わりにログイン・アカウント作成のページを出す。
+  // この端末だけで使っているときも、ログイン・アカウント作成の住所を開いたら、そのページを出す
+  if (!accountUI.canUse() || (!accountUI.loggedIn() && /^#\/(login|signup)\b/.test(location.hash))) {
     closeEditor();
     $('#library').hidden = true;
     $('#editor').hidden = true;
@@ -388,6 +392,8 @@ function bindNative() {
     if (!$('#auth').hidden) {
       // アカウント作成のページからはログインのページへ。番号の画面からはメールアドレスの画面へ
       if (!$('#acct-code-form').hidden) { $('#acct-back').click(); return true; }
+      // この端末だけで使っている人が、本棚からログイン・アカウント作成のページに来ていたなら本棚へ戻す
+      if (accountUI.localOnly()) { location.replace('#/'); return true; }
       if (/^#\/signup\b/.test(location.hash)) { location.replace('#/login'); return true; }
       return false;
     }
@@ -469,7 +475,7 @@ function tplPicker(el, value, size = PAGE_A4) {
     b.className = 'tpl-opt custom';
     b.dataset.tpl = 'c:' + t.id;
     b.setAttribute('role', 'radio');
-    b.innerHTML = `<img alt="" style="--ar:${t.w} / ${t.h}" aria-hidden="true"><span></span>`;
+    b.innerHTML = `<img alt="" style="--ar:${Number(t.w) || 1} / ${Number(t.h) || 1}" aria-hidden="true"><span></span>`;
     b.querySelector('span').textContent = t.name;
     b.title = `${t.name}(長押し・右クリック・Delete キーで削除)`;
     tplThumb(t).then((url) => { if (url) b.querySelector('img').src = url; });
@@ -694,6 +700,38 @@ function openSync() {
 }
 
 // ---------- ノート一覧 ----------
+// iPhone・iPad の Safari では、7日ほど開かないとサイトの保存(IndexedDB)が消されることがある。
+// ログインしていない人(ノートがこの端末にしかない)にだけ、アカウントを作って同期するよう案内する。
+// 「ホーム画面に追加」は勧めない(ホーム画面から開くと保存の場所が Safari と別になり、ノートが空に見えるため)
+const HOME_TIP_KEY = 'daigaku-note.home-tip-closed';
+function isIosSafari() {
+  const ua = navigator.userAgent;
+  const ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  // iOS の Chrome・Firefox・Edge や、LINE などのアプリの中のブラウザは除く(文言が合わないため)
+  const other = /CriOS|FxiOS|EdgiOS|OPiOS|Line\/|FBAN|FBAV|Instagram|Twitter/.test(ua) || !/Safari\//.test(ua);
+  const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+  return !native.isNative && ios && !other && !standalone;
+}
+function updateHomeTip() {
+  const tip = $('#home-tip');
+  if (!tip) return;
+  let closed = false;
+  try { closed = localStorage.getItem(HOME_TIP_KEY) === '1'; } catch {}
+  tip.hidden = closed || accountUI.loggedIn() || !isIosSafari();
+  // 前にログインしたことがある人には「ログインする」(アカウントを作り直させない)
+  tip.querySelector('.home-tip-signup').textContent = accountUI.hadAccount() ? 'ログインする' : 'アカウントを作る';
+}
+function bindHomeTip() {
+  const tip = $('#home-tip');
+  if (!tip) return;
+  tip.querySelector('.home-tip-close').addEventListener('click', () => {
+    try { localStorage.setItem(HOME_TIP_KEY, '1'); } catch {}
+    tip.hidden = true;
+  });
+  tip.querySelector('.home-tip-signup').addEventListener('click', () => accountUI.goAuth(accountUI.hadAccount() ? 'login' : 'signup'));
+  updateHomeTip();
+}
+
 function bindLibrary() {
   const newNote = async () => {
     await loadCustomTpl();
@@ -842,7 +880,7 @@ async function runSearch() {
   // ゴミ箱のノートは開けないので、押すと「元に戻す / 完全に削除」を出す
   const trash = f === 'trash';
   box.innerHTML = hits.slice(0, 100).map((h) => `
-    ${trash ? `<button type="button" class="hit" data-id="${h.noteId}" aria-haspopup="menu">` : `<a class="hit" href="#/note/${h.noteId}${h.pageId ? '/p/' + h.pageId : ''}">`}
+    ${trash ? `<button type="button" class="hit" data-id="${esc(h.noteId)}" aria-haspopup="menu">` : `<a class="hit" href="#/note/${esc(h.noteId)}${h.pageId ? '/p/' + esc(h.pageId) : ''}">`}
       <span class="hit-title">${h.pageId ? esc(h.title) : h.snippet}${h.pageNo ? ` <span class="hit-page">${h.pageNo}ページ目</span>` : ''}</span>
       ${h.pageId ? `<span class="hit-snip">${h.snippet}</span>` : ''}
       <span class="hit-src">${h.source}</span>
@@ -851,7 +889,7 @@ async function runSearch() {
 }
 
 function coverColor(n) {
-  if (n.cover) return n.cover;
+  if (isColor(n.cover)) return n.cover; // 形の違う色は使わない(HTML の style に入るため)
   let h = 0;
   for (const ch of n.id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   return COVERS[h % 6]; // 表紙を選べるようになる前のノートは、前と同じ6色から決める
@@ -922,11 +960,11 @@ async function showLibrary() {
     const card = document.createElement('div');
     card.className = 'card' + (trash ? ' in-trash' : '');
     card.innerHTML = `
-      ${trash ? '<button type="button" class="cover" aria-haspopup="menu"' : `<a class="cover" href="#/note/${n.id}"`} style="--cover:${coverColor(n)}">
+      ${trash ? '<button type="button" class="cover" aria-haspopup="menu"' : `<a class="cover" href="#/note/${esc(n.id)}"`} style="--cover:${coverColor(n)}">
         <span class="label"><span class="label-title"></span></span>
       ${trash ? '</button>' : '</a>'}
       ${n.locked ? `<span class="lock-badge" title="ロック中" aria-label="ロック中">${icon('lock', 16)}</span>` : ''}
-      ${trash ? '' : `<button class="fav-btn${n.fav ? ' on' : ''}" type="button" data-id="${n.id}" aria-pressed="${!!n.fav}" title="お気に入り" aria-label="お気に入り">${icon('star', 18)}</button>`}
+      ${trash ? '' : `<button class="fav-btn${n.fav ? ' on' : ''}" type="button" data-id="${esc(n.id)}" aria-pressed="${!!n.fav}" title="お気に入り" aria-label="お気に入り">${icon('star', 18)}</button>`}
       <div class="meta">
         <button class="name-btn" aria-haspopup="menu" title="ノートの操作"><span class="name"></span>${icon('chevron', 16)}</button>
         <div class="date"></div>
@@ -945,7 +983,7 @@ async function showLibrary() {
       fb.disabled = true; // 描き直すまで連打を受けない
       try { await setFav(n, fb.getAttribute('aria-pressed') !== 'true'); } finally { fb.disabled = false; }
       // 描き直したあとも同じボタンにフォーカス(お気に入りの絞り込みで消えたら、帯のボタンへ)
-      ($(`#notes .fav-btn[data-id="${n.id}"]`) || $('.lib-filter .on'))?.focus();
+      ($(`#notes .fav-btn[data-id="${CSS.escape(n.id)}"]`) || $('.lib-filter .on'))?.focus();
     };
     grid.appendChild(card);
   }
@@ -1054,7 +1092,7 @@ function folderCard(fo, fs, liveNotes) {
   const card = document.createElement('div');
   card.className = 'card folder-card';
   card.innerHTML = `
-    <a class="cover folder-cover" href="#/f/${fo.id}">${icon('folder', 64)}</a>
+    <a class="cover folder-cover" href="#/f/${esc(fo.id)}">${icon('folder', 64)}</a>
     <div class="meta">
       <button class="name-btn" aria-haspopup="menu" title="フォルダの操作"><span class="name"></span>${icon('chevron', 16)}</button>
       <div class="date"></div>
@@ -2202,7 +2240,7 @@ async function openNote(id, pageId) {
     if (note.locked && !S.unlocked.has(id)) {
       if (!(await unlockNote(note))) { if (!S.note) location.hash = '#/'; return; }
     }
-    if (!accountUI.loggedIn()) return; // 読み込んでいるあいだにログインが切れた(ログインのページを出したまま)
+    if (!accountUI.canUse()) return; // 読み込んでいるあいだにログインが切れた(ログインのページを出したまま)
     S.note = note;
     S.undo = [];
     S.redo = [];

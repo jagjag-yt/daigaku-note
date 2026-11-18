@@ -10,6 +10,7 @@
 
 import * as db from './db.js';
 import { newId } from './model.js';
+import { cleanOps } from './validate.js';
 import { sha256 } from './pdf.js';
 import { cornerPts } from './items.js';
 
@@ -698,7 +699,7 @@ export async function importGoodnotes(file, recorder) {
     }
   }
   const made = ops.map((o) => recorder.make(o.n, o.t, o.p));
-  await db.putOps(made, recorder.clock);
+  await db.putOps(cleanOps(made), recorder.clock); // 自分で作った op だが、念のため同じ確かめを通す(js/validate.js)
   return { noteId, title, pages: pageList.length, strokes, images, texts, skippedImages, pageIds };
 }
 

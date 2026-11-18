@@ -194,7 +194,8 @@ function frameSvg(d, r) {
 }
 
 export function itemSvg(id, d, off = [0, 0]) {
-  const tf = off[0] || off[1] ? ` transform="translate(${off[0]} ${off[1]})"` : '';
+  const ox = Number(off?.[0]) || 0, oy = Number(off?.[1]) || 0;
+  const tf = ox || oy ? ` transform="translate(${ox} ${oy})"` : '';
   const r = itemRect(d);
   let body = '';
   if (d.tool === 'image') {
@@ -217,7 +218,7 @@ export function itemSvg(id, d, off = [0, 0]) {
       body += `<text font-family="${esc(FONT_STACK)}" font-size="${f.size}" fill="${f.color}" x="${num(f.x)}" y="${num(f.y)}">${esc(d.foot)}</text>`;
     }
   }
-  return `<g data-id="${id}" class="item"${tf}>${body}</g>`;
+  return `<g data-id="${esc(id)}" class="item"${tf}>${body}</g>`;
 }
 
 // ---------- キャンバス(サムネイル・PDF) ----------

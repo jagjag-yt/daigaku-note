@@ -18,6 +18,7 @@
 //   DELETE /devices?id=…      端末を1台外す(なくした端末など)
 //   POST   /logout            この端末を外す
 //   DELETE /account           退会(預かった変更・PDF・画像も全部消す)
+//   POST   /coupon            { code } → クーポンコードを使って特典を付ける(1つのコードは1回だけ。src/coupon.js)
 //   *      /dav/…             同期の置き場(MKCOL・PROPFIND・PUT・GET・HEAD)
 //
 // 鍵の渡し方(/me などと /dav/ のどちらも):
@@ -45,16 +46,19 @@ import {
   readJson,
   safeEqual,
 } from './lib.js';
-import { QUOTA_BYTES, handleDav, parseDavPath } from './dav.js';
+import { handleDav, parseDavPath } from './dav.js';
+import { activePerks, handleCouponRedeem } from './coupon.js';
+import { planFromPerks, userPlan } from './plan.js';
+import { sweepInactive } from './inactive.js';
 
 /**
  * 配信されている版。/health に載せて、外から「どれが動いているか」を確かめられるようにする。
  * 受け口を足したり応答を変えたりしたら、この文字列も更新すること。
  */
-export const API_VERSION = '2026-11-15-purpose';
+export const API_VERSION = '2026-11-18-plans';
 
-/** 1人が同時にログインできる端末の数。超えたら、いちばん長く使っていない端末を外す。 */
-const MAX_DEVICES = 5;
+// 1人が同時にログインできる端末の数はプランで決まる(src/plan.js。無料5台・Pro と Max は10台)。
+// 超えたら、いちばん長く使っていない端末を外す。
 
 /** この日数使われなかった端末の鍵は無効にして消す。長い休みでも切れない長さにする。 */
 const TOKEN_IDLE_DAYS = 180;
@@ -62,6 +66,30 @@ const TOKEN_IDLE_DAYS = 180;
 /** 6桁の数字の有効期限(分)と、間違えられる回数。 */
 const OTP_MINUTES = 10;
 const OTP_MAX_ATTEMPTS = 5;
+
+/**
+ * サービス全体で1日・1か月に送る番号のメールの上限。メールの送信サービス(Resend)の枠に合わせる。
+ * 無料の枠は1日100通・月3,000通なので、既定はそれより少し下。有料にしたら wrangler.jsonc の vars で上げる。
+ */
+const otpLimit = (env, key, def) => {
+  const v = Number(env[key]);
+  return Number.isFinite(v) && v > 0 ? v : def;
+};
+
+/**
+ * メールを1通送る前に、サービス全体の枠を1通ぶん取る。取れたら true。
+ * Resend の枠は暦の日・月(UTC)で数えるので、こちらも暦の日・月ごとの行で数える。
+ * share は使ってよい割合(お知らせのメールは 0.5 = ログインの番号のために半分を残す)。
+ */
+export async function reserveMail(env, share = 1) {
+  const now = new Date().toISOString();
+  const day = Math.floor(otpLimit(env, 'OTP_DAILY_LIMIT', 90) * share);
+  const month = Math.floor(otpLimit(env, 'OTP_MONTHLY_LIMIT', 2900) * share);
+  // 数えるのは同じ行(ログインの番号とお知らせで合計)。share は「この数までなら取ってよい」という線だけを変える
+  const okDay = await allowRate(env.DB, `mail:day:${now.slice(0, 10)}`, day, 2 * 24 * 60 * 60);
+  if (!okDay) return false;
+  return allowRate(env.DB, `mail:month:${now.slice(0, 7)}`, month, 32 * 24 * 60 * 60);
+}
 
 /** 続けて番号を送れない間隔(秒)。手元の試験だけ短くできる(本番では設定しない = 60秒)。 */
 const otpBurstSeconds = (env) => Number(env.OTP_BURST_SECONDS ?? 60);
@@ -94,12 +122,23 @@ function corsHeaders(request) {
 }
 
 /**
- * 呼び出し元の IP。Cloudflare のネットワークを通った要求(本番)にだけ値が入る。
+ * 呼び出し元の IP(回数制限で数える単位)。Cloudflare のネットワークを通った要求(本番)にだけ値が入る。
  * 手元の wrangler dev はループバックを付けることがあるので、それは「付いていない」ものとして扱う。
+ * IPv6 は1つの契約に /64 がまるごと割り当てられ、その中で自由に変えられるので、/64 ごとにまとめて数える。
  */
 function clientIp(request) {
   const ip = request.headers.get('cf-connecting-ip');
-  return !ip || ip === '127.0.0.1' || ip === '::1' ? null : ip;
+  if (!ip || ip === '127.0.0.1' || ip === '::1') return null;
+  return ip.includes(':') ? `${ipv6Prefix64(ip)}::/64` : ip;
+}
+
+/** IPv6 の先頭 64 ビット(4つの区切り)。'::' の省略を戻してから取る(Cloudflare は ::ffff:1.2.3.4 の形では渡さない) */
+export function ipv6Prefix64(ip) {
+  const [head, tail] = ip.toLowerCase().split('%')[0].split('::');
+  const h = head ? head.split(':') : [];
+  const t = tail === undefined ? [] : tail ? tail.split(':') : [];
+  const full = tail === undefined ? h : [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t];
+  return full.slice(0, 4).map((g) => (g || '0').replace(/^0+(?=.)/, '')).join(':');
 }
 
 /**
@@ -144,7 +183,13 @@ async function authenticate(request, env) {
   }
   // 使った時刻は1時間に1回だけ書く(同期は1分ごとに来るので、毎回書くと書き込みの無料枠を無駄に使う)
   const hourAgo = new Date(Date.now() - 3_600_000).toISOString();
-  await env.DB.prepare('UPDATE devices SET last_used_at = ? WHERE id = ? AND last_used_at < ?').bind(nowIso(), device.id, hourAgo).run();
+  // 利用者の「最後に使った日」も同じ間隔で書く(長く使われていないアカウントの片づけ src/inactive.js で使う)
+  const touched = await env.DB.prepare('UPDATE devices SET last_used_at = ? WHERE id = ? AND last_used_at < ?').bind(nowIso(), device.id, hourAgo).run();
+  if (touched.meta?.changes) {
+    await env.DB.prepare('UPDATE users SET last_seen_at = ? WHERE id = ? AND last_seen_at < ?').bind(nowIso(), device.user_id, hourAgo).run();
+    // 片づけのお知らせを送ったあとに使われたら、取り消す
+    await env.DB.prepare('DELETE FROM inactive_notices WHERE user_id = ? AND purging = 0').bind(device.user_id).run().catch(() => {});
+  }
   return device;
 }
 
@@ -164,12 +209,37 @@ async function handleOtpSend(request, env) {
   const purpose = purposeOf(body);
   if (!looksLikeEmail(email)) return fail(400, 'メールアドレスの形式が正しくありません。');
 
+  // 回数の上限。他人がそのアドレスへ送り続けて本人を締め出せないよう、アドレスだけでなくアドレスと IP の組でも数える
+  // (アドレスだけの上限は、受信箱を埋められないための大きめの値)
+  // 回数は断ったものも数えるので、順番に意味がある。断ったらその先は数えない。
+  //   続けての送信・アドレスと IP の組 → IP ごと → アドレスごと → サービス全体
+  // 連打(続けての送信)を先に断るので、1人が「再送」を連打しても、同じ IP の全員が締め出されることはない
   const ip = clientIp(request);
-  const okEmail = await allowRate(env.DB, `otp:send:${email}`, 20, 24 * 60 * 60);
-  const okIp = !ip || (await allowRate(env.DB, `otp:ip:${ip}`, 30, 60 * 60));
-  const okBurst = await allowRate(env.DB, `otp:burst:${email}`, 1, otpBurstSeconds(env));
-  if (!okEmail || !okIp) return fail(429, '送信の回数が上限に達しました。しばらく待ってからお試しください。');
-  if (!okBurst) return fail(429, '続けて送信できません。1分ほど待ってからお試しください。');
+  const rate = (bucket, limit, sec) => allowRate(env.DB, bucket, limit, sec);
+  // 続けての送信はアドレスと IP の組で数える(アドレスだけだと、他人が送り続けて本人を締め出せるため)
+  if (!(await rate(`otp:burst:${email}${ip ? `:${ip}` : ''}`, 1, otpBurstSeconds(env)))) return fail(429, '続けて送信できません。1分ほど待ってからお試しください。');
+  const tooMany = () => fail(429, '送信の回数が上限に達しました。しばらく待ってからお試しください。');
+  if (ip && !(await rate(`otp:pair:${email}:${ip}`, 10, 24 * 60 * 60))) return tooMany();
+  // IP ごとの1日の上限は、サービス全体の1日の枠の3割(/48 は45%)。1か所からサービス全体の枠を使い切れないようにする。
+  // 大学など大勢が1つの IP を共有する場所では足りなくなるが、それは全体の枠(無料の Resend は1日100通)が小さいため。
+  // 枠を上げれば(Resend を有料にして OTP_DAILY_LIMIT を上げれば)一緒に上がる。
+  // IPv6 は /64 に加えて /48 でも数える(/48 をまるごと借りられるサービスがあるため)
+  const daily = otpLimit(env, 'OTP_DAILY_LIMIT', 90);
+  if (ip && !(await rate(`otp:ipday:${ip}`, Math.max(10, Math.floor(daily * 0.3)), 24 * 60 * 60))) return tooMany();
+  const ip48 = ip && ip.endsWith('::/64') ? `${ip.split(':').slice(0, 3).join(':')}::/48` : null;
+  if (ip48 && !(await rate(`otp:ipday:${ip48}`, Math.max(15, Math.floor(daily * 0.45)), 24 * 60 * 60))) return tooMany();
+  // アドレスごとの上限(受信箱を埋められないため)。ただし、その IP からそのアドレスへの1日の最初の2通は数えない
+  // (他人が4つまでの IP から送り続けて、アドレスの枠を使い切っても、本人は自分の IP から番号を受け取れるように。
+  // それより多くの IP から送られると防げない。Turnstile などで機械からの送信を止める必要がある)
+  // 数えない分にも、アドレスごとに1日10通の上限を付ける(たくさんの IP から送って、受信箱を埋められないように)。
+  // IP ごとの上限を通ったあとに調べる(IP の上限で断られる送信で、本人の2通を使い切らないように)
+  const fresh = !!ip && (await rate(`otp:pairfresh:${email}:${ip}`, 2, 24 * 60 * 60)) && (await rate(`otp:sendfresh:${email}`, 10, 24 * 60 * 60));
+  if (!fresh && !(await rate(`otp:send:${email}`, 30, 24 * 60 * 60))) return tooMany();
+  // サービス全体の上限(メールの送信サービスの枠を使い切らない・大量に送らされて止められないため)。ほかの上限を通ったものだけを数える
+  if (!(await reserveMail(env))) {
+    console.log('mail global limit reached');
+    return fail(503, 'ただいまログインの番号を送れません。時間をおいてお試しください。この端末だけで使うことはできます。');
+  }
 
   const code = newOtpCode();
   const codeHash = await hashSecret(code, env.SECRET_PEPPER);
@@ -185,32 +255,13 @@ async function handleOtpSend(request, env) {
   return json({ ok: true, expiresInMinutes: OTP_MINUTES, ...(echo ? { devCode: code } : {}) });
 }
 
-/**
- * Resend でメールを送る。文面は、利用者が選んだ purpose だけで変える
- * (アカウントがあるかどうかでは変えない。メールを見られる人以外に登録の有無が分からないように)。
- */
-async function sendOtpMail(env, email, code, purpose) {
-  const signup = purpose === 'signup';
-  const body = {
-    from: env.MAIL_FROM,
-    to: [email],
-    subject: signup ? `大学ノートのアカウント作成の確認番号: ${code}` : `大学ノートのログイン番号: ${code}`,
-    text: [
-      signup ? '大学ノートのアカウント作成の確認番号は次のとおりです。' : '大学ノートのログイン番号は次のとおりです。',
-      '',
-      `    ${code}`,
-      '',
-      `この番号は ${OTP_MINUTES} 分で使えなくなります。`,
-      'お心当たりがない場合は、このメールを破棄してください。番号は誰にも教えないでください。',
-      '',
-      '大学ノート https://jagjag-yt.github.io/daigaku-note/',
-    ].join('\n'),
-  };
+/** メールを1通送る(Resend)。送れたら { ok: true } */
+async function sendMail(env, email, subject, text) {
   try {
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ from: env.MAIL_FROM, to: [email], subject, text }),
     });
     if (!res.ok) {
       console.log('resend failed', res.status, await res.text());
@@ -221,6 +272,26 @@ async function sendOtpMail(env, email, code, purpose) {
     console.log('resend error', String(err));
     return { ok: false };
   }
+}
+
+/**
+ * ログインの番号のメール。文面は、利用者が選んだ purpose だけで変える
+ * (アカウントがあるかどうかでは変えない。メールを見られる人以外に登録の有無が分からないように)。
+ */
+async function sendOtpMail(env, email, code, purpose) {
+  const signup = purpose === 'signup';
+  const subject = signup ? `大学ノートのアカウント作成の確認番号: ${code}` : `大学ノートのログイン番号: ${code}`;
+  const text = [
+    signup ? '大学ノートのアカウント作成の確認番号は次のとおりです。' : '大学ノートのログイン番号は次のとおりです。',
+    '',
+    `    ${code}`,
+    '',
+    `この番号は ${OTP_MINUTES} 分で使えなくなります。`,
+    'お心当たりがない場合は、このメールを破棄してください。番号は誰にも教えないでください。',
+    '',
+    '大学ノート https://jagjag-yt.github.io/daigaku-note/',
+  ].join('\n');
+  return sendMail(env, email, subject, text);
 }
 
 /** 6桁の数字を確かめ、端末に鍵を渡す。 */
@@ -255,7 +326,19 @@ async function handleOtpVerify(request, env) {
     return fail(400, `番号が違います。あと${Math.max(0, OTP_MAX_ATTEMPTS - claim.attempts)}回まで試せます。`);
   }
   // ログインなのにアカウントがない: 鍵は出さず、番号も使用済みにしない(このままアカウントを作れるように)
-  const existing = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
+  let existing = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
+  // 長く使われていないアカウントの片づけが途中で止まっていたら、先に消し切る(半分消えた置き場のままログインさせない)。
+  // 先に「最後に使った日」を書く。片づけが印を付けるのがこれより後なら、印を付ける条件(使われていない)に当たらなくなり、
+  // 先なら、下で印が見えるので、ここで消し切る(どちらの順でも、ログインしたのに消されることはない)
+  if (existing) {
+    await env.DB.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').bind(nowIso(), existing.id).run();
+    const purging = await env.DB.prepare('SELECT 1 AS p FROM inactive_notices WHERE user_id = ? AND purging = 1').bind(existing.id).first().catch(() => null);
+    if (purging) {
+      const done = await purgeUser(env, existing.id, email, { keepOtp: true }).catch((err) => (console.log('purge on login failed', String(err)), false));
+      if (!done) return fail(503, 'ただいまログインできません。時間をおいてお試しください。');
+      existing = null;
+    }
+  }
   if (purpose === 'login' && !existing) {
     // この回の試行は数えない(間違えたあとに正しい番号を入れた人が、同じ番号でアカウントを作れなくならないように)
     await env.DB.prepare('UPDATE otp_requests SET attempts = attempts - 1 WHERE id = ? AND attempts > 0').bind(row.id).run();
@@ -274,7 +357,9 @@ async function handleOtpVerify(request, env) {
 
   // 端末が多いときは、いちばん長く使っていないものを外す
   const devices = await env.DB.prepare('SELECT id FROM devices WHERE user_id = ? ORDER BY last_used_at ASC, created_at ASC').bind(user.id).all();
-  const over = devices.results.length - (MAX_DEVICES - 1);
+  // プランが一時的に読めないときは外さない(Pro の人の端末を、無料の台数まで外してしまわないように)
+  const maxDevices = await userPlan(env, user.id).then((p) => p.devices, (err) => (console.log('plan lookup failed', String(err)), Infinity));
+  const over = devices.results.length - (maxDevices - 1);
   const removed = over > 0 ? devices.results.slice(0, over).map((d) => d.id) : [];
   for (const id of removed) await env.DB.prepare('DELETE FROM devices WHERE id = ?').bind(id).run();
 
@@ -293,6 +378,7 @@ async function handleOtpVerify(request, env) {
     deviceId,
     deviceLabel: label,
     removedDevices: removed.length,
+    maxDevices: Number.isFinite(maxDevices) ? maxDevices : null, // ログインできる端末の数(プランで変わる)
     existing: !!existing, // 前からあったアカウントか(アカウント作成の画面で、すでにあったときに知らせるため)
     // 同期の置き場の URL(アプリはこれを WebDAV の URL として使う)
     dav: new URL('/dav/', request.url).href,
@@ -301,7 +387,14 @@ async function handleOtpVerify(request, env) {
 
 // ---- ログイン中の操作 -----------------------------------------------------
 
-function handleMe(env, device) {
+async function handleMe(env, device) {
+  // クーポンなどで付いた特典 [{ perk, name, expiresAt }]。表がまだない(schema.sql を流す前に配信した)ときは空にして、ほかは返す
+  // 一時的な失敗のときは 500 にする(無料として返すと、払った人に広告が出てしまうため)
+  const perks = await activePerks(env.DB, device.user_id).catch((err) => {
+    if (/no such table/i.test(String(err))) return [];
+    throw err;
+  });
+  const plan = planFromPerks(perks, env);
   return json({
     ok: true,
     email: device.email,
@@ -309,7 +402,10 @@ function handleMe(env, device) {
     createdAt: device.user_created_at,
     deviceId: device.id,
     deviceLabel: device.label,
-    usage: { bytes: device.bytes_used, quota: Number(env.QUOTA_BYTES) || QUOTA_BYTES },
+    usage: { bytes: device.bytes_used, quota: plan.quota },
+    perks,
+    plan: { id: plan.id, name: plan.name, devices: plan.devices }, // 無料・Pro・Max
+    adFree: plan.adFree, // 広告を出さない(Pro・Max・広告なしの特典)
   });
 }
 
@@ -338,23 +434,41 @@ async function handleDeviceDelete(url, env, device) {
  * 2 で失敗したら、利用者の行は残る。もう一度ログインして退会すれば、続きから消せる。
  */
 async function handleDeleteAccount(env, device) {
-  const uid = device.user_id;
+  const done = await purgeUser(env, device.user_id, device.email);
+  if (!done) return fail(500, '途中で失敗しました。もう一度ログインしてから、アカウントの削除をやり直してください。');
+  return json({ ok: true });
+}
+
+/**
+ * 利用者を消す(退会・長く使われていないアカウントの片づけ)。消せたら true。
+ * 消し始めたら、途中でログインされても最後まで消す(利用者の行だけ残すと、同じ利用者のまま置き場が空になり、
+ * アプリは送り済みと思って送り直さないため。消し切れば、次のログインで新しい利用者になり、端末から送り直される)。
+ * R2 で失敗したら false(利用者の行は残るので、もう一度やれば続きから消せる)。
+ */
+export async function purgeUser(env, uid, email, { keepOtp = false } = {}) {
   await env.DB.prepare('DELETE FROM devices WHERE user_id = ?').bind(uid).run();
   try {
     await deletePrefix(env.FILES, `u/${uid}/`);
   } catch (err) {
     console.log('r2 delete failed', String(err));
-    return fail(500, '途中で失敗しました。もう一度ログインしてから、アカウントの削除をやり直してください。');
+    return false;
   }
+  // 使ったクーポンは「使用済み」のまま残し、誰が使ったかだけを消す(NULL に戻すと、もう一度使えてしまうため)。
+  // 表がまだない(schema.sql を流す前に配信した)ときでも止めないよう、batch の外で行う。
+  // 特典(perks)と片づけの記録(inactive_notices)は、下の users の削除で一緒に消える(ON DELETE CASCADE)。
+  // 先に消すと、batch が失敗したときに「消している途中」の印まで消えて、続きから消せなくなる
+  await env.DB.prepare("UPDATE coupons SET redeemed_by = 'deleted' WHERE redeemed_by = ?").bind(uid).run().catch((err) => console.log('cleanup failed', String(err)));
   await env.DB.batch([
     env.DB.prepare('DELETE FROM op_files WHERE user_id = ?').bind(uid),
     env.DB.prepare('DELETE FROM op_logs WHERE user_id = ?').bind(uid),
     env.DB.prepare('DELETE FROM blobs WHERE user_id = ?').bind(uid),
-    env.DB.prepare('DELETE FROM otp_requests WHERE email = ?').bind(String(device.email ?? '').toLowerCase()),
+    env.DB.prepare('DELETE FROM rate_limits WHERE bucket = ?').bind(`coupon:u:${uid}`),
     env.DB.prepare('DELETE FROM rate_limits WHERE bucket = ?').bind(`dav:w:${uid}`),
     env.DB.prepare('DELETE FROM users WHERE id = ?').bind(uid),
+    // ログインの途中で消し切るときは、いま使っている番号を残す(同じ番号でアカウントを作り直せるように)
+    ...(keepOtp ? [] : [env.DB.prepare('DELETE FROM otp_requests WHERE email = ?').bind(String(email ?? '').toLowerCase())]),
   ]);
-  return json({ ok: true });
+  return true;
 }
 
 /** R2 の、名前が prefix で始まるものを全部消す(1回に1000個ずつ)。 */
@@ -373,6 +487,15 @@ async function deletePrefix(bucket, prefix) {
  *   ・users.bytes_used を、変更のファイルと PDF・画像の大きさの合計に合わせ直す(途中で止まった書き込みなどで、ずれていたら)
  */
 export async function cleanup(env) {
+  await cleanupRows(env);
+  // 長く使われていないアカウントの片づけ(お知らせ → 30日後に削除)。失敗しても、ほかの掃除は済んでいる
+  // お知らせのメールもログインの番号と同じ Resend の枠を使うので、枠を取ってから送る(半分はログインの番号のために残す)
+  const sendNotice = async (email, subject, text) => ((await reserveMail(env, 0.5)) ? sendMail(env, email, subject, text) : { ok: false });
+  await sweepInactive(env, { sendMail: sendNotice, purge: (uid, email) => purgeUser(env, uid, email) })
+    .catch((err) => console.log('inactive sweep failed', String(err)));
+}
+
+async function cleanupRows(env) {
   const now = nowIso();
   const dayAgo = new Date(Date.now() - 86_400_000).toISOString();
   const idle = new Date(Date.now() - TOKEN_IDLE_DAYS * 86_400_000).toISOString();
@@ -431,7 +554,8 @@ export default {
       }
 
       if (davPath) return finish(await handleDav(request, env, device, davPath));
-      if (url.pathname === '/me' && request.method === 'GET') return finish(handleMe(env, device));
+      if (url.pathname === '/me' && request.method === 'GET') return finish(await handleMe(env, device));
+      if (url.pathname === '/coupon' && request.method === 'POST') return finish(await handleCouponRedeem(request, env, device, clientIp(request)));
       if (url.pathname === '/devices' && request.method === 'GET') return finish(await handleDevices(env, device));
       if (url.pathname === '/devices' && request.method === 'DELETE') return finish(await handleDeviceDelete(url, env, device));
       if (url.pathname === '/logout' && request.method === 'POST') {

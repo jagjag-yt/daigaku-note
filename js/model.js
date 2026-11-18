@@ -91,7 +91,7 @@ export function applyOp(note, op) {
   switch (op.t) {
     case 'note.create':
       if (note.created == null || op.ts < note.created) note.created = op.ts;
-      if (p.cover && newer(s, note.coverS)) { note.cover = p.cover; note.coverS = s; }
+      if (typeof p.cover === 'string' && newer(s, note.coverS)) { note.cover = p.cover; note.coverS = s; }
       if (p.folder && newer(s, note.folderS)) { note.folder = p.folder; note.folderS = s; }
     // fallthrough: 作成時の名前も LWW の一票
     case 'note.rename':
