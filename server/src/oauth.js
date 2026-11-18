@@ -264,7 +264,7 @@ async function callback(request, env, provider, params, tools) {
   const owns = verified && ownsEmail(provider, email, claims);
   try {
     const r = await tools.loginUser(env, { provider, subject: String(claims.sub), email: verified ? email : null, owns, refreshToken });
-    if (r.error) return back({ error: r.error });
+    if (r.error) return back({ error: r.error, ...(r.via ? { via: r.via } : {}) });
 
     // 引換券。ハッシュだけを持つ。合言葉(challenge)と一緒に、もう一度行を作る(state はもう使えない)
     const ticket = randomToken();

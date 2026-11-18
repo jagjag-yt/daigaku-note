@@ -449,7 +449,7 @@ test('Google・Apple で続けると、アカウントができて本棚へ。2�
   await expect(c.locator('#auth-signup-msg')).toBeFocused();
   await expect(c.locator('#library')).toBeHidden();
   // Apple の「メールを非公開」なら、別の新しいアカウント
-  await fakeIdp(c.context(), { sub: `a2-${email}`, email: `x${seq}@privaterelay.appleid.com`, is_private_email: true });
+  await fakeIdp(c.context(), { sub: `a2-${email}`, email: freshEmail("relay", testInfo).replace("@example.com", "@privaterelay.appleid.com"), is_private_email: true });
   await c.locator('#auth-signup-social .oauth-apple').click();
   await expect(c.locator('#library')).toBeVisible();
   await expect(c.locator('#toast-msg')).toContainText('アカウントを作成しました');

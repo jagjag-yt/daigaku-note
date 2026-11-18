@@ -313,11 +313,22 @@ async function handleOtpVerify(request, env) {
   // ログインなのにアカウントがない: 鍵は出さず、番号も使用済みにしない(このままアカウントを作れるように)
   const settled = await settleUser(env, await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first(), email);
   if (settled === 'busy') return fail(503, 'ただいまログインできません。時間をおいてお試しください。');
-  // 番号を確かめた = このアドレスの持ち主。持ち主を確かめずに Apple・Google から作られたアカウントなら、そちらからアドレスを外す
-  const existing = settled && (await detachUnverified(env, settled));
+  // この回の試行は数えない(間違えたあとに正しい番号を入れた人が、同じ番号で続けられるように)
+  const keepCode = () => env.DB.prepare('UPDATE otp_requests SET attempts = attempts - 1 WHERE id = ? AND attempts > 0').bind(row.id).run();
+  let existing = settled;
+  // 持ち主を確かめずに Apple・Google から作られたアカウントがある(本人が作ったのかもしれないし、他人かもしれない)。
+  // 番号を確かめた = このアドレスの持ち主なので、どの方法で作られたかを伝えて選んでもらう。
+  // 「新しく作る」(replace)を選んだら、そちらのアカウントからアドレスを外して、新しいアカウントを作る
+  if (existing) {
+    const via = await unverifiedVia(env, existing.id);
+    if (via !== null && !body?.replace) {
+      await keepCode();
+      return json({ ok: false, reason: 'unverified_owner', via, message: 'このメールアドレスで、Apple・Google から作られたアカウントがあります。' }, 409);
+    }
+    if (via !== null) existing = await detachUnverified(env, existing);
+  }
   if (purpose === 'login' && !existing) {
-    // この回の試行は数えない(間違えたあとに正しい番号を入れた人が、同じ番号でアカウントを作れなくならないように)
-    await env.DB.prepare('UPDATE otp_requests SET attempts = attempts - 1 WHERE id = ? AND attempts > 0').bind(row.id).run();
+    await keepCode();
     return json({ ok: false, reason: 'no_account', message: 'このメールアドレスのアカウントはありません。' }, 404);
   }
   // 使用済みにする。同時に正しい番号が2回届いても、鍵を出すのは1回だけ
@@ -347,9 +358,20 @@ async function settleUser(env, user, email) {
 }
 
 /**
+ * 持ち主を確かめずに Apple・Google から作ったアカウントか。そうなら作った方法('apple' | 'google' | '')、違えば null
+ */
+async function unverifiedVia(env, userId) {
+  const mark = await env.DB.prepare('SELECT 1 AS m FROM unverified_emails WHERE user_id = ?').bind(userId).first()
+    .catch((err) => (/no such table/i.test(String(err)) ? null : Promise.reject(err)));
+  if (!mark) return null;
+  const id = await env.DB.prepare('SELECT provider FROM identities WHERE user_id = ? ORDER BY created_at LIMIT 1').bind(userId).first();
+  return id?.provider ?? '';
+}
+
+/**
  * 持ち主を確かめられないアドレスで Apple・Google から作ったアカウント(unverified_emails)なら、アドレスを外して null を返す。
  * そのアカウントは Apple・Google でのログインでだけ使い続けられる(アドレスは …@unverified.invalid になる)。
- * 本当の持ち主(メールの番号を確かめた人・Google や Apple が持ち主と認めた人)が来たときに呼ぶ。そうでなければ user をそのまま返す
+ * 本当の持ち主(メールの番号を確かめた人)が「新しく作る」を選んだときに呼ぶ。そうでなければ user をそのまま返す
  */
 async function detachUnverified(env, user) {
   const mark = await env.DB.prepare('DELETE FROM unverified_emails WHERE user_id = ? RETURNING user_id').bind(user.id).first()
@@ -397,21 +419,28 @@ async function loginUser(env, { provider, subject, email, owns, refreshToken = n
     // 片づけで消し切った(つながりも一緒に消えている): 新しく作る
   }
   if (!email) return { error: 'no_email' };
-  let byEmail = await settleUser(env, await env.DB.prepare('SELECT id, email FROM users WHERE email = ?').bind(email).first(), email);
+  const byEmail = await settleUser(env, await env.DB.prepare('SELECT id, email FROM users WHERE email = ?').bind(email).first(), email);
   if (byEmail === 'busy') return { error: 'busy' };
-  // 持ち主と認められた人が来た: 持ち主を確かめずに作られたアカウントなら、そちらからアドレスを外す
-  if (byEmail && owns) byEmail = await detachUnverified(env, byEmail);
-  // そのアドレスのアカウントが前からあるが、持ち主だと言い切れない: つながずに、メールの番号でログインしてもらう
-  if (byEmail && !owns) return { error: 'use_email' };
+  if (byEmail) {
+    // 持ち主を確かめずに、別の Apple・Google のアカウントから作られたアカウントがある: つながずに、作った方法を伝える
+    // (同じ人が Apple と Google の両方を使っていることが多い。他人かもしれないので、勝手にはつながない・外さない)
+    const via = await unverifiedVia(env, byEmail.id);
+    if (via !== null) return { error: 'unverified_owner', via };
+    // そのアドレスのアカウントが前からあるが、持ち主だと言い切れない: つながずに、メールの番号でログインしてもらう
+    if (!owns) return { error: 'use_email' };
+  }
   let user = byEmail;
   if (!user) {
+    // 作るのと「持ち主を確かめていない」印を、1つの batch(まとめて成功か失敗)で書く
     const id = newId('u');
-    const created = await env.DB.prepare('INSERT INTO users (id, email, created_at, last_seen_at) VALUES (?, ?, ?, ?) ON CONFLICT (email) DO NOTHING RETURNING id')
-      .bind(id, email, nowIso(), nowIso()).first();
-    // 同時にメールの番号で作られた: 持ち主と言い切れなければつながない
-    if (!created && !owns) return { error: 'use_email' };
+    const now = nowIso();
+    await env.DB.batch([
+      env.DB.prepare('INSERT INTO users (id, email, created_at, last_seen_at) VALUES (?, ?, ?, ?) ON CONFLICT (email) DO NOTHING').bind(id, email, now, now),
+      ...(owns ? [] : [env.DB.prepare('INSERT INTO unverified_emails (user_id, created_at) SELECT id, ? FROM users WHERE id = ?').bind(now, id)]),
+    ]);
     user = await env.DB.prepare('SELECT id, email FROM users WHERE email = ?').bind(email).first();
-    if (created && !owns) await env.DB.prepare('INSERT INTO unverified_emails (user_id, created_at) VALUES (?, ?)').bind(user.id, nowIso()).run();
+    // 同時にメールの番号で作られた: 持ち主と言い切れなければつながない
+    if (user.id !== id && !owns) return { error: 'use_email' };
   }
   await link(user.id);
   return { userId: user.id, existing: !!byEmail };
@@ -513,8 +542,9 @@ async function handleDeleteAccount(env, device) {
  */
 export async function purgeUser(env, uid, email, { keepOtp = false } = {}) {
   await env.DB.prepare('DELETE FROM devices WHERE user_id = ?').bind(uid).run();
-  // Apple でログインしていたら、Apple に取り消しを頼む(App Store の決まり。「Apple でサインイン」の一覧から消える)。失敗しても消すのは続ける
-  const apple = await env.DB.prepare("SELECT refresh_token FROM identities WHERE user_id = ? AND provider = 'apple' AND refresh_token IS NOT NULL")
+  // Apple でログインしていたら、Apple に取り消しを頼む(App Store の決まり。「Apple でサインイン」の一覧から消える)。失敗しても消すのは続ける。
+  // ログインの途中で消し切るとき(keepOtp)は頼まない(取り消すと、今まさに受け取った Apple の許可まで無効になるため)
+  const apple = keepOtp ? { results: [] } : await env.DB.prepare("SELECT refresh_token FROM identities WHERE user_id = ? AND provider = 'apple' AND refresh_token IS NOT NULL")
     .bind(uid).all().catch(() => ({ results: [] }));
   for (const r of apple.results) await revokeApple(env, r.refresh_token);
   try {

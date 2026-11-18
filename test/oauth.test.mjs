@@ -225,11 +225,19 @@ test('Google: ほかの会社のアドレスで前からあるアカウントに
   const r3 = await redeem(f3.hash.get('ticket'), f3.verifier);
   assert.equal(r3.data.existing, false);
   assert.equal(r3.data.email, 'new@corp.example.com');
-  // 本当の持ち主があとでメールの番号でログインすると、先に作られたアカウントには入らず、新しいアカウントになる(事前の乗っ取りを防ぐ)
+  // 本当の持ち主があとでメールの番号でログインしても、先に作られたアカウントには入らない(事前の乗っ取りを防ぐ)。
+  // 作った方法を伝えて、選んでもらう(番号はそのまま使える)
   await api('/otp/send', { email: 'new@corp.example.com', purpose: 'login' });
-  const v = await api('/otp/verify', { email: 'new@corp.example.com', code: mail.lastCode('new@corp.example.com'), purpose: 'login' });
-  assert.equal(v.status, 404); // ログインのページでは「アカウントはありません」(番号はそのまま使える)
-  const v2 = await api('/otp/verify', { email: 'new@corp.example.com', code: mail.lastCode('new@corp.example.com'), purpose: 'signup' });
+  const code = mail.lastCode('new@corp.example.com');
+  for (const purpose of ['login', 'signup']) {
+    const v = await api('/otp/verify', { email: 'new@corp.example.com', code, purpose });
+    assert.equal(v.status, 409);
+    assert.equal(v.data.reason, 'unverified_owner');
+    assert.equal(v.data.via, 'google');
+    assert.equal(v.data.token, undefined);
+  }
+  // 「新しいアカウントを作成」を選ぶと、先に作られたアカウントからアドレスを外して、新しく作る
+  const v2 = await api('/otp/verify', { email: 'new@corp.example.com', code, purpose: 'signup', replace: true });
   assert.equal(v2.status, 200);
   assert.equal(v2.data.existing, false);
   assert.notEqual(v2.data.userId, r3.data.userId);
@@ -238,13 +246,16 @@ test('Google: ほかの会社のアドレスで前からあるアカウントに
   const r4 = await redeem(f4.hash.get('ticket'), f4.verifier);
   assert.equal(r4.data.userId, r3.data.userId);
   assert.equal(r4.data.email, `${r3.data.userId}@unverified.invalid`);
-  // Gmail の持ち主が Google でログインしたときも、先に(確かめずに)作られたアカウントからアドレスを外す
+  // Apple(Gmail のアドレス)で作った人が、同じ Gmail の Google で来た: 勝手につながず・外さず、作った方法を伝える
+  // (同じ人のことが多いが、他人かもしれない)
   const fa = await flow('apple', { iss: 'https://appleid.apple.com', aud: 'io.github.jagjagyt.daigakunote.web', exp: Date.now() / 1000 + 600, sub: 'a-squat', email: 'squat@gmail.com', email_verified: 'true' });
   const ra = await redeem(fa.hash.get('ticket'), fa.verifier);
+  assert.equal(ra.status, 200);
   const fg = await flow('google', { iss: 'https://accounts.google.com', aud: 'g-client', exp: Date.now() / 1000 + 600, sub: 'g-squat', email: 'squat@gmail.com', email_verified: true });
-  const rg = await redeem(fg.hash.get('ticket'), fg.verifier);
-  assert.equal(rg.data.existing, false);
-  assert.notEqual(rg.data.userId, ra.data.userId);
+  assert.equal(fg.hash.get('error'), 'unverified_owner');
+  assert.equal(fg.hash.get('via'), 'apple');
+  const still = await env.DB.prepare('SELECT email FROM users WHERE id = ?').bind(ra.data.userId).first();
+  assert.equal(still.email, 'squat@gmail.com');
 });
 
 test('Apple: 持ち主と言い切れるのは「メールを非公開」と iCloud のアドレスだけ', async () => {

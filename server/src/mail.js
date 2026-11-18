@@ -130,7 +130,7 @@ export async function sendMail(env, to, subject, text) {
     const res = provider === 'ses' ? await sendSes(env, to, subject, text) : await sendResend(env, to, subject, text);
     if (!res.ok) {
       // 宛先は出さない(ログに個人のアドレスを残さない)
-      console.log(`${provider} failed`, res.status, (await res.text()).slice(0, 500));
+      console.log(`${provider} failed`, res.status, (await res.text()).slice(0, 500).replace(/[^\s@"'<>]+@[^\s@"'<>]+/g, '***'));
       return { ok: false };
     }
     return { ok: true };

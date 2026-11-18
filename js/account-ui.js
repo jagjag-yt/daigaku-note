@@ -122,7 +122,10 @@ export function formatBytes(n) {
   return `${trim(n / 1024 ** 3, 2)} GB`;
 }
 const hhmm = (t) => new Date(t).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
-const initial = (email) => (String(email || '?').trim()[0] || '?').toUpperCase();
+// アドレスを外したアカウント(持ち主を確かめずに Apple・Google から作られ、本当の持ち主が別のアカウントを作った。server/src/index.js)
+const noAddress = (email) => /@unverified\.invalid$/.test(String(email || ''));
+const shownEmail = (email) => (noAddress(email) ? 'Apple・Googleでログインしているアカウント' : email);
+const initial = (email) => (noAddress(email) ? '?' : (String(email || '?').trim()[0] || '?').toUpperCase());
 
 function msg(el, text) { el.textContent = text || ''; }
 const emailMsg = () => $(`#auth-${purpose}-msg`);
@@ -171,10 +174,10 @@ export function refresh() {
   av.hidden = !ok;
   av.textContent = ok ? initial(acc.email) : '';
   btn.classList.toggle('in', ok);
-  const label = ok ? `アカウント(${acc.email})` : 'アカウント';
+  const label = ok ? `アカウント(${shownEmail(acc.email)})` : 'アカウント';
   btn.title = label;
   btn.setAttribute('aria-label', label);
-  if (ok) $('#acct-summary-who').textContent = acc.email;
+  if (ok) $('#acct-summary-who').textContent = shownEmail(acc.email);
   $('#acct-summary-in').hidden = !ok;
   $('#acct-summary-out').hidden = ok;
 
@@ -297,11 +300,19 @@ function setLocked(on) {
   $('#acct-code-form .code-box').classList.toggle('locked', on);
 }
 
-// ログインしようとしたらアカウントがなかった: 番号はそのままで、アカウントを作るボタンを出す
-function setNoAccount(code) {
+// ログインしようとしたらアカウントがなかった: 番号はそのままで、アカウントを作るボタンを出す。
+// via を渡すと、Apple・Google から(持ち主を確かめずに)作られたアカウントがあるときの案内にする(作ると、そちらからアドレスを外す)
+let noAccountReplace = false;
+function setNoAccount(code, via) {
   noAccountCode = code;
+  noAccountReplace = via !== undefined;
   $('#acct-noacct').hidden = !code;
   $('#acct-verify').hidden = !!code;
+  const name = account.PROVIDER_NAMES[via] || 'Apple・Google';
+  $('#acct-noacct-text').textContent = noAccountReplace
+    ? `このメールアドレスで、${name}のアカウントから作られたアカウントがあります。ご自身で作った場合は、ログインのページの「${account.PROVIDER_NAMES[via] ? `${name}で続ける` : 'Apple・Googleで続ける'}」でログインしてください。作った覚えがない場合は、このアドレスで新しいアカウントを作成できます。`
+    : 'このメールアドレスのアカウントはまだありません。このままアカウントを作成できます。';
+  $('#acct-noacct-create').textContent = noAccountReplace ? '新しいアカウントを作成' : 'このアドレスでアカウントを作成';
 }
 
 function setCode(v) {
@@ -369,12 +380,12 @@ async function verify(how) {
     return;
   }
   const email = pending.email;
-  const r = await run(el, () => account.verify(email, code, asPurpose));
+  const r = await run(el, () => account.verify(email, code, asPurpose, !!how && noAccountReplace));
   if (!r) {
     const err = run.lastError;
-    if (err?.reason === 'no_account') {
+    if (err?.reason === 'no_account' || err?.reason === 'unverified_owner') {
       msg(el, '');
-      setNoAccount(code);
+      setNoAccount(code, err.reason === 'unverified_owner' ? err.via || '' : undefined);
       $('#acct-noacct-create').focus({ preventScroll: true });
       return;
     }
@@ -453,11 +464,12 @@ async function refreshPerks() {
 // 前の人のアドレスは伏せる(共有の端末で、ほかの人に見えないように)。先頭の1文字と @ から後ろだけ
 const mask = (email) => email.replace(/^(.)[^@]*/, '$1***');
 
-// extra: Apple・Google でログインしたとき { provider, discard }(discard はこの端末のノートを消す前に、受け取った鍵を捨てる)
+// extra: Apple・Google でログインしたとき { provider, discard, userId }(discard はこの端末のノートを消す前に、受け取った鍵を捨てる)
 async function confirmOtherAccount(email, how, extra = {}) {
   const cfg = dav.config();
-  const prev = cfg.account ? { email: cfg.account.email } : loadLast();
-  if (!prev || prev.email === email) return true;
+  const prev = cfg.account ? { email: cfg.account.email, userId: cfg.user } : loadLast();
+  // 同じアカウント(アドレスが同じ、またはアドレスが変わっても同じ利用者)なら確かめない
+  if (!prev || prev.email === email || (extra.userId && prev.userId === extra.userId)) return true;
   let n = -1;
   try { n = await h.countNotes(); } catch { /* 数えられないときは確かめる */ }
   if (n === 0) return true;
@@ -636,6 +648,12 @@ const OAUTH_ERRORS = {
   expired: (n) => `時間がたちすぎたため、${n}でログインできませんでした。もう一度お試しください。`,
   no_email: (n) => `${n}のアカウントのメールアドレスを確かめられませんでした。メールアドレスでログインしてください。`,
   use_email: () => 'このメールアドレスのアカウントがすでにあります。メールアドレスに届く番号でログインしてください。',
+  unverified_owner: (n, via) => {
+    const v = account.PROVIDER_NAMES[via];
+    return v
+      ? `このメールアドレスで、${v}のアカウントから作られたアカウントがあります。ご自身で作った場合は「${v}で続ける」でログインしてください。`
+      : 'このメールアドレスで、ほかの方法から作られたアカウントがあります。ご自身で作った方法でログインしてください。';
+  },
   busy: () => 'ただいまログインできません。時間をおいてお試しください。',
 };
 
@@ -651,7 +669,7 @@ async function processOAuth(url) {
   if (r.error) {
     if (r.error === 'cancelled') return;
     if (r.error === 'no_email' && purpose === 'signup') show(`${name}のアカウントのメールアドレスを確かめられませんでした。メールアドレスで作成してください。`);
-    else show((OAUTH_ERRORS[r.error] || ((n) => `${n}でログインできませんでした。もう一度お試しください。`))(name || 'この方法'));
+    else show((OAUTH_ERRORS[r.error] || ((n) => `${n}でログインできませんでした。もう一度お試しください。`))(name || 'この方法', r.via));
     return;
   }
   if (!r.ticket) return;
@@ -664,7 +682,7 @@ async function processOAuth(url) {
   const res = await run(el, () => account.oauthRedeem(r.ticket, saved.verifier));
   if (!res) return;
   const discard = () => account.logout(res.token).catch(() => {}); // 受け取った鍵を使わないときは、サーバーからも外す
-  if (!(await confirmOtherAccount(res.email, purpose, { provider: saved.provider, discard }))) {
+  if (!(await confirmOtherAccount(res.email, purpose, { provider: saved.provider, discard, userId: res.userId }))) {
     await discard();
     return;
   }
@@ -688,7 +706,7 @@ function renderInfo() {
   $('#acct-coupon-msg').classList.remove('ok');
   $('#acct-coupon').value = '';
   $('#acct-avatar').textContent = initial(acc.email);
-  $('#acct-who').textContent = acc.email;
+  $('#acct-who').textContent = shownEmail(acc.email);
   $('#acct-since').textContent = acc.deviceLabel ? `この端末: ${acc.deviceLabel}` : '';
   $('#account-dialog').scrollTop = 0;
   loadDetails();

@@ -39,7 +39,8 @@ async function call(path, { method = 'GET', body, token } = {}) {
   if (!res.ok || !data || data.ok === false) {
     const err = new Error(data?.message || `サーバーでエラーが起きました(${res.status})`);
     err.status = res.status;
-    err.reason = data?.reason; // 'no_account'(ログインしようとしたアドレスにアカウントがない)など
+    err.reason = data?.reason; // 'no_account'(ログインしようとしたアドレスにアカウントがない)・'unverified_owner' など
+    err.via = data?.via; // unverified_owner のとき、そのアカウントを作った方法('apple' | 'google')
     throw err;
   }
   return data;
@@ -52,7 +53,8 @@ const label = () => (isNative ? (platform === 'ios' ? 'iPhone・iPad のアプ�
 export const sendCode = (email, purpose) => call('/otp/send', { method: 'POST', body: { email, purpose } });
 // → { token, email, userId, deviceId, deviceLabel, dav, removedDevices, maxDevices, existing }
 // ログインでアカウントがなければ、reason: 'no_account' のエラー(番号は使用済みにならない)
-export const verify = (email, code, purpose) => call('/otp/verify', { method: 'POST', body: { email, code, purpose, label: label() } });
+// replace: Apple・Google から(持ち主を確かめずに)作られたアカウントがあっても、新しいアカウントを作る(reason: 'unverified_owner' のあと)
+export const verify = (email, code, purpose, replace = false) => call('/otp/verify', { method: 'POST', body: { email, code, purpose, label: label(), ...(replace ? { replace: true } : {}) } });
 export const me = (token) => call('/me', { token });
 export const devices = (token) => call('/devices', { token }).then((d) => d.devices);
 export const revoke = (token, id) => call(`/devices?id=${encodeURIComponent(id)}`, { method: 'DELETE', token });
@@ -137,7 +139,7 @@ export async function oauthStartUrl(provider, purpose) {
     err.status = 0;
     throw err;
   }
-  const ret = isNative ? APP_RETURN : location.origin + location.pathname;
+  const ret = isNative ? APP_RETURN : location.origin + location.pathname.replace(/index\.html$/, '');
   return `${apiBase()}/oauth/${provider}/start?${new URLSearchParams({ return: ret, challenge })}`;
 }
 
@@ -165,5 +167,5 @@ export function parseOAuthReturn(url) {
   if (i < 0) return null;
   const q = new URLSearchParams(String(url).slice(i + '#/oauth?'.length));
   const provider = q.get('provider');
-  return { provider: PROVIDER_NAMES[provider] ? provider : null, ticket: q.get('ticket'), error: q.get('error') };
+  return { provider: PROVIDER_NAMES[provider] ? provider : null, ticket: q.get('ticket'), error: q.get('error'), via: q.get('via') };
 }
