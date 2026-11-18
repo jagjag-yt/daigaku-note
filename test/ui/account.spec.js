@@ -399,7 +399,8 @@ async function fakeIdp(ctx, who, { cancel = false } = {}) {
       back.searchParams.set('state', q.get('state'));
       if (cancel) back.searchParams.set('error', 'access_denied');
       else back.searchParams.set('code', code);
-      return r.fulfill({ status: 302, headers: { location: back.href } });
+      // WebKit は fulfill で 302 を返せないので、ページを開いてから移る
+      return r.fulfill({ contentType: 'text/html', body: `<script>location.replace(${JSON.stringify(back.href)})</script>` });
     }
     // Apple はフォームの POST で戻す
     const fields = cancel ? `<input name="error" value="user_cancelled_authorize">` : `<input name="code" value="${code}">`;
