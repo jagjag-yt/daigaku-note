@@ -129,6 +129,7 @@ const initial = (email) => (noAddress(email) ? '?' : (String(email || '?').trim(
 
 function msg(el, text) { el.textContent = text || ''; }
 const emailMsg = () => $(`#auth-${purpose}-msg`);
+const shownMsg = () => ($('#acct-code-form').hidden ? emailMsg() : $('#acct-code-msg')); // 今出ている段の文言の欄
 function clearMsgs() { for (const id of ['#auth-login-msg', '#auth-signup-msg', '#acct-code-msg', '#acct-msg', '#acct-coupon-msg']) msg($(id), ''); }
 
 // 通信のあいだは、画面のボタンを押せないようにする(2回押されないように)。失敗したら el に文言を出す
@@ -380,7 +381,10 @@ async function verify(how) {
     return;
   }
   const email = pending.email;
-  const r = await run(el, () => account.verify(email, code, asPurpose, !!how && noAccountReplace));
+  const replace = !!how && noAccountReplace;
+  // 「新しいアカウントを作成」: サーバーに送ると、すぐに作られる(取り消せない)ので、この端末のノートをどうするかは送る前に確かめる
+  if (replace && !(await confirmOtherAccount(email, 'signup', { userId: 'new', sameEmail: true }))) return;
+  const r = await run(el, () => account.verify(email, code, asPurpose, replace));
   if (!r) {
     const err = run.lastError;
     if (err?.reason === 'no_account' || err?.reason === 'unverified_owner') {
@@ -407,7 +411,7 @@ async function verify(how) {
   // アドレスは前と同じでも、別のアカウントになった(Apple・Google から作られたアカウントではなく、新しいアカウントを作った):
   // この端末のノートをどうするか、別のアカウントのときと同じく確かめる
   const discard = () => account.logout(r.token).catch(() => {});
-  if (!(await confirmOtherAccount(email, asPurpose, { userId: r.userId, discard, sameEmail: true }))) {
+  if (!replace && !(await confirmOtherAccount(email, asPurpose, { userId: r.userId, discard, sameEmail: true }))) {
     await discard();
     return;
   }
@@ -484,7 +488,6 @@ async function confirmOtherAccount(email, how, extra = {}) {
   if (extra.userId && prev.userId) {
     if (prev.userId === extra.userId) return true;
   } else if (prev.email === email) return true;
-  if (prev.email === email && !extra.sameEmail && !extra.provider) return true;
   let n = -1;
   try { n = await h.countNotes(); } catch { /* 数えられないときは確かめる */ }
   if (n === 0) return true;
@@ -522,7 +525,7 @@ async function wipeDevice(email, how, { provider, discard } = {}) {
     await discard?.();
     await clearExports(); // アプリ版: 書き出した PDF のキャッシュも消す
     await db.wipeAll({
-      onBlocked: () => msg(emailMsg(), 'ほかのタブ・ウィンドウで開いている大学ノートを閉じてください。閉じると続きます。'),
+      onBlocked: () => msg(shownMsg(), 'ほかのタブ・ウィンドウで開いている大学ノートを閉じてください。閉じると続きます。'),
     });
     // 消せてから、前のアカウントの印を消す(消せなかったのに印だけ消すと、次は確かめずに同期してしまうため)
     try {
@@ -535,7 +538,7 @@ async function wipeDevice(email, how, { provider, discard } = {}) {
     console.warn(err);
     busy = false;
     setBusy(false);
-    msg(emailMsg(), 'この端末のノートを消せませんでした。ほかのタブで大学ノートを開いていたら閉じて、もう一度お試しください。');
+    msg(shownMsg(), 'この端末のノートを消せませんでした。ほかのタブで大学ノートを開いていたら閉じて、もう一度お試しください。');
   }
 }
 
@@ -665,7 +668,9 @@ const OAUTH_ERRORS = {
   use_email: () => 'このメールアドレスのアカウントがすでにあります。メールアドレスに届く番号でログインしてください。',
   unverified_owner: (n, via) => {
     const v = account.PROVIDER_NAMES[via];
-    const how = v && v !== n ? `ご自身で作った場合は「${v}で続ける」でログインしてください。` : 'ご自身で作った場合は、作ったときの方法でログインしてください。';
+    const how = !v ? 'ご自身で作った場合は、作ったときの方法でログインしてください。'
+      : v !== n ? `ご自身で作った場合は「${v}で続ける」でログインしてください。`
+        : `ご自身で作った場合は、そのときに使った別の${v}のアカウントでログインしてください。`;
     return `このメールアドレスで、${v ? `${v}のアカウントから` : 'ほかの方法で'}作られたアカウントがあります。${how}作った覚えがない場合は、メールアドレスに届く番号でログインすると、新しいアカウントを作成できます。`;
   },
   busy: () => 'ただいまログインできません。時間をおいてお試しください。',
