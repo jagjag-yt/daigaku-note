@@ -246,7 +246,7 @@ test('ログイン: 他人が同じアドレスへ送り続けても、別の IP
 });
 
 test('ログイン: 送信の回数の上限(続けての送信・IP ごと)', async () => {
-  const burstEnv = fakeEnv(); // OTP_BURST_SECONDS なし = 60秒
+  const burstEnv = fakeEnv({ OTP_DAILY_LIMIT: '100' }); // OTP_BURST_SECONDS なし = 60秒。IP ごとの1日の上限は30通
   const s2 = await startWorker(worker, burstEnv);
   try {
     const send = (email, ip) => fetch(s2.url + '/otp/send', { method: 'POST', headers: { 'content-type': 'application/json', ...(ip ? { 'cf-connecting-ip': ip } : {}) }, body: JSON.stringify({ email }) });
@@ -256,7 +256,7 @@ test('ログイン: 送信の回数の上限(続けての送信・IP ごと)', a
     assert.match((await r.json()).message, /続けて/);
     // 同じアドレスへの連打は「続けて」で断り、IP の枠は使わない(同じ IP のほかの人を締め出さない)
     for (let i = 0; i < 50; i++) await send('mash@example.com', '203.0.113.9');
-    // IP ごと: 1時間に30回まで(アドレスを変えても)。連打のあとでも、まだ29通送れる
+    // IP ごと: 1日30回まで(アドレスを変えても)。連打のあとでも、まだ29通送れる
     const st = [];
     for (let i = 0; i < 30; i++) st.push((await send(`ip${i}@example.com`, '203.0.113.9')).status);
     assert.deepEqual(st.slice(0, 29), Array(29).fill(200));
@@ -276,6 +276,35 @@ test('ログイン: 送信の回数の上限(続けての送信・IP ごと)', a
   } finally {
     await s2.close();
   }
+});
+
+test('ログイン: 他人が同じアドレスへ続けて送っても、本人は別の IP から待たずに送れる', async () => {
+  const e7 = fakeEnv(); // 続けての送信の間隔は60秒
+  const s7 = await startWorker(worker, e7);
+  try {
+    const send = (ip) => fetch(s7.url + '/otp/send', { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': ip }, body: JSON.stringify({ email: 'victim2@example.com' }) });
+    assert.equal((await send('203.0.113.60')).status, 200);
+    assert.equal((await send('203.0.113.60')).status, 429);
+    assert.equal((await send('198.51.100.60')).status, 200);
+  } finally {
+    await s7.close();
+  }
+});
+
+test('ログイン: 片づけが途中で止まっていたアカウントは、ログインの前に消し切って新しく作る', async () => {
+  const u = await login('purging@example.com');
+  await call('/dav/daigaku-note/files/' + '3'.repeat(64) + '.pdf', { method: 'PUT', body: 'pdf', headers: { authorization: basic(u.token) } });
+  env.DB.x("INSERT INTO inactive_notices (user_id, sent_at, purging) VALUES (?, '2020-01-01T00:00:00.000Z', 1)", u.userId);
+  // ログインのつもりでも、アカウントは消えたので「ありません」(同じ番号で作り直せる)
+  await api('/otp/send', { method: 'POST', body: { email: 'purging@example.com', purpose: 'login' } });
+  const code = mail.lastCode('purging@example.com');
+  const v = await api('/otp/verify', { method: 'POST', body: { email: 'purging@example.com', code, purpose: 'login' } });
+  assert.equal(v.status, 404);
+  assert.equal(env.DB.q('SELECT COUNT(*) AS n FROM users WHERE id = ?', u.userId)[0].n, 0);
+  assert.ok(![...env.FILES.objects.keys()].some((k) => k.startsWith(`u/${u.userId}/`)));
+  const again = await api('/otp/verify', { method: 'POST', body: { email: 'purging@example.com', code, purpose: 'signup' } });
+  assert.equal(again.status, 200);
+  assert.notEqual(again.data.userId, u.userId);
 });
 
 test('IP: IPv6 の /64 の取り出し', () => {

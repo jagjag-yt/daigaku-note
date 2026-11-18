@@ -56,6 +56,8 @@ function setLocalOnly(on) {
  * 本棚・ノートを出してよいか。ログインしている、またはこの端末だけで使うと決めた。
  * ただしログインが切れた(ほかの端末から外された・退会した)ときは、まずログインのページを出す
  */
+/** この端末で前にログインしたことがある(ログアウトした・ログインが切れた) */
+export const hadAccount = () => !!(dav.config().account || loadLast());
 export const canUse = () => loggedIn() || (localOnly() && !(dav.config().account && dav.authExpired()));
 const token = () => dav.config().pass;
 const fresh = (v) => v && now() - v.sentAt < CODE_MINUTES * 60_000;
@@ -504,7 +506,7 @@ function resumeAfterWipe() {
 
 /** アカウントの画面を開く */
 export function open() {
-  if (!loggedIn()) { goAuth(dav.config().account || loadLast() ? 'login' : 'signup'); return; }
+  if (!loggedIn()) { goAuth(hadAccount() ? 'login' : 'signup'); return; }
   renderInfo();
   h.showDialog($('#account-dialog'), null);
 }

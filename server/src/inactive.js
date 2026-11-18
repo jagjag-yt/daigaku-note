@@ -41,7 +41,7 @@ export async function sweepInactive(env, { sendMail, purge }) {
   // 2. 先に、お知らせ済みで期限が来た人を消す。メールに書いた日(お知らせの30日後)の翌日より前には消さない
   const due = await env.DB.prepare(
     `SELECT u.id, u.email, n.sent_at FROM users u JOIN inactive_notices n ON n.user_id = u.id
-     WHERE n.purging = 1 OR (n.sent_at < ? AND u.last_seen_at <= n.sent_at AND ${NOT_PAID}) LIMIT ?`,
+     WHERE n.purging = 1 OR (n.sent_at < ? AND u.last_seen_at <= n.sent_at AND ${NOT_PAID}) ORDER BY n.purging DESC, n.sent_at LIMIT ?`,
   ).bind(daysAgo(NOTICE_DAYS + 1), now, PER_RUN).all();
   for (const u of due.results) {
     // 選んだあとに使われていないかを、消す直前に確かめる(お知らせの記録を消せた1回だけが消しに進む)

@@ -718,6 +718,8 @@ function updateHomeTip() {
   let closed = false;
   try { closed = localStorage.getItem(HOME_TIP_KEY) === '1'; } catch {}
   tip.hidden = closed || accountUI.loggedIn() || !isIosSafari();
+  // 前にログインしたことがある人には「ログインする」(アカウントを作り直させない)
+  tip.querySelector('.home-tip-signup').textContent = accountUI.hadAccount() ? 'ログインする' : 'アカウントを作る';
 }
 function bindHomeTip() {
   const tip = $('#home-tip');
@@ -726,7 +728,7 @@ function bindHomeTip() {
     try { localStorage.setItem(HOME_TIP_KEY, '1'); } catch {}
     tip.hidden = true;
   });
-  tip.querySelector('.home-tip-signup').addEventListener('click', () => accountUI.goAuth('signup'));
+  tip.querySelector('.home-tip-signup').addEventListener('click', () => accountUI.goAuth(accountUI.hadAccount() ? 'login' : 'signup'));
   updateHomeTip();
 }
 

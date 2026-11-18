@@ -215,14 +215,15 @@ async function handleOtpSend(request, env) {
   // 先に IP の枠を数えると、1人が「再送」を連打しただけで、同じ IP の全員が1日締め出されてしまう
   const ip = clientIp(request);
   const rate = (bucket, limit, sec) => allowRate(env.DB, bucket, limit, sec);
-  if (!(await rate(`otp:burst:${email}`, 1, otpBurstSeconds(env)))) return fail(429, '続けて送信できません。1分ほど待ってからお試しください。');
+  // 続けての送信はアドレスと IP の組で数える(アドレスだけだと、他人が送り続けて本人を締め出せるため)
+  if (!(await rate(`otp:burst:${email}${ip ? `:${ip}` : ''}`, 1, otpBurstSeconds(env)))) return fail(429, '続けて送信できません。1分ほど待ってからお試しください。');
   const tooMany = () => fail(429, '送信の回数が上限に達しました。しばらく待ってからお試しください。');
   if (ip && !(await rate(`otp:pair:${email}:${ip}`, 10, 24 * 60 * 60))) return tooMany();
   if (!(await rate(`otp:send:${email}`, 30, 24 * 60 * 60))) return tooMany();
-  // 大学など、大勢が1つの IP を共有する場所があるので、1時間の上限は大きめ。1日の上限で、1か所からサービス全体の枠を使い切れないようにする。
+  // IP ごとの1日の上限は、サービス全体の1日の枠の3割(/48 は45%)。1か所からサービス全体の枠を使い切れないようにする。
+  // 大学など大勢が1つの IP を共有する場所では足りなくなるが、それは全体の枠(無料の Resend は1日100通)が小さいため。
+  // 枠を上げれば(Resend を有料にして OTP_DAILY_LIMIT を上げれば)一緒に上がる。
   // IPv6 は /64 に加えて /48 でも数える(/48 をまるごと借りられるサービスがあるため)
-  if (ip && !(await rate(`otp:ip:${ip}`, 30, 60 * 60))) return tooMany();
-  // 1日の上限は、サービス全体の1日の枠の3割(/48 は45%)。枠を上げれば(Resend を有料にしたら)一緒に上がる
   const daily = otpLimit(env, 'OTP_DAILY_LIMIT', 90);
   if (ip && !(await rate(`otp:ipday:${ip}`, Math.max(10, Math.floor(daily * 0.3)), 24 * 60 * 60))) return tooMany();
   const ip48 = ip && ip.endsWith('::/64') ? `${ip.split(':').slice(0, 3).join(':')}::/48` : null;
@@ -318,7 +319,16 @@ async function handleOtpVerify(request, env) {
     return fail(400, `番号が違います。あと${Math.max(0, OTP_MAX_ATTEMPTS - claim.attempts)}回まで試せます。`);
   }
   // ログインなのにアカウントがない: 鍵は出さず、番号も使用済みにしない(このままアカウントを作れるように)
-  const existing = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
+  let existing = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
+  // 長く使われていないアカウントの片づけが途中で止まっていたら、先に消し切る(半分消えた置き場のままログインさせない)
+  if (existing) {
+    const purging = await env.DB.prepare('SELECT 1 AS p FROM inactive_notices WHERE user_id = ? AND purging = 1').bind(existing.id).first().catch(() => null);
+    if (purging) {
+      const done = await purgeUser(env, existing.id, email, { keepOtp: true }).catch((err) => (console.log('purge on login failed', String(err)), false));
+      if (!done) return fail(503, 'ただいまログインできません。時間をおいてお試しください。');
+      existing = null;
+    }
+  }
   if (purpose === 'login' && !existing) {
     // この回の試行は数えない(間違えたあとに正しい番号を入れた人が、同じ番号でアカウントを作れなくならないように)
     await env.DB.prepare('UPDATE otp_requests SET attempts = attempts - 1 WHERE id = ? AND attempts > 0').bind(row.id).run();
@@ -425,7 +435,7 @@ async function handleDeleteAccount(env, device) {
  * アプリは送り済みと思って送り直さないため。消し切れば、次のログインで新しい利用者になり、端末から送り直される)。
  * R2 で失敗したら false(利用者の行は残るので、もう一度やれば続きから消せる)。
  */
-export async function purgeUser(env, uid, email) {
+export async function purgeUser(env, uid, email, { keepOtp = false } = {}) {
   await env.DB.prepare('DELETE FROM devices WHERE user_id = ?').bind(uid).run();
   try {
     await deletePrefix(env.FILES, `u/${uid}/`);
@@ -443,9 +453,10 @@ export async function purgeUser(env, uid, email) {
     env.DB.prepare('DELETE FROM op_logs WHERE user_id = ?').bind(uid),
     env.DB.prepare('DELETE FROM blobs WHERE user_id = ?').bind(uid),
     env.DB.prepare('DELETE FROM rate_limits WHERE bucket = ?').bind(`coupon:u:${uid}`),
-    env.DB.prepare('DELETE FROM otp_requests WHERE email = ?').bind(String(email ?? '').toLowerCase()),
     env.DB.prepare('DELETE FROM rate_limits WHERE bucket = ?').bind(`dav:w:${uid}`),
     env.DB.prepare('DELETE FROM users WHERE id = ?').bind(uid),
+    // ログインの途中で消し切るときは、いま使っている番号を残す(同じ番号でアカウントを作り直せるように)
+    ...(keepOtp ? [] : [env.DB.prepare('DELETE FROM otp_requests WHERE email = ?').bind(String(email ?? '').toLowerCase())]),
   ]);
   return true;
 }
