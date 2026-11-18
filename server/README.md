@@ -12,9 +12,11 @@ WebDAV の URL・ユーザー名・アプリパスワードを手で入れなく
 | ファイル | 中身 |
 |---|---|
 | `src/index.js` | 入口・ログイン(6桁の番号)・端末の一覧・退会・定期実行 |
+| `src/inactive.js` | 長く使われていないアカウントの片づけ(365日使われていなければお知らせのメール、30日後に削除。Pro・Max は除く。日数は vars の INACTIVE_DAYS で変えられる) |
 | `src/dav.js` | WebDAV のまね(アプリの同期が使う MKCOL・PROPFIND・PUT・GET・HEAD だけ) |
 | `src/lib.js` | 小さな道具(ハッシュ・回数制限など) |
 | `src/coupon.js` | クーポンコード(使う・特典の一覧) |
+| `src/plan.js` | プラン(無料・Pro・Max)ごとの容量・端末の数・広告の有無 |
 | `scripts/coupon.mjs` | クーポンコードの発行・一覧・停止(運営者のパソコンで使う) |
 | `schema.sql` | D1 の表 |
 | `wrangler.jsonc` | デプロイの設定 |

@@ -548,6 +548,51 @@ test('定期実行: 期限切れの行を消し、使っている量を数え直
   assert.equal(env.DB.q('SELECT bytes_used FROM users WHERE id = ?', userId)[0].bytes_used, 0);
 });
 
+test('定期実行: 長く使われていないアカウントは、お知らせから30日後に消す。使われたら取り消す', async () => {
+  const old = '2020-01-01T00:00:00.000Z';
+  const a = await login('idle-a@example.com'); // お知らせ → 消す
+  const b = await login('idle-b@example.com'); // お知らせ → ログインし直したので残す
+  const c = await login('idle-c@example.com'); // Max なので片づけない
+  const d = await login('idle-d@example.com'); // 最近使っている
+  await call('/dav/daigaku-note/files/' + '2'.repeat(64) + '.pdf', { method: 'PUT', body: 'pdf', headers: { authorization: basic(a.token) } });
+  for (const u of [a, b, c]) env.DB.x('UPDATE users SET last_seen_at = ? WHERE id = ?', old, u.userId);
+  env.DB.x("INSERT INTO perks (user_id, perk, granted_at) VALUES (?, 'max', ?)", c.userId, old);
+  const ids = [a, b, c, d].map((u) => u.userId);
+  const notices = () => env.DB.q(`SELECT user_id FROM inactive_notices WHERE user_id IN (${ids.map(() => '?').join(',')}) ORDER BY user_id`, ...ids).map((r) => r.user_id);
+  const users = () => env.DB.q(`SELECT id FROM users WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).length;
+
+  const before = mail.mails.length;
+  await cleanup(env);
+  const sent = mail.mails.slice(before).filter((m) => /idle-/.test(m.to[0]));
+  assert.deepEqual(sent.map((m) => m.to[0]).sort(), ['idle-a@example.com', 'idle-b@example.com']);
+  assert.match(sent[0].subject, /削除のお知らせ/);
+  assert.deepEqual(notices(), [a.userId, b.userId].sort());
+
+  // 2回目では、まだ30日たっていないので消さない。お知らせも二重には送らない
+  const before2 = mail.mails.length;
+  await cleanup(env);
+  assert.equal(mail.mails.slice(before2).filter((m) => /idle-/.test(m.to[0])).length, 0);
+  assert.equal(users(), 4);
+
+  // 31日たった。b はその間にログインした
+  env.DB.x('UPDATE inactive_notices SET sent_at = ? WHERE user_id IN (?, ?)', '2020-06-01T00:00:00.000Z', a.userId, b.userId);
+  await login('idle-b@example.com');
+  await cleanup(env);
+  assert.equal(env.DB.q('SELECT COUNT(*) AS n FROM users WHERE id = ?', a.userId)[0].n, 0);
+  assert.ok(![...env.FILES.objects.keys()].some((k) => k.startsWith(`u/${a.userId}/`)));
+  assert.equal(users(), 3);
+  assert.deepEqual(notices(), []);
+});
+
+test('定期実行: お知らせのメールが送れなかった人は、記録も削除もしない', async () => {
+  const u = await login('idle-fail@example.com');
+  env.DB.x('UPDATE users SET last_seen_at = ? WHERE id = ?', '2020-01-01T00:00:00.000Z', u.userId);
+  mail.fail = true;
+  try { await cleanup(env); } finally { mail.fail = false; }
+  assert.equal(env.DB.q('SELECT COUNT(*) AS n FROM inactive_notices WHERE user_id = ?', u.userId)[0].n, 0);
+  assert.equal(env.DB.q('SELECT COUNT(*) AS n FROM users WHERE id = ?', u.userId)[0].n, 1);
+});
+
 // ---- クーポンコード -------------------------------------------------------
 
 

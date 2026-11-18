@@ -49,6 +49,7 @@ import {
 import { handleDav, parseDavPath } from './dav.js';
 import { activePerks, handleCouponRedeem } from './coupon.js';
 import { planFromPerks, userPlan } from './plan.js';
+import { sweepInactive } from './inactive.js';
 
 /**
  * 配信されている版。/health に載せて、外から「どれが動いているか」を確かめられるようにする。
@@ -156,7 +157,13 @@ async function authenticate(request, env) {
   }
   // 使った時刻は1時間に1回だけ書く(同期は1分ごとに来るので、毎回書くと書き込みの無料枠を無駄に使う)
   const hourAgo = new Date(Date.now() - 3_600_000).toISOString();
-  await env.DB.prepare('UPDATE devices SET last_used_at = ? WHERE id = ? AND last_used_at < ?').bind(nowIso(), device.id, hourAgo).run();
+  // 利用者の「最後に使った日」も同じ間隔で書く(長く使われていないアカウントの片づけ src/inactive.js で使う)
+  const touched = await env.DB.prepare('UPDATE devices SET last_used_at = ? WHERE id = ? AND last_used_at < ?').bind(nowIso(), device.id, hourAgo).run();
+  if (touched.meta?.changes) {
+    await env.DB.prepare('UPDATE users SET last_seen_at = ? WHERE id = ? AND last_seen_at < ?').bind(nowIso(), device.user_id, hourAgo).run();
+    // 片づけのお知らせを送ったあとに使われたら、取り消す
+    await env.DB.prepare('DELETE FROM inactive_notices WHERE user_id = ?').bind(device.user_id).run().catch(() => {});
+  }
   return device;
 }
 
@@ -207,32 +214,13 @@ async function handleOtpSend(request, env) {
   return json({ ok: true, expiresInMinutes: OTP_MINUTES, ...(echo ? { devCode: code } : {}) });
 }
 
-/**
- * Resend でメールを送る。文面は、利用者が選んだ purpose だけで変える
- * (アカウントがあるかどうかでは変えない。メールを見られる人以外に登録の有無が分からないように)。
- */
-async function sendOtpMail(env, email, code, purpose) {
-  const signup = purpose === 'signup';
-  const body = {
-    from: env.MAIL_FROM,
-    to: [email],
-    subject: signup ? `大学ノートのアカウント作成の確認番号: ${code}` : `大学ノートのログイン番号: ${code}`,
-    text: [
-      signup ? '大学ノートのアカウント作成の確認番号は次のとおりです。' : '大学ノートのログイン番号は次のとおりです。',
-      '',
-      `    ${code}`,
-      '',
-      `この番号は ${OTP_MINUTES} 分で使えなくなります。`,
-      'お心当たりがない場合は、このメールを破棄してください(番号を誰にも教えないでください)。',
-      '',
-      '大学ノート https://jagjag-yt.github.io/daigaku-note/',
-    ].join('\n'),
-  };
+/** メールを1通送る(Resend)。送れたら { ok: true } */
+async function sendMail(env, email, subject, text) {
   try {
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ from: env.MAIL_FROM, to: [email], subject, text }),
     });
     if (!res.ok) {
       console.log('resend failed', res.status, await res.text());
@@ -243,6 +231,26 @@ async function sendOtpMail(env, email, code, purpose) {
     console.log('resend error', String(err));
     return { ok: false };
   }
+}
+
+/**
+ * ログインの番号のメール。文面は、利用者が選んだ purpose だけで変える
+ * (アカウントがあるかどうかでは変えない。メールを見られる人以外に登録の有無が分からないように)。
+ */
+async function sendOtpMail(env, email, code, purpose) {
+  const signup = purpose === 'signup';
+  const subject = signup ? `大学ノートのアカウント作成の確認番号: ${code}` : `大学ノートのログイン番号: ${code}`;
+  const text = [
+    signup ? '大学ノートのアカウント作成の確認番号は次のとおりです。' : '大学ノートのログイン番号は次のとおりです。',
+    '',
+    `    ${code}`,
+    '',
+    `この番号は ${OTP_MINUTES} 分で使えなくなります。`,
+    'お心当たりがない場合は、このメールを破棄してください(番号を誰にも教えないでください)。',
+    '',
+    '大学ノート https://jagjag-yt.github.io/daigaku-note/',
+  ].join('\n');
+  return sendMail(env, email, subject, text);
 }
 
 /** 6桁の数字を確かめ、端末に鍵を渡す。 */
@@ -367,29 +375,38 @@ async function handleDeviceDelete(url, env, device) {
  * 2 で失敗したら、利用者の行は残る。もう一度ログインして退会すれば、続きから消せる。
  */
 async function handleDeleteAccount(env, device) {
-  const uid = device.user_id;
+  const done = await purgeUser(env, device.user_id, device.email);
+  if (!done) return fail(500, '途中で失敗しました。もう一度ログインしてから、退会をやり直してください。');
+  return json({ ok: true });
+}
+
+/**
+ * 利用者を消す(退会・長く使われていないアカウントの片づけ)。消せたら true。
+ * R2 で失敗したら false(利用者の行は残るので、もう一度やれば続きから消せる)。
+ */
+export async function purgeUser(env, uid, email) {
   await env.DB.prepare('DELETE FROM devices WHERE user_id = ?').bind(uid).run();
   try {
     await deletePrefix(env.FILES, `u/${uid}/`);
   } catch (err) {
     console.log('r2 delete failed', String(err));
-    return fail(500, '途中で失敗しました。もう一度ログインしてから、退会をやり直してください。');
+    return false;
   }
-  // 特典とクーポンの記録は、表がまだない(schema.sql を流す前に配信した)ときでも退会を止めないよう、batch の外で行う。
+  // 特典・クーポン・お知らせの記録は、表がまだない(schema.sql を流す前に配信した)ときでも止めないよう、batch の外で行う。
   // 使ったクーポンは「使用済み」のまま残し、誰が使ったかだけを消す(NULL に戻すと、もう一度使えてしまうため)
-  for (const sql of ['DELETE FROM perks WHERE user_id = ?', "UPDATE coupons SET redeemed_by = 'deleted' WHERE redeemed_by = ?"]) {
-    await env.DB.prepare(sql).bind(uid).run().catch((err) => console.log('perks cleanup failed', String(err)));
+  for (const sql of ['DELETE FROM perks WHERE user_id = ?', "UPDATE coupons SET redeemed_by = 'deleted' WHERE redeemed_by = ?", 'DELETE FROM inactive_notices WHERE user_id = ?']) {
+    await env.DB.prepare(sql).bind(uid).run().catch((err) => console.log('cleanup failed', String(err)));
   }
   await env.DB.batch([
     env.DB.prepare('DELETE FROM op_files WHERE user_id = ?').bind(uid),
     env.DB.prepare('DELETE FROM op_logs WHERE user_id = ?').bind(uid),
     env.DB.prepare('DELETE FROM blobs WHERE user_id = ?').bind(uid),
     env.DB.prepare('DELETE FROM rate_limits WHERE bucket = ?').bind(`coupon:u:${uid}`),
-    env.DB.prepare('DELETE FROM otp_requests WHERE email = ?').bind(String(device.email ?? '').toLowerCase()),
+    env.DB.prepare('DELETE FROM otp_requests WHERE email = ?').bind(String(email ?? '').toLowerCase()),
     env.DB.prepare('DELETE FROM rate_limits WHERE bucket = ?').bind(`dav:w:${uid}`),
     env.DB.prepare('DELETE FROM users WHERE id = ?').bind(uid),
   ]);
-  return json({ ok: true });
+  return true;
 }
 
 /** R2 の、名前が prefix で始まるものを全部消す(1回に1000個ずつ)。 */
@@ -408,6 +425,13 @@ async function deletePrefix(bucket, prefix) {
  *   ・users.bytes_used を、変更のファイルと PDF・画像の大きさの合計に合わせ直す(途中で止まった書き込みなどで、ずれていたら)
  */
 export async function cleanup(env) {
+  await cleanupRows(env);
+  // 長く使われていないアカウントの片づけ(お知らせ → 30日後に削除)。失敗しても、ほかの掃除は済んでいる
+  await sweepInactive(env, { sendMail: (email, subject, text) => sendMail(env, email, subject, text), purge: (uid, email) => purgeUser(env, uid, email) })
+    .catch((err) => console.log('inactive sweep failed', String(err)));
+}
+
+async function cleanupRows(env) {
   const now = nowIso();
   const dayAgo = new Date(Date.now() - 86_400_000).toISOString();
   const idle = new Date(Date.now() - TOKEN_IDLE_DAYS * 86_400_000).toISOString();

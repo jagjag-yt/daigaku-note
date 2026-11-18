@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS rate_limits (
 -- コードそのものは持たず、ハッシュだけ(src/coupon.js の couponHash)。1つのコードは1回だけ使える。
 CREATE TABLE IF NOT EXISTS coupons (
   code_hash   TEXT PRIMARY KEY,
-  perk        TEXT NOT NULL,              -- 付ける特典。今は 'adfree'(広告なし)だけ
+  perk        TEXT NOT NULL,              -- 付ける特典。'adfree'(広告なし)・'pro'・'max'
   days        INTEGER,                    -- 特典の日数。NULL ならずっと
   expires_at  TEXT,                       -- このコードを使える期限。NULL なら期限なし
   note        TEXT NOT NULL DEFAULT '',   -- 発行したときのメモ(「テスト協力 2026-11」など)。利用者には見せない
@@ -111,5 +111,12 @@ CREATE TABLE IF NOT EXISTS perks (
   expires_at  TEXT,                       -- NULL ならずっと
   coupon_hash TEXT,                       -- どのコードで付いたか
   PRIMARY KEY (user_id, perk),
+  FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);
+
+-- 長いあいだ使われていないアカウントに、削除のお知らせを送った記録(src/inactive.js)。使われたら消す。
+CREATE TABLE IF NOT EXISTS inactive_notices (
+  user_id TEXT PRIMARY KEY,
+  sent_at TEXT NOT NULL,
   FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 );
