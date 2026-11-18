@@ -234,7 +234,7 @@ async function showLocalNotice() {
   $('#auth-offline').hidden = navigator.onLine;
   const parts = [];
   if (cfg.url && !cfg.account) parts.push('自分のサーバー(WebDAV)での同期は、このバージョンから使えなくなりました。ログインすると、この端末で書いた内容を大学ノートアカウントで同期します。ほかの端末で書いた内容は、その端末でもログインすると同期されます。');
-  if (n > 0) parts.push(`この端末にあるノート(${n}冊)は消えません。この端末で書いた内容は、ログインすると、そのアカウントに同期されます。`);
+  if (n > 0) parts.push(`この端末にあるノート(${n}冊)は消えません。この端末で書いた内容は、ログインすると、ログイン先のアカウントに同期されます。`);
   el.textContent = parts.join('');
   el.hidden = !parts.length;
 }
