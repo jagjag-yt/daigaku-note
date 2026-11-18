@@ -327,7 +327,7 @@ test('ログイン: 片づけの続きに失敗したら 503。番号は使え�
   assert.equal(env.DB.q('SELECT COUNT(*) AS n FROM inactive_notices WHERE user_id = ?', u.userId)[0].n, 0);
 });
 
-test('ログイン: 他人がいくつもの IP からアドレスの枠を使い切っても、本人は自分の IP から受け取れる', async () => {
+test('ログイン: 他人が4つの IP からアドレスの枠を使い切っても、本人は自分の IP から受け取れる', async () => {
   const e8 = fakeEnv({ OTP_BURST_SECONDS: '0' });
   const s8 = await startWorker(worker, e8);
   try {

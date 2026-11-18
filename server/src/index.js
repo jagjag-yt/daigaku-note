@@ -229,7 +229,8 @@ async function handleOtpSend(request, env) {
   const ip48 = ip && ip.endsWith('::/64') ? `${ip.split(':').slice(0, 3).join(':')}::/48` : null;
   if (ip48 && !(await rate(`otp:ipday:${ip48}`, Math.max(15, Math.floor(daily * 0.45)), 24 * 60 * 60))) return tooMany();
   // アドレスごとの上限(受信箱を埋められないため)。ただし、その IP からそのアドレスへの1日の最初の2通は数えない
-  // (他人がいくつかの IP から送り続けて、アドレスの枠を使い切っても、本人は自分の IP から番号を受け取れるように)
+  // (他人が4つまでの IP から送り続けて、アドレスの枠を使い切っても、本人は自分の IP から番号を受け取れるように。
+  // それより多くの IP から送られると防げない。Turnstile などで機械からの送信を止める必要がある)
   // 数えない分にも、アドレスごとに1日10通の上限を付ける(たくさんの IP から送って、受信箱を埋められないように)。
   // IP ごとの上限を通ったあとに調べる(IP の上限で断られる送信で、本人の2通を使い切らないように)
   const fresh = !!ip && (await rate(`otp:pairfresh:${email}:${ip}`, 2, 24 * 60 * 60)) && (await rate(`otp:sendfresh:${email}`, 10, 24 * 60 * 60));
