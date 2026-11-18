@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <!-- 読み込めるもの・通信できる先を絞る(他人のノートなどに仕込まれたスクリプトを動かさない・鍵をよそへ送らせないため)。
        通信先は同期サーバーと、開発・試験用の手元のサーバーだけ。広告などを足すときは、ここに足す -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://note-api.quiz-make.com http://localhost:* http://127.0.0.1:*; worker-src 'self' blob:; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://note-api.quiz-make.com http://localhost:* http://127.0.0.1:*; frame-src 'self' blob:; worker-src 'self' blob:; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>大学ノート</title>
   <meta name="description" content="無料・オフラインで使える手書きノート">
@@ -19,7 +19,7 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- ログイン・アカウント作成(ログインしていないときは、ここだけが出る) -->
+  <!-- ログイン・アカウント作成(ログインしていないときに最初に出る。ログインせずに、この端末だけで使うこともできる) -->
   <section id="auth" class="auth" hidden>
     <div class="auth-wrap">
       <div class="auth-brand"><img src="icons/icon.svg" alt="" width="40" height="40"><span>大学ノート</span></div>
@@ -33,12 +33,13 @@
           <p class="acct-msg" id="auth-login-msg" role="alert"></p>
           <button type="submit" class="primary acct-wide">番号を送る</button>
           <p class="auth-switch">アカウントをお持ちでない方は、<a href="#/signup" id="auth-to-signup">アカウントを作成</a></p>
+          <button type="button" class="auth-skip link">ログインせずに、この端末だけで使う</button>
         </form>
 
         <!-- アカウント作成 -->
         <form id="auth-signup-form" class="acct-step" novalidate hidden>
           <h1 id="auth-signup-heading" class="acct-title" tabindex="-1">アカウントを作成</h1>
-          <p class="acct-lead">大学ノートを使うには、無料のアカウントが必要です。</p>
+          <p class="acct-lead">無料のアカウントを作ると、ノートをほかの端末と同期できます。</p>
           <ul class="acct-points">
             <li data-icon="check" data-icon-size="18"><span>メールアドレスだけで作れます。パスワードは不要です</span></li>
             <li data-icon="check" data-icon-size="18"><span>iPad・スマホ・パソコンのノートが自動で同期されます</span></li>
@@ -48,6 +49,7 @@
           <p class="acct-msg" id="auth-signup-msg" role="alert"></p>
           <button type="submit" class="primary acct-wide">番号を送る</button>
           <p class="auth-switch">すでにアカウントをお持ちの方は、<a href="#/login" id="auth-to-login">ログイン</a></p>
+          <button type="button" class="auth-skip link">ログインせずに、この端末だけで使う</button>
         </form>
 
         <!-- 6桁の番号(ログイン・アカウント作成の共通) -->
@@ -227,6 +229,13 @@
     <h2>同期</h2>
     <section id="acct-summary" class="acct-summary">
       <h3>大学ノートアカウント</h3>
+      <div id="acct-summary-out" hidden>
+        <p>ログインしていません。ノートはこの端末だけに保存されています。ログインすると、ほかの端末と同期できます。</p>
+        <div class="row">
+          <button type="button" id="acct-summary-signup" class="primary">アカウントを作成</button>
+          <button type="button" id="acct-summary-login">ログイン</button>
+        </div>
+      </div>
       <div id="acct-summary-in">
         <p><strong id="acct-summary-who"></strong> で同期しています。</p>
         <p class="small sync-status"></p>

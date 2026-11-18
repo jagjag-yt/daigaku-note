@@ -12,7 +12,7 @@
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const HASH = /^[0-9a-f]{64}$/;
 const COLOR = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
-const MAX_TEXT = 20_000;
+const MAX_TEXT = 1_000_000; // テキストボックスの文字数(長い文章を黙って切らない大きさ)
 export const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 export const FILE_TYPES = new Set([...IMAGE_TYPES, 'application/pdf']);
 

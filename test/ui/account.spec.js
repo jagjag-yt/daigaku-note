@@ -74,7 +74,7 @@ const logout = async (page) => {
   await expect(page.locator('#auth-login-form')).toBeVisible();
 };
 
-test('ログインしないと使えない。ログインとアカウント作成は別のページ', async ({ browser }, testInfo) => {
+test('ログインしていないと、最初はログイン・アカウント作成のページ。2つは別のページ', async ({ browser }, testInfo) => {
   const a = await open(browser);
   await expect(a).toHaveURL(/#\/signup$/);
   // 本棚・ノートの住所を開いても、ログインのページが出る
@@ -328,4 +328,41 @@ test('クーポンコード: アカウントの画面で使うと特典が付く
   await a.keyboard.press('Escape');
   await a.locator('#account-btn').click();
   await expect(a.locator('#acct-perks')).toContainText('広告なし');
+});
+
+test('ログインせずに、この端末だけで使える。あとからアカウントを作ると、そのノートが同期される', async ({ browser }, testInfo) => {
+  const a = await open(browser);
+  await a.locator('#auth-signup-form .auth-skip').click();
+  await expect(a.locator('#library')).toBeVisible();
+  await expect(a).toHaveURL(/#\/$/);
+  await newNote(a, 'ローカルのノート');
+  // 読み込み直しても、ログインのページは出ない
+  await a.reload();
+  await expect(a.locator('#library')).toBeVisible();
+  await expect(a.locator('#auth')).toBeHidden();
+  // 同期のダイアログは、ログインをすすめる
+  await a.locator('#sync-btn').click();
+  await expect(a.locator('#acct-summary-out')).toBeVisible();
+  await expect(a.locator('#acct-summary-in')).toBeHidden();
+  // 人のボタンからアカウント作成のページへ行き、ログインせずに戻れる
+  await a.keyboard.press('Escape');
+  await a.locator('#account-btn').click();
+  await expect(a.locator('#auth-signup-form')).toBeVisible();
+  await a.locator('#auth-signup-form .auth-skip').click();
+  await expect(a.locator('#notes .card', { hasText: 'ローカルのノート' })).toBeVisible();
+  // アカウントを作ると、この端末のノートがアカウントに同期され、ほかの端末に届く
+  const email = freshEmail('local', testInfo);
+  await a.locator('#sync-btn').click();
+  await a.locator('#acct-summary-signup').click();
+  await expect(a.locator('#auth-signup-form')).toBeVisible();
+  await signup(a, email);
+  await expect(a.locator('#notes .card', { hasText: 'ローカルのノート' })).toBeVisible();
+  await expect(a.locator('.sync-status').first()).toContainText(/同期しました/, { timeout: 15_000 });
+  const b = await open(browser);
+  await login(b, email);
+  await expect(b.locator('#notes .card', { hasText: 'ローカルのノート' })).toBeVisible({ timeout: 15_000 });
+  // ログアウトすると、ログインのページに戻る(この端末だけで使うこともできる)
+  await logout(a);
+  await a.locator('#auth-login-form .auth-skip').click();
+  await expect(a.locator('#notes .card', { hasText: 'ローカルのノート' })).toBeVisible();
 });

@@ -246,8 +246,9 @@ function route() {
   closePopover();
   if (!$('#toast-act').hidden) $('#toast').hidden = true; // 「元に戻す」付きのトーストだけ、画面が変わったら消す
   for (const d of document.querySelectorAll('dialog[open]')) d.close();
-  // ログインしないと使えない: ログインしていなければ、本棚・ノートの代わりにログイン・アカウント作成のページを出す
-  if (!accountUI.loggedIn()) {
+  // ログインしていない(この端末だけで使うとも決めていない)なら、本棚・ノートの代わりにログイン・アカウント作成のページを出す。
+  // この端末だけで使っているときも、ログイン・アカウント作成の住所を開いたら、そのページを出す
+  if (!accountUI.canUse() || (!accountUI.loggedIn() && /^#\/(login|signup)\b/.test(location.hash))) {
     closeEditor();
     $('#library').hidden = true;
     $('#editor').hidden = true;
@@ -390,6 +391,8 @@ function bindNative() {
       // アカウント作成のページからはログインのページへ。番号の画面からはメールアドレスの画面へ
       if (!$('#acct-code-form').hidden) { $('#acct-back').click(); return true; }
       if (/^#\/signup\b/.test(location.hash)) { location.replace('#/login'); return true; }
+      // この端末だけで使っている人が、本棚からログインのページに来ていたなら本棚へ戻す
+      if (accountUI.localOnly()) { location.replace('#/'); return true; }
       return false;
     }
     if (/^#\/note\//.test(location.hash)) {
@@ -470,7 +473,7 @@ function tplPicker(el, value, size = PAGE_A4) {
     b.className = 'tpl-opt custom';
     b.dataset.tpl = 'c:' + t.id;
     b.setAttribute('role', 'radio');
-    b.innerHTML = `<img alt="" style="--ar:${t.w} / ${t.h}" aria-hidden="true"><span></span>`;
+    b.innerHTML = `<img alt="" style="--ar:${Number(t.w) || 1} / ${Number(t.h) || 1}" aria-hidden="true"><span></span>`;
     b.querySelector('span').textContent = t.name;
     b.title = `${t.name}(長押し・右クリック・Delete キーで削除)`;
     tplThumb(t).then((url) => { if (url) b.querySelector('img').src = url; });
@@ -843,7 +846,7 @@ async function runSearch() {
   // ゴミ箱のノートは開けないので、押すと「元に戻す / 完全に削除」を出す
   const trash = f === 'trash';
   box.innerHTML = hits.slice(0, 100).map((h) => `
-    ${trash ? `<button type="button" class="hit" data-id="${h.noteId}" aria-haspopup="menu">` : `<a class="hit" href="#/note/${h.noteId}${h.pageId ? '/p/' + h.pageId : ''}">`}
+    ${trash ? `<button type="button" class="hit" data-id="${esc(h.noteId)}" aria-haspopup="menu">` : `<a class="hit" href="#/note/${esc(h.noteId)}${h.pageId ? '/p/' + esc(h.pageId) : ''}">`}
       <span class="hit-title">${h.pageId ? esc(h.title) : h.snippet}${h.pageNo ? ` <span class="hit-page">${h.pageNo}ページ目</span>` : ''}</span>
       ${h.pageId ? `<span class="hit-snip">${h.snippet}</span>` : ''}
       <span class="hit-src">${h.source}</span>
@@ -1055,7 +1058,7 @@ function folderCard(fo, fs, liveNotes) {
   const card = document.createElement('div');
   card.className = 'card folder-card';
   card.innerHTML = `
-    <a class="cover folder-cover" href="#/f/${fo.id}">${icon('folder', 64)}</a>
+    <a class="cover folder-cover" href="#/f/${esc(fo.id)}">${icon('folder', 64)}</a>
     <div class="meta">
       <button class="name-btn" aria-haspopup="menu" title="フォルダの操作"><span class="name"></span>${icon('chevron', 16)}</button>
       <div class="date"></div>
@@ -2203,7 +2206,7 @@ async function openNote(id, pageId) {
     if (note.locked && !S.unlocked.has(id)) {
       if (!(await unlockNote(note))) { if (!S.note) location.hash = '#/'; return; }
     }
-    if (!accountUI.loggedIn()) return; // 読み込んでいるあいだにログインが切れた(ログインのページを出したまま)
+    if (!accountUI.canUse()) return; // 読み込んでいるあいだにログインが切れた(ログインのページを出したまま)
     S.note = note;
     S.undo = [];
     S.redo = [];

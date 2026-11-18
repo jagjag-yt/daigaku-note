@@ -398,6 +398,7 @@ p.auth-offline { margin: 0 0 14px; padding: 10px 12px; border-radius: 10px; back
 p.auth-switch { margin: 18px 0 0; padding-top: 6px; line-height: 1.4; border-top: 1px solid var(--line); text-align: center; color: var(--muted); }
 .auth a { color: var(--accent); font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px; white-space: nowrap; }
 .auth a:hover { text-decoration: underline; }
+button.auth-skip { display: block; width: 100%; min-height: 44px; margin-top: 4px; color: var(--muted); font-size: 14px; }
 p.auth-local { max-width: 420px; margin: 0; padding: 0 4px; font-size: 13px; line-height: 1.6; color: var(--muted); text-align: center; }
 .acct-noacct { margin: 0 0 4px; padding: 12px 14px; border-radius: 10px; background: var(--accent-soft); }
 .acct-noacct p { margin: 0 0 10px; color: var(--text); font-size: 14px; }
