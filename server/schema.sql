@@ -118,5 +118,6 @@ CREATE TABLE IF NOT EXISTS perks (
 CREATE TABLE IF NOT EXISTS inactive_notices (
   user_id TEXT PRIMARY KEY,
   sent_at TEXT NOT NULL,
+  purging INTEGER NOT NULL DEFAULT 0,   -- 1 = 消している途中で失敗した(次の回に、使われたかどうかに関係なく続きから消す)
   FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 );

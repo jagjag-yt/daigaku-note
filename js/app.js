@@ -51,7 +51,7 @@ const PEN_NIBS = {
 };
 const PEN_DEFAULTS = { nib: 'fountain', sens: 50, stab: 0, dash: '', shape: '' }; // shape: ドラッグで描く図形(空ならふつうに書く)
 
-const APP_VERSION = 'v52'; // sw.js の VERSION と合わせる
+const APP_VERSION = 'v53'; // sw.js の VERSION と合わせる
 const MAX_TABS = 12; // 開いておけるタブの数
 const DEFAULT_HIDDEN = ['laser']; // 最初は隠しておく道具(設定やその他のメニューから使う)
 
@@ -242,6 +242,7 @@ function savePrefs() {
 }
 
 function route() {
+  updateHomeTip();
   flushPen();
   dav.flush(); // アカウントで同期しているとき、ノートを閉じたら待っている変更をすぐ送る
   closePopover();
@@ -700,21 +701,33 @@ function openSync() {
 
 // ---------- ノート一覧 ----------
 // iPhone・iPad の Safari では、7日ほど開かないとサイトの保存(IndexedDB)が消されることがある。
-// ホーム画面に追加して開いた Web アプリは対象外なので、Safari で開いているときだけ案内を出す
+// ログインしていない人(ノートがこの端末にしかない)にだけ、アカウントを作って同期するよう案内する。
+// 「ホーム画面に追加」は勧めない(ホーム画面から開くと保存の場所が Safari と別になり、ノートが空に見えるため)
 const HOME_TIP_KEY = 'daigaku-note.home-tip-closed';
-function bindHomeTip() {
-  const tip = $('#home-tip');
+function isIosSafari() {
   const ua = navigator.userAgent;
   const ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  // iOS の Chrome・Firefox・Edge や、LINE などのアプリの中のブラウザは除く(文言が合わないため)
+  const other = /CriOS|FxiOS|EdgiOS|OPiOS|Line\/|FBAN|FBAV|Instagram|Twitter/.test(ua) || !/Safari\//.test(ua);
   const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+  return !native.isNative && ios && !other && !standalone;
+}
+function updateHomeTip() {
+  const tip = $('#home-tip');
+  if (!tip) return;
   let closed = false;
   try { closed = localStorage.getItem(HOME_TIP_KEY) === '1'; } catch {}
-  if (!tip || native.isNative || !ios || standalone || closed) return;
-  tip.hidden = false;
+  tip.hidden = closed || accountUI.loggedIn() || !isIosSafari();
+}
+function bindHomeTip() {
+  const tip = $('#home-tip');
+  if (!tip) return;
   tip.querySelector('.home-tip-close').addEventListener('click', () => {
-    tip.hidden = true;
     try { localStorage.setItem(HOME_TIP_KEY, '1'); } catch {}
+    tip.hidden = true;
   });
+  tip.querySelector('.home-tip-signup').addEventListener('click', () => accountUI.goAuth('signup'));
+  updateHomeTip();
 }
 
 function bindLibrary() {

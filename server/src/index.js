@@ -132,7 +132,7 @@ function clientIp(request) {
   return ip.includes(':') ? `${ipv6Prefix64(ip)}::/64` : ip;
 }
 
-/** IPv6 の先頭 64 ビット(4つの区切り)。'::' の省略を戻してから取る */
+/** IPv6 の先頭 64 ビット(4つの区切り)。'::' の省略を戻してから取る(Cloudflare は ::ffff:1.2.3.4 の形では渡さない) */
 export function ipv6Prefix64(ip) {
   const [head, tail] = ip.toLowerCase().split('%')[0].split('::');
   const h = head ? head.split(':') : [];
@@ -188,7 +188,7 @@ async function authenticate(request, env) {
   if (touched.meta?.changes) {
     await env.DB.prepare('UPDATE users SET last_seen_at = ? WHERE id = ? AND last_seen_at < ?').bind(nowIso(), device.user_id, hourAgo).run();
     // 片づけのお知らせを送ったあとに使われたら、取り消す
-    await env.DB.prepare('DELETE FROM inactive_notices WHERE user_id = ?').bind(device.user_id).run().catch(() => {});
+    await env.DB.prepare('DELETE FROM inactive_notices WHERE user_id = ? AND purging = 0').bind(device.user_id).run().catch(() => {});
   }
   return device;
 }
@@ -211,14 +211,22 @@ async function handleOtpSend(request, env) {
 
   // 回数の上限。他人がそのアドレスへ送り続けて本人を締め出せないよう、アドレスだけでなくアドレスと IP の組でも数える
   // (アドレスだけの上限は、受信箱を埋められないための大きめの値)
+  // 回数は断ったものも数えるので、狭いもの(アドレスごと)から順に調べ、断ったらその先は数えない。
+  // 先に IP の枠を数えると、1人が「再送」を連打しただけで、同じ IP の全員が1日締め出されてしまう
   const ip = clientIp(request);
-  const okPair = !ip || (await allowRate(env.DB, `otp:pair:${email}:${ip}`, 10, 24 * 60 * 60));
-  const okEmail = await allowRate(env.DB, `otp:send:${email}`, 30, 24 * 60 * 60);
-  // 大学など、大勢が1つの IP を共有する場所があるので、1時間の上限は大きめ。1日の上限で、1か所からサービス全体の枠を使い切れないようにする
-  const okIp = !ip || ((await allowRate(env.DB, `otp:ip:${ip}`, 30, 60 * 60)) && (await allowRate(env.DB, `otp:ipday:${ip}`, 40, 24 * 60 * 60)));
-  const okBurst = await allowRate(env.DB, `otp:burst:${email}`, 1, otpBurstSeconds(env));
-  if (!okPair || !okEmail || !okIp) return fail(429, '送信の回数が上限に達しました。しばらく待ってからお試しください。');
-  if (!okBurst) return fail(429, '続けて送信できません。1分ほど待ってからお試しください。');
+  const rate = (bucket, limit, sec) => allowRate(env.DB, bucket, limit, sec);
+  if (!(await rate(`otp:burst:${email}`, 1, otpBurstSeconds(env)))) return fail(429, '続けて送信できません。1分ほど待ってからお試しください。');
+  const tooMany = () => fail(429, '送信の回数が上限に達しました。しばらく待ってからお試しください。');
+  if (ip && !(await rate(`otp:pair:${email}:${ip}`, 10, 24 * 60 * 60))) return tooMany();
+  if (!(await rate(`otp:send:${email}`, 30, 24 * 60 * 60))) return tooMany();
+  // 大学など、大勢が1つの IP を共有する場所があるので、1時間の上限は大きめ。1日の上限で、1か所からサービス全体の枠を使い切れないようにする。
+  // IPv6 は /64 に加えて /48 でも数える(/48 をまるごと借りられるサービスがあるため)
+  if (ip && !(await rate(`otp:ip:${ip}`, 30, 60 * 60))) return tooMany();
+  // 1日の上限は、サービス全体の1日の枠の3割(/48 は45%)。枠を上げれば(Resend を有料にしたら)一緒に上がる
+  const daily = otpLimit(env, 'OTP_DAILY_LIMIT', 90);
+  if (ip && !(await rate(`otp:ipday:${ip}`, Math.max(10, Math.floor(daily * 0.3)), 24 * 60 * 60))) return tooMany();
+  const ip48 = ip && ip.endsWith('::/64') ? `${ip.split(':').slice(0, 3).join(':')}::/48` : null;
+  if (ip48 && !(await rate(`otp:ipday:${ip48}`, Math.max(15, Math.floor(daily * 0.45)), 24 * 60 * 60))) return tooMany();
   // サービス全体の上限(メールの送信サービスの枠を使い切らない・大量に送らされて止められないため)。ほかの上限を通ったものだけを数える
   if (!(await reserveMail(env))) {
     console.log('mail global limit reached');
@@ -361,7 +369,11 @@ async function handleOtpVerify(request, env) {
 
 async function handleMe(env, device) {
   // クーポンなどで付いた特典 [{ perk, name, expiresAt }]。表がまだない(schema.sql を流す前に配信した)ときは空にして、ほかは返す
-  const perks = await activePerks(env.DB, device.user_id).catch((err) => (console.log('perks failed', String(err)), []));
+  // 一時的な失敗のときは 500 にする(無料として返すと、払った人に広告が出てしまうため)
+  const perks = await activePerks(env.DB, device.user_id).catch((err) => {
+    if (/no such table/i.test(String(err))) return [];
+    throw err;
+  });
   const plan = planFromPerks(perks, env);
   return json({
     ok: true,
@@ -409,10 +421,11 @@ async function handleDeleteAccount(env, device) {
 
 /**
  * 利用者を消す(退会・長く使われていないアカウントの片づけ)。消せたら true。
- * idleSince を渡すと(片づけ)、その時刻より後に使われていた利用者の行は消さない。
+ * 消し始めたら、途中でログインされても最後まで消す(利用者の行だけ残すと、同じ利用者のまま置き場が空になり、
+ * アプリは送り済みと思って送り直さないため。消し切れば、次のログインで新しい利用者になり、端末から送り直される)。
  * R2 で失敗したら false(利用者の行は残るので、もう一度やれば続きから消せる)。
  */
-export async function purgeUser(env, uid, email, idleSince = null) {
+export async function purgeUser(env, uid, email) {
   await env.DB.prepare('DELETE FROM devices WHERE user_id = ?').bind(uid).run();
   try {
     await deletePrefix(env.FILES, `u/${uid}/`);
@@ -432,10 +445,7 @@ export async function purgeUser(env, uid, email, idleSince = null) {
     env.DB.prepare('DELETE FROM rate_limits WHERE bucket = ?').bind(`coupon:u:${uid}`),
     env.DB.prepare('DELETE FROM otp_requests WHERE email = ?').bind(String(email ?? '').toLowerCase()),
     env.DB.prepare('DELETE FROM rate_limits WHERE bucket = ?').bind(`dav:w:${uid}`),
-    // 長く使われていないアカウントの片づけでは、途中でログインし直した人の行は残す(idleSince より後に使われていたら)
-    idleSince
-      ? env.DB.prepare('DELETE FROM users WHERE id = ? AND last_seen_at <= ?').bind(uid, idleSince)
-      : env.DB.prepare('DELETE FROM users WHERE id = ?').bind(uid),
+    env.DB.prepare('DELETE FROM users WHERE id = ?').bind(uid),
   ]);
   return true;
 }
@@ -460,7 +470,7 @@ export async function cleanup(env) {
   // 長く使われていないアカウントの片づけ(お知らせ → 30日後に削除)。失敗しても、ほかの掃除は済んでいる
   // お知らせのメールもログインの番号と同じ Resend の枠を使うので、枠を取ってから送る(半分はログインの番号のために残す)
   const sendNotice = async (email, subject, text) => ((await reserveMail(env, 0.5)) ? sendMail(env, email, subject, text) : { ok: false });
-  await sweepInactive(env, { sendMail: sendNotice, purge: (uid, email, idleSince) => purgeUser(env, uid, email, idleSince) })
+  await sweepInactive(env, { sendMail: sendNotice, purge: (uid, email) => purgeUser(env, uid, email) })
     .catch((err) => console.log('inactive sweep failed', String(err)));
 }
 

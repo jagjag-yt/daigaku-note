@@ -646,10 +646,13 @@ dialog::backdrop { background: rgba(15,23,42,.35); }
 #tool-marker.tape-on::before { content: ''; position: absolute; right: 6px; top: 6px; width: 9px; height: 5px; border-radius: 1px; background: var(--tc); transform: rotate(-20deg); }
 
 /* 本棚の上の帯(表示するノート・並べ替え・並べ方) */
-.home-tip { display: flex; align-items: flex-start; gap: 10px; margin: 6px 0; padding: 10px 12px; border-radius: 12px; background: var(--field); color: var(--text); font-size: 14px; line-height: 1.5; }
+.home-tip { margin: 8px max(20px, var(--sa-right)) 0 max(20px, var(--sa-left)); padding: 10px 12px; border-radius: 12px; background: var(--field); color: var(--text); font-size: 14px; line-height: 1.5; }
 .home-tip[hidden] { display: none; }
-.home-tip p { margin: 0; flex: 1; }
-.home-tip-close { flex: none; min-height: 34px; padding: 0 12px; border-radius: 999px; border: none; background: var(--accent); color: #fff; font-size: 14px; }
+.home-tip p { margin: 0; }
+.home-tip-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.home-tip-btns button { min-height: 36px; padding: 0 14px; border-radius: 999px; border: none; font-size: 14px; }
+.home-tip-signup { background: var(--accent); color: #fff; }
+.home-tip-close { background: transparent; color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
 .lib-bar { display: flex; align-items: center; gap: 8px; padding: 6px 0 2px; flex-wrap: wrap; }
 .lib-filter { display: flex; flex-wrap: wrap; gap: 6px; }
 .lib-filter button { min-height: 34px; padding: 0 14px; border-radius: 999px; background: var(--field); color: var(--text); border: none; font-size: 14px; }

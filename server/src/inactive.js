@@ -41,22 +41,29 @@ export async function sweepInactive(env, { sendMail, purge }) {
   // 2. 先に、お知らせ済みで期限が来た人を消す。メールに書いた日(お知らせの30日後)の翌日より前には消さない
   const due = await env.DB.prepare(
     `SELECT u.id, u.email, n.sent_at FROM users u JOIN inactive_notices n ON n.user_id = u.id
-     WHERE n.sent_at < ? AND u.last_seen_at <= n.sent_at AND ${NOT_PAID} LIMIT ?`,
+     WHERE n.purging = 1 OR (n.sent_at < ? AND u.last_seen_at <= n.sent_at AND ${NOT_PAID}) LIMIT ?`,
   ).bind(daysAgo(NOTICE_DAYS + 1), now, PER_RUN).all();
   for (const u of due.results) {
     // 選んだあとに使われていないかを、消す直前に確かめる(お知らせの記録を消せた1回だけが消しに進む)
     const claimed = await env.DB.prepare(
-      'DELETE FROM inactive_notices WHERE user_id = ? AND EXISTS (SELECT 1 FROM users WHERE id = ? AND last_seen_at <= ?) RETURNING user_id',
+      'DELETE FROM inactive_notices WHERE user_id = ? AND (purging = 1 OR EXISTS (SELECT 1 FROM users WHERE id = ? AND last_seen_at <= ?)) RETURNING user_id',
     ).bind(u.id, u.id, u.sent_at).all();
     if (!claimed.results.length) continue;
-    if (await purge(u.id, u.email, u.sent_at)) purged++;
-    // 途中で失敗したら、お知らせの記録を戻す(次の回に続きから消す。お知らせを送り直して30日待ち直さない)
-    else await env.DB.prepare('INSERT INTO inactive_notices (user_id, sent_at) VALUES (?, ?) ON CONFLICT (user_id) DO NOTHING').bind(u.id, u.sent_at).run().catch(() => {});
+    let done = false;
+    try {
+      done = await purge(u.id, u.email);
+    } catch (err) {
+      console.log('inactive purge failed', String(err));
+    }
+    if (done) purged++;
+    // 途中で失敗したら、お知らせの記録を戻す(次の回に続きから消す。お知らせを送り直して30日待ち直さない)。
+    // 戻すときは「使われていない」の条件を見ない(消し始めたら最後まで消す。purgeUser の説明)
+    else await env.DB.prepare('INSERT INTO inactive_notices (user_id, sent_at, purging) VALUES (?, ?, 1) ON CONFLICT (user_id) DO UPDATE SET purging = 1').bind(u.id, u.sent_at).run().catch(() => {});
   }
 
   // お知らせのあとに使われた人の記録は消す(次にまた長く空いたら、もう一度お知らせする)
   await env.DB.prepare(
-    'DELETE FROM inactive_notices WHERE user_id IN (SELECT u.id FROM users u JOIN inactive_notices n ON n.user_id = u.id WHERE u.last_seen_at > n.sent_at)',
+    'DELETE FROM inactive_notices WHERE user_id IN (SELECT u.id FROM users u JOIN inactive_notices n ON n.user_id = u.id WHERE u.last_seen_at > n.sent_at AND n.purging = 0)',
   ).run();
 
   // 1. お知らせ

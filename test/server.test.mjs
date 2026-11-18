@@ -254,14 +254,17 @@ test('ログイン: 送信の回数の上限(続けての送信・IP ごと)', a
     const r = await send('burst@example.com');
     assert.equal(r.status, 429);
     assert.match((await r.json()).message, /続けて/);
-    // IP ごと: 1時間に30回まで(アドレスを変えても)
+    // 同じアドレスへの連打は「続けて」で断り、IP の枠は使わない(同じ IP のほかの人を締め出さない)
+    for (let i = 0; i < 50; i++) await send('mash@example.com', '203.0.113.9');
+    // IP ごと: 1時間に30回まで(アドレスを変えても)。連打のあとでも、まだ29通送れる
     const st = [];
-    for (let i = 0; i < 31; i++) st.push((await send(`ip${i}@example.com`, '203.0.113.9')).status);
-    assert.deepEqual(st.slice(0, 30), Array(30).fill(200));
-    assert.equal(st[30], 429);
+    for (let i = 0; i < 30; i++) st.push((await send(`ip${i}@example.com`, '203.0.113.9')).status);
+    assert.deepEqual(st.slice(0, 29), Array(29).fill(200));
+    assert.equal(st[29], 429);
     // IPv6 は /64 ごとにまとめて数える(下の64ビットを変えても同じ枠)
     const st6 = [];
     for (let i = 0; i < 31; i++) st6.push((await send(`v6-${i}@example.com`, `2001:db8:1:2::${(i + 1).toString(16)}`)).status);
+    assert.deepEqual(st6.slice(0, 30), Array(30).fill(200));
     assert.equal(st6[30], 429);
     assert.equal((await send('v6-other@example.com', '2001:db8:1:3::1')).status, 200);
     // 本番(cf-connecting-ip あり)では DEV_ECHO_OTP を入れても番号を返さない
@@ -283,21 +286,42 @@ test('IP: IPv6 の /64 の取り出し', () => {
   assert.equal(ipv6Prefix64('fe80::1%eth0'), 'fe80:0:0:0');
 });
 
-test('ログイン: 1つの IP からは1日40通まで(サービス全体の枠を1か所で使い切れない)', async () => {
-  const e3 = fakeEnv({ OTP_BURST_SECONDS: '0' });
+test('ログイン: 1つの IP からは1日に全体の枠の3割、IPv6 の /48 からは45%まで(全体の枠を1か所で使い切れない)', async () => {
+  const e3 = fakeEnv({ OTP_BURST_SECONDS: '0', OTP_DAILY_LIMIT: '90' }); // 1つの IP は27通、/48 は40通
   const s3 = await startWorker(worker, e3);
   try {
-    const send = (email) => fetch(s3.url + '/otp/send', { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': '203.0.113.77' }, body: JSON.stringify({ email }) });
-    for (let i = 0; i < 30; i++) assert.equal((await send(`d${i}@example.com`)).status, 200);
-    // 1時間の枠を戻して(時間がたったことにして)、続きを送る
-    e3.DB.x("UPDATE rate_limits SET reset_at = '2000-01-01T00:00:00.000Z' WHERE bucket = 'otp:ip:203.0.113.77'");
+    const send = (email, ip) => fetch(s3.url + '/otp/send', { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': ip }, body: JSON.stringify({ email }) });
     const st = [];
-    for (let i = 30; i < 41; i++) st.push((await send(`d${i}@example.com`)).status);
-    assert.deepEqual(st.slice(0, 10), Array(10).fill(200));
-    assert.equal(st[10], 429);
+    for (let i = 0; i < 28; i++) st.push((await send(`d${i}@example.com`, '203.0.113.77')).status);
+    assert.deepEqual(st.slice(0, 27), Array(27).fill(200));
+    assert.equal(st[27], 429);
+    // /48 の中で /64 を変えていく: 合わせて40通まで
+    const st6 = [];
+    for (let i = 0; i < 41; i++) st6.push((await send(`e${i}@example.com`, `2001:db8:aa:${(i + 1).toString(16)}::1`)).status);
+    assert.deepEqual(st6.slice(0, 40), Array(40).fill(200));
+    assert.equal(st6[40], 429);
+    assert.equal((await send('e-other@example.com', '2001:db8:ab:1::1')).status, 200);
   } finally {
     await s3.close();
   }
+});
+
+test('定期実行: 消している途中で失敗したら、次の回に続きから消す(途中でログインされても)', async () => {
+  const e6 = fakeEnv();
+  const D = e6.DB;
+  D.x("INSERT INTO users (id, email, created_at, last_seen_at) VALUES ('ux', 'x6@example.com', '2020-01-01T00:00:00.000Z', '2020-01-01T00:00:00.000Z')");
+  D.x("INSERT INTO inactive_notices (user_id, sent_at) VALUES ('ux', '2020-02-01T00:00:00.000Z')");
+  await e6.FILES.put('u/ux/files/a.pdf', 'pdf');
+  const realList = e6.FILES.list;
+  e6.FILES.list = async () => { throw new Error('R2 の障害(テスト)'); };
+  await cleanup(e6);
+  assert.equal(D.q("SELECT purging FROM inactive_notices WHERE user_id = 'ux'")[0].purging, 1);
+  // その間に使われた
+  D.x("UPDATE users SET last_seen_at = ? WHERE id = 'ux'", new Date().toISOString());
+  e6.FILES.list = realList;
+  await cleanup(e6);
+  assert.equal(D.q("SELECT COUNT(*) AS n FROM users WHERE id = 'ux'")[0].n, 0);
+  assert.equal(e6.FILES.objects.size, 0);
 });
 
 test('端末: 5台まで(6台目でいちばん古い端末が外れる)。一覧・外す・ログアウト', async () => {

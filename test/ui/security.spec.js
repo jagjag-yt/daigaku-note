@@ -44,13 +44,17 @@ test('細工したノートを取り込んでも、スクリプトは動かず�
   expect(violations).toEqual([]);
 });
 
-test('iPhone の Safari では「ホーム画面に追加」の案内を出し、閉じたら次から出さない', async ({ browser }) => {
-  const ctx = await browser.newContext({ userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1' });
+const IPHONE_SAFARI = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+
+test('iPhone の Safari でログインしていないと、ノートが消えることがあると案内し、閉じたら次から出さない', async ({ browser }) => {
+  const ctx = await browser.newContext({ userAgent: IPHONE_SAFARI });
   await ctx.addInitScript(() => localStorage.setItem('daigaku-note.local-only', '1'));
   const page = await ctx.newPage();
   await page.goto('./');
   await expect(page.locator('#library')).toBeVisible();
   await expect(page.locator('#home-tip')).toBeVisible();
+  // 案内はスクロールで隠れる上の帯(.lib-top)の外にある
+  expect(await page.locator('.lib-top #home-tip').count()).toBe(0);
   await page.locator('.home-tip-close').click();
   await expect(page.locator('#home-tip')).toBeHidden();
   await page.reload();
@@ -59,12 +63,23 @@ test('iPhone の Safari では「ホーム画面に追加」の案内を出し�
   await ctx.close();
 });
 
-test('パソコンのブラウザでは「ホーム画面に追加」の案内を出さない', async ({ browser }) => {
-  const ctx = await browser.newContext();
+test('案内の「アカウントを作る」でアカウント作成のページへ。iOS の Chrome・パソコンでは出さない', async ({ browser }) => {
+  const ctx = await browser.newContext({ userAgent: IPHONE_SAFARI });
   await ctx.addInitScript(() => localStorage.setItem('daigaku-note.local-only', '1'));
   const page = await ctx.newPage();
   await page.goto('./');
-  await expect(page.locator('#library')).toBeVisible();
-  await expect(page.locator('#home-tip')).toBeHidden();
+  await page.locator('.home-tip-signup').click();
+  await expect(page.locator('#auth')).toBeVisible();
+  await expect(page).toHaveURL(/#\/signup/);
   await ctx.close();
+
+  for (const userAgent of [IPHONE_SAFARI.replace('Version/18.0', 'CriOS/130.0'), undefined]) {
+    const c = await browser.newContext(userAgent ? { userAgent } : {});
+    await c.addInitScript(() => localStorage.setItem('daigaku-note.local-only', '1'));
+    const p = await c.newPage();
+    await p.goto('./');
+    await expect(p.locator('#library')).toBeVisible();
+    await expect(p.locator('#home-tip')).toBeHidden();
+    await c.close();
+  }
 });

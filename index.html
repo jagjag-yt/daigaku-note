@@ -90,10 +90,6 @@
         <button id="account-btn" class="icon-btn acct-btn" data-icon="user" title="アカウント" aria-label="アカウント"><span class="acct-avatar" aria-hidden="true" hidden></span><span class="acct-dot" hidden></span></button>
       </div>
       <div class="substatus"><span class="sync-status"></span><span id="search-status"></span></div>
-      <div id="home-tip" class="home-tip" role="note" hidden>
-        <p>Safari では、しばらく開かないと端末のノートが消えることがあります。共有ボタンから「ホーム画面に追加」して、そこから開くと消えにくくなります。ログインして同期しておくと、ほかの端末にも残ります。</p>
-        <button type="button" class="home-tip-close">閉じる</button>
-      </div>
       <nav id="crumbs" class="crumbs" aria-label="フォルダの場所" hidden></nav>
       <div class="lib-bar">
         <div class="lib-filter" role="group" aria-label="表示するノート">
@@ -108,6 +104,13 @@
         <button id="lib-view" class="icon-btn" type="button" title="リスト表示に切り替え" aria-label="リスト表示に切り替え"></button>
       </div>
     </header>
+    <div id="home-tip" class="home-tip" role="note" hidden>
+      <p>Safari では、しばらく開かないとこの端末のノートが消えることがあります。アカウントを作って同期しておくと、消えても戻せます。</p>
+      <div class="home-tip-btns">
+        <button type="button" class="home-tip-signup">アカウントを作る</button>
+        <button type="button" class="home-tip-close">閉じる</button>
+      </div>
+    </div>
     <input id="pdf-input" type="file" accept="application/pdf,.pdf" hidden>
     <input id="tpl-input" type="file" accept="application/pdf,.pdf,image/png,image/jpeg,image/webp" hidden>
     <input id="gn-input" type="file" accept=".goodnotes,application/zip" multiple hidden>
