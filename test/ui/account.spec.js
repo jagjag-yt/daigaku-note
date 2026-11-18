@@ -171,7 +171,7 @@ test('2台で同期し、端末を外すとログインのページに戻る。�
   // アカウントの削除: キャンセルできる。削除するとログインのページに戻り、ノートは端末に残る
   await a.locator('.acct-danger summary').click();
   await a.locator('#acct-delete').click();
-  await expect(a.locator('#confirm-dialog')).toContainText('この端末の中のノートは消えずに残ります');
+  await expect(a.locator('#confirm-dialog')).toContainText('この端末とほかの端末の中のノートは消えずに残ります');
   await a.locator('#confirm-cancel').click();
   await expect(a.locator('#acct-info')).toBeVisible();
   await a.locator('#acct-delete').click();
