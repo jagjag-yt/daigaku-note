@@ -211,18 +211,15 @@ async function handleOtpSend(request, env) {
 
   // 回数の上限。他人がそのアドレスへ送り続けて本人を締め出せないよう、アドレスだけでなくアドレスと IP の組でも数える
   // (アドレスだけの上限は、受信箱を埋められないための大きめの値)
-  // 回数は断ったものも数えるので、狭いもの(アドレスごと)から順に調べ、断ったらその先は数えない。
-  // 先に IP の枠を数えると、1人が「再送」を連打しただけで、同じ IP の全員が1日締め出されてしまう
+  // 回数は断ったものも数えるので、順番に意味がある。断ったらその先は数えない。
+  //   続けての送信・アドレスと IP の組 → IP ごと → アドレスごと → サービス全体
+  // 連打(続けての送信)を先に断るので、1人が「再送」を連打しても、同じ IP の全員が締め出されることはない
   const ip = clientIp(request);
   const rate = (bucket, limit, sec) => allowRate(env.DB, bucket, limit, sec);
   // 続けての送信はアドレスと IP の組で数える(アドレスだけだと、他人が送り続けて本人を締め出せるため)
   if (!(await rate(`otp:burst:${email}${ip ? `:${ip}` : ''}`, 1, otpBurstSeconds(env)))) return fail(429, '続けて送信できません。1分ほど待ってからお試しください。');
   const tooMany = () => fail(429, '送信の回数が上限に達しました。しばらく待ってからお試しください。');
   if (ip && !(await rate(`otp:pair:${email}:${ip}`, 10, 24 * 60 * 60))) return tooMany();
-  // アドレスごとの上限(受信箱を埋められないため)。ただし、その IP からそのアドレスへの1日の最初の2通は数えない
-  // (他人がいくつかの IP から送り続けて、アドレスの枠を使い切っても、本人は自分の IP から番号を受け取れるように)
-  const fresh = !ip || (await rate(`otp:pairfresh:${email}:${ip}`, 2, 24 * 60 * 60));
-  if (!(ip && fresh) && !(await rate(`otp:send:${email}`, 30, 24 * 60 * 60))) return tooMany();
   // IP ごとの1日の上限は、サービス全体の1日の枠の3割(/48 は45%)。1か所からサービス全体の枠を使い切れないようにする。
   // 大学など大勢が1つの IP を共有する場所では足りなくなるが、それは全体の枠(無料の Resend は1日100通)が小さいため。
   // 枠を上げれば(Resend を有料にして OTP_DAILY_LIMIT を上げれば)一緒に上がる。
@@ -231,6 +228,12 @@ async function handleOtpSend(request, env) {
   if (ip && !(await rate(`otp:ipday:${ip}`, Math.max(10, Math.floor(daily * 0.3)), 24 * 60 * 60))) return tooMany();
   const ip48 = ip && ip.endsWith('::/64') ? `${ip.split(':').slice(0, 3).join(':')}::/48` : null;
   if (ip48 && !(await rate(`otp:ipday:${ip48}`, Math.max(15, Math.floor(daily * 0.45)), 24 * 60 * 60))) return tooMany();
+  // アドレスごとの上限(受信箱を埋められないため)。ただし、その IP からそのアドレスへの1日の最初の2通は数えない
+  // (他人がいくつかの IP から送り続けて、アドレスの枠を使い切っても、本人は自分の IP から番号を受け取れるように)
+  // 数えない分にも、アドレスごとに1日10通の上限を付ける(たくさんの IP から送って、受信箱を埋められないように)。
+  // IP ごとの上限を通ったあとに調べる(IP の上限で断られる送信で、本人の2通を使い切らないように)
+  const fresh = !!ip && (await rate(`otp:pairfresh:${email}:${ip}`, 2, 24 * 60 * 60)) && (await rate(`otp:sendfresh:${email}`, 10, 24 * 60 * 60));
+  if (!fresh && !(await rate(`otp:send:${email}`, 30, 24 * 60 * 60))) return tooMany();
   // サービス全体の上限(メールの送信サービスの枠を使い切らない・大量に送らされて止められないため)。ほかの上限を通ったものだけを数える
   if (!(await reserveMail(env))) {
     console.log('mail global limit reached');
@@ -323,8 +326,11 @@ async function handleOtpVerify(request, env) {
   }
   // ログインなのにアカウントがない: 鍵は出さず、番号も使用済みにしない(このままアカウントを作れるように)
   let existing = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
-  // 長く使われていないアカウントの片づけが途中で止まっていたら、先に消し切る(半分消えた置き場のままログインさせない)
+  // 長く使われていないアカウントの片づけが途中で止まっていたら、先に消し切る(半分消えた置き場のままログインさせない)。
+  // 先に「最後に使った日」を書く。片づけが印を付けるのがこれより後なら、印を付ける条件(使われていない)に当たらなくなり、
+  // 先なら、下で印が見えるので、ここで消し切る(どちらの順でも、ログインしたのに消されることはない)
   if (existing) {
+    await env.DB.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').bind(nowIso(), existing.id).run();
     const purging = await env.DB.prepare('SELECT 1 AS p FROM inactive_notices WHERE user_id = ? AND purging = 1').bind(existing.id).first().catch(() => null);
     if (purging) {
       const done = await purgeUser(env, existing.id, email, { keepOtp: true }).catch((err) => (console.log('purge on login failed', String(err)), false));

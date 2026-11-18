@@ -338,6 +338,10 @@ test('ログイン: 他人がいくつもの IP からアドレスの枠を使�
     assert.equal((await send('198.51.100.200')).status, 200);
     assert.equal((await send('198.51.100.200')).status, 200);
     assert.equal((await send('198.51.100.200')).status, 429);
+    // 数えない分もアドレスごとに1日10通まで(たくさんの IP から受信箱を埋められない)
+    const fresh = [];
+    for (let i = 0; i < 10; i++) fresh.push((await send(`192.0.2.${i + 10}`)).status);
+    assert.equal(fresh.filter((x) => x === 200).length, 0); // 他人の4つの IP の8通と本人の2通で、もう10通
   } finally {
     await s8.close();
   }
