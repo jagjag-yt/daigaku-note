@@ -23,6 +23,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- Apple・Google でのログインから戻ってくる住所(io.github.jagjagyt.daigakunote:/auth)。js/oauth.js -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="io.github.jagjagyt.daigakunote" />
+            </intent-filter>
+
         </activity>
 
         <provider

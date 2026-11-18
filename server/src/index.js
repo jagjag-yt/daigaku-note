@@ -1,4 +1,4 @@
-// 大学ノートの同期サーバー(Cloudflare Workers + D1 + R2 + Resend)。
+// 大学ノートの同期サーバー(Cloudflare Workers + D1 + R2 + Amazon SES(または Resend))。
 //
 // できること: メールアドレスと6桁の番号でログインし、その鍵でクラウド同期の置き場(/dav/)を使う。
 // アプリから見ると /dav/ は WebDAV のファイル置き場で、js/webdav.js がそのまま使える(src/dav.js)。
@@ -19,6 +19,7 @@
 //   POST   /logout            この端末を外す
 //   DELETE /account           退会(預かった変更・PDF・画像も全部消す)
 //   POST   /coupon            { code } → クーポンコードを使って特典を付ける(1つのコードは1回だけ。src/coupon.js)
+//   *      /oauth/…           Apple・Google でのログイン(src/oauth.js)。最後に /otp/verify と同じ形で端末の鍵を返す
 //   *      /dav/…             同期の置き場(MKCOL・PROPFIND・PUT・GET・HEAD)
 //
 // 鍵の渡し方(/me などと /dav/ のどちらも):
@@ -50,12 +51,14 @@ import { handleDav, parseDavPath } from './dav.js';
 import { activePerks, handleCouponRedeem } from './coupon.js';
 import { planFromPerks, userPlan } from './plan.js';
 import { sweepInactive } from './inactive.js';
+import { mailLimitDefaults, sendMail } from './mail.js';
+import { cleanupOAuth, handleOAuth } from './oauth.js';
 
 /**
  * 配信されている版。/health に載せて、外から「どれが動いているか」を確かめられるようにする。
  * 受け口を足したり応答を変えたりしたら、この文字列も更新すること。
  */
-export const API_VERSION = '2026-11-18-plans';
+export const API_VERSION = '2026-11-19-ses-oauth';
 
 // 1人が同時にログインできる端末の数はプランで決まる(src/plan.js。無料5台・Pro と Max は10台)。
 // 超えたら、いちばん長く使っていない端末を外す。
@@ -68,8 +71,8 @@ const OTP_MINUTES = 10;
 const OTP_MAX_ATTEMPTS = 5;
 
 /**
- * サービス全体で1日・1か月に送る番号のメールの上限。メールの送信サービス(Resend)の枠に合わせる。
- * 無料の枠は1日100通・月3,000通なので、既定はそれより少し下。有料にしたら wrangler.jsonc の vars で上げる。
+ * サービス全体で1日・1か月に送るメールの上限。既定はメールの送信サービスで変わる(src/mail.js の mailLimitDefaults。
+ * SES は1日2,000通・月3万通、Resend 無料は1日90通・月2,900通)。wrangler.jsonc の vars の OTP_DAILY_LIMIT・OTP_MONTHLY_LIMIT で変えられる。
  */
 const otpLimit = (env, key, def) => {
   const v = Number(env[key]);
@@ -78,13 +81,14 @@ const otpLimit = (env, key, def) => {
 
 /**
  * メールを1通送る前に、サービス全体の枠を1通ぶん取る。取れたら true。
- * Resend の枠は暦の日・月(UTC)で数えるので、こちらも暦の日・月ごとの行で数える。
+ * 送信サービスの枠は暦の日・月(UTC)で数えるので、こちらも暦の日・月ごとの行で数える。
  * share は使ってよい割合(お知らせのメールは 0.5 = ログインの番号のために半分を残す)。
  */
 export async function reserveMail(env, share = 1) {
   const now = new Date().toISOString();
-  const day = Math.floor(otpLimit(env, 'OTP_DAILY_LIMIT', 90) * share);
-  const month = Math.floor(otpLimit(env, 'OTP_MONTHLY_LIMIT', 2900) * share);
+  const def = mailLimitDefaults(env);
+  const day = Math.floor(otpLimit(env, 'OTP_DAILY_LIMIT', def.day) * share);
+  const month = Math.floor(otpLimit(env, 'OTP_MONTHLY_LIMIT', def.month) * share);
   // 数えるのは同じ行(ログインの番号とお知らせで合計)。share は「この数までなら取ってよい」という線だけを変える
   const okDay = await allowRate(env.DB, `mail:day:${now.slice(0, 10)}`, day, 2 * 24 * 60 * 60);
   if (!okDay) return false;
@@ -220,14 +224,14 @@ async function handleOtpSend(request, env) {
   if (!(await rate(`otp:burst:${email}${ip ? `:${ip}` : ''}`, 1, otpBurstSeconds(env)))) return fail(429, '続けて送信できません。1分ほど待ってからお試しください。');
   const tooMany = () => fail(429, '送信の回数が上限に達しました。しばらく待ってからお試しください。');
   if (ip && !(await rate(`otp:pair:${email}:${ip}`, 10, 24 * 60 * 60))) return tooMany();
-  // IP ごとの1日の上限は、サービス全体の1日の枠の3割(/48 は45%)。1か所からサービス全体の枠を使い切れないようにする。
-  // 大学など大勢が1つの IP を共有する場所では足りなくなるが、それは全体の枠(無料の Resend は1日100通)が小さいため。
-  // 枠を上げれば(Resend を有料にして OTP_DAILY_LIMIT を上げれば)一緒に上がる。
+  // IP ごとの1日の上限は、サービス全体の1日の枠の3割(/48 は45%)で、多くても200通(/48 は300通)。
+  // 1か所からサービス全体の枠を使い切れない・届かないアドレスへ大量に送らされて SES に止められないようにする。
+  // 大学など大勢が1つの IP を共有する場所でも、1日200人までは足りる(Apple・Google でのログインは数えない)。
   // IPv6 は /64 に加えて /48 でも数える(/48 をまるごと借りられるサービスがあるため)
-  const daily = otpLimit(env, 'OTP_DAILY_LIMIT', 90);
-  if (ip && !(await rate(`otp:ipday:${ip}`, Math.max(10, Math.floor(daily * 0.3)), 24 * 60 * 60))) return tooMany();
+  const daily = otpLimit(env, 'OTP_DAILY_LIMIT', mailLimitDefaults(env).day);
+  if (ip && !(await rate(`otp:ipday:${ip}`, Math.min(200, Math.max(10, Math.floor(daily * 0.3))), 24 * 60 * 60))) return tooMany();
   const ip48 = ip && ip.endsWith('::/64') ? `${ip.split(':').slice(0, 3).join(':')}::/48` : null;
-  if (ip48 && !(await rate(`otp:ipday:${ip48}`, Math.max(15, Math.floor(daily * 0.45)), 24 * 60 * 60))) return tooMany();
+  if (ip48 && !(await rate(`otp:ipday:${ip48}`, Math.min(300, Math.max(15, Math.floor(daily * 0.45))), 24 * 60 * 60))) return tooMany();
   // アドレスごとの上限(受信箱を埋められないため)。ただし、その IP からそのアドレスへの1日の最初の2通は数えない
   // (他人が4つまでの IP から送り続けて、アドレスの枠を使い切っても、本人は自分の IP から番号を受け取れるように。
   // それより多くの IP から送られると防げない。Turnstile などで機械からの送信を止める必要がある)
@@ -253,25 +257,6 @@ async function handleOtpSend(request, env) {
   // 送れなかったことは伝える(黙って成功にすると、届かない理由が分からなくなる)
   if (!sent.ok) return fail(502, 'メールを送れませんでした。時間をおいてお試しください。');
   return json({ ok: true, expiresInMinutes: OTP_MINUTES, ...(echo ? { devCode: code } : {}) });
-}
-
-/** メールを1通送る(Resend)。送れたら { ok: true } */
-async function sendMail(env, email, subject, text) {
-  try {
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { authorization: `Bearer ${env.RESEND_API_KEY}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ from: env.MAIL_FROM, to: [email], subject, text }),
-    });
-    if (!res.ok) {
-      console.log('resend failed', res.status, await res.text());
-      return { ok: false };
-    }
-    return { ok: true };
-  } catch (err) {
-    console.log('resend error', String(err));
-    return { ok: false };
-  }
 }
 
 /**
@@ -326,19 +311,9 @@ async function handleOtpVerify(request, env) {
     return fail(400, `番号が違います。あと${Math.max(0, OTP_MAX_ATTEMPTS - claim.attempts)}回まで試せます。`);
   }
   // ログインなのにアカウントがない: 鍵は出さず、番号も使用済みにしない(このままアカウントを作れるように)
-  let existing = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
-  // 長く使われていないアカウントの片づけが途中で止まっていたら、先に消し切る(半分消えた置き場のままログインさせない)。
-  // 先に「最後に使った日」を書く。片づけが印を付けるのがこれより後なら、印を付ける条件(使われていない)に当たらなくなり、
-  // 先なら、下で印が見えるので、ここで消し切る(どちらの順でも、ログインしたのに消されることはない)
-  if (existing) {
-    await env.DB.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').bind(nowIso(), existing.id).run();
-    const purging = await env.DB.prepare('SELECT 1 AS p FROM inactive_notices WHERE user_id = ? AND purging = 1').bind(existing.id).first().catch(() => null);
-    if (purging) {
-      const done = await purgeUser(env, existing.id, email, { keepOtp: true }).catch((err) => (console.log('purge on login failed', String(err)), false));
-      if (!done) return fail(503, 'ただいまログインできません。時間をおいてお試しください。');
-      existing = null;
-    }
-  }
+  const settled = await settleUser(env, await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first(), email);
+  if (settled === 'busy') return fail(503, 'ただいまログインできません。時間をおいてお試しください。');
+  const existing = settled;
   if (purpose === 'login' && !existing) {
     // この回の試行は数えない(間違えたあとに正しい番号を入れた人が、同じ番号でアカウントを作れなくならないように)
     await env.DB.prepare('UPDATE otp_requests SET attempts = attempts - 1 WHERE id = ? AND attempts > 0').bind(row.id).run();
@@ -350,12 +325,69 @@ async function handleOtpVerify(request, env) {
   if (!consumed) return fail(400, '番号が見つかりません。送り直してください。');
 
   // 利用者を用意する(初めてのアドレスはここで作る。同時に2回来ても1人だけ)
+  const user = await ensureUser(env, email);
+  return issueDevice(request, env, user, { label: body?.label, existing: !!existing });
+}
+
+/**
+ * ログインさせる前の確かめ。user は users の行(なければ null)。
+ * 長く使われていないアカウントの片づけが途中で止まっていたら、先に消し切る(半分消えた置き場のままログインさせない)。
+ * 先に「最後に使った日」を書く。片づけが印を付けるのがこれより後なら、印を付ける条件(使われていない)に当たらなくなり、
+ * 先なら、下で印が見えるので、ここで消し切る(どちらの順でも、ログインしたのに消されることはない)
+ * @returns 使える利用者の行・null(なかった・消し切った)・'busy'(消し切れなかった)
+ */
+async function settleUser(env, user, email) {
+  if (!user) return null;
+  await env.DB.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').bind(nowIso(), user.id).run();
+  const purging = await env.DB.prepare('SELECT 1 AS p FROM inactive_notices WHERE user_id = ? AND purging = 1').bind(user.id).first().catch(() => null);
+  if (!purging) return user;
+  const done = await purgeUser(env, user.id, email, { keepOtp: true }).catch((err) => (console.log('purge on login failed', String(err)), false));
+  return done ? null : 'busy';
+}
+
+/** そのアドレスの利用者を返す(なければ作る。同時に2回来ても1人だけ) */
+async function ensureUser(env, email) {
   await env.DB.prepare('INSERT INTO users (id, email, created_at, last_seen_at) VALUES (?, ?, ?, ?) ON CONFLICT (email) DO NOTHING')
     .bind(newId('u'), email, nowIso(), nowIso()).run();
-  const user = await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first();
+  const user = await env.DB.prepare('SELECT id, email FROM users WHERE email = ?').bind(email).first();
   await env.DB.prepare('UPDATE users SET last_seen_at = ? WHERE id = ?').bind(nowIso(), user.id).run();
+  return user;
+}
 
-  // 端末が多いときは、いちばん長く使っていないものを外す
+/**
+ * Apple・Google でログインした人の利用者を決める(src/oauth.js から呼ぶ)。
+ *   1. 前に同じ Apple・Google のアカウントでログインしていたら、その利用者
+ *   2. なければ、Apple・Google が確かめたメールアドレスの利用者(メールの番号で作ったアカウントにつなぐ)
+ *   3. それもなければ、そのアドレスで新しく作る
+ * email は Apple・Google が「確かめ済み」としたときだけ渡す(確かめていないアドレスで、他人のアカウントにつながないように)。
+ * owns は、そのアドレスの今の持ち主だと言い切れるか(src/oauth.js)。言い切れなければ、前からあるアカウントにはつながない。
+ * @returns {{ userId, existing } | { error }}
+ */
+async function loginUser(env, { provider, subject, email, owns }) {
+  const linked = await env.DB.prepare('SELECT u.id, u.email FROM identities i JOIN users u ON u.id = i.user_id WHERE i.provider = ? AND i.subject = ?')
+    .bind(provider, subject).first();
+  if (linked) {
+    const settled = await settleUser(env, linked, linked.email);
+    if (settled === 'busy') return { error: 'busy' };
+    if (settled) return { userId: settled.id, existing: true };
+    // 片づけで消し切った(つながりも一緒に消えている): 新しく作る
+  }
+  if (!email) return { error: 'no_email' };
+  const byEmail = await settleUser(env, await env.DB.prepare('SELECT id, email FROM users WHERE email = ?').bind(email).first(), email);
+  if (byEmail === 'busy') return { error: 'busy' };
+  // そのアドレスのアカウントが前からあるが、持ち主だと言い切れない: つながずに、メールの番号でログインしてもらう
+  if (byEmail && !owns) return { error: 'use_email' };
+  const user = byEmail || (await ensureUser(env, email));
+  await env.DB.prepare('INSERT INTO identities (provider, subject, user_id, email, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (provider, subject) DO UPDATE SET user_id = excluded.user_id, email = excluded.email')
+    .bind(provider, subject, user.id, email, nowIso()).run();
+  return { userId: user.id, existing: !!byEmail };
+}
+
+/**
+ * 端末の鍵を作って返す(メールの番号・Apple・Google のどれでログインしても同じ形)。
+ * 端末が多いときは、いちばん長く使っていないものを外す。
+ */
+async function issueDevice(request, env, user, { label: wanted, existing }) {
   const devices = await env.DB.prepare('SELECT id FROM devices WHERE user_id = ? ORDER BY last_used_at ASC, created_at ASC').bind(user.id).all();
   // プランが一時的に読めないときは外さない(Pro の人の端末を、無料の台数まで外してしまわないように)
   const maxDevices = await userPlan(env, user.id).then((p) => p.devices, (err) => (console.log('plan lookup failed', String(err)), Infinity));
@@ -365,7 +397,7 @@ async function handleOtpVerify(request, env) {
 
   const token = `dn_${newId('k').slice(2)}${newId('k').slice(2)}`;
   const tokenHash = await hashSecret(token, env.SECRET_PEPPER);
-  const label = normalizeLabel(body?.label) ?? deviceLabel(request.headers.get('user-agent'));
+  const label = normalizeLabel(wanted) ?? deviceLabel(request.headers.get('user-agent'));
   const deviceId = newId('d');
   await env.DB.prepare('INSERT INTO devices (id, user_id, token_hash, label, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?)')
     .bind(deviceId, user.id, tokenHash, label, nowIso(), nowIso()).run();
@@ -373,7 +405,7 @@ async function handleOtpVerify(request, env) {
   return json({
     ok: true,
     token,
-    email,
+    email: user.email,
     userId: user.id,
     deviceId,
     deviceLabel: label,
@@ -488,8 +520,9 @@ async function deletePrefix(bucket, prefix) {
  */
 export async function cleanup(env) {
   await cleanupRows(env);
+  await cleanupOAuth(env).catch((err) => console.log('oauth cleanup failed', String(err)));
   // 長く使われていないアカウントの片づけ(お知らせ → 30日後に削除)。失敗しても、ほかの掃除は済んでいる
-  // お知らせのメールもログインの番号と同じ Resend の枠を使うので、枠を取ってから送る(半分はログインの番号のために残す)
+  // お知らせのメールもログインの番号と同じ送信サービスの枠を使うので、枠を取ってから送る(半分はログインの番号のために残す)
   const sendNotice = async (email, subject, text) => ((await reserveMail(env, 0.5)) ? sendMail(env, email, subject, text) : { ok: false });
   await sweepInactive(env, { sendMail: sendNotice, purge: (uid, email) => purgeUser(env, uid, email) })
     .catch((err) => console.log('inactive sweep failed', String(err)));
@@ -534,7 +567,9 @@ export default {
       headers.set('cache-control', 'no-store');
       headers.set('strict-transport-security', 'max-age=31536000');
       headers.set('x-content-type-options', 'nosniff');
-      headers.set('content-security-policy', "default-src 'none'; sandbox");
+      // 文字のページ(Apple・Google でのログインの途中に出すもの)だけは、書式を許す(src/oauth.js が x-page-csp で頼む)
+      headers.set('content-security-policy', res.headers.get('x-page-csp') || "default-src 'none'; sandbox");
+      headers.delete('x-page-csp');
       headers.set('referrer-policy', 'no-referrer');
       return new Response(res.body, { status: res.status, headers });
     };
@@ -543,6 +578,10 @@ export default {
       if (url.pathname === '/health') return finish(json({ ok: true, version: API_VERSION }));
       if (url.pathname === '/otp/send' && request.method === 'POST') return finish(await handleOtpSend(request, env));
       if (url.pathname === '/otp/verify' && request.method === 'POST') return finish(await handleOtpVerify(request, env));
+      if (url.pathname.startsWith('/oauth/')) {
+        const res = await handleOAuth(request, env, url, { clientIp, loginUser, issueDevice });
+        if (res) return finish(res);
+      }
 
       const davPath = parseDavPath(url.pathname);
 

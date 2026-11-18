@@ -121,3 +121,32 @@ CREATE TABLE IF NOT EXISTS inactive_notices (
   purging INTEGER NOT NULL DEFAULT 0,   -- 1 = 消している途中で失敗した(次の回に、使われたかどうかに関係なく続きから消す)
   FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 );
+
+-- Apple・Google でのログインのつながり(src/oauth.js)。Apple・Google の中での本人の ID(sub)ごとに1行。
+-- メールアドレスが変わっても、同じ Apple・Google のアカウントなら同じ利用者にする。
+CREATE TABLE IF NOT EXISTS identities (
+  provider   TEXT NOT NULL,               -- 'apple' | 'google'
+  subject    TEXT NOT NULL,               -- Apple・Google の ID トークンの sub
+  user_id    TEXT NOT NULL,
+  email      TEXT,                        -- つないだときのアドレス(Apple の「メールを非公開」なら、Apple が作った転送用のアドレス)
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (provider, subject),
+  FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_identities_user ON identities (user_id);
+
+-- Apple・Google でのログインの途中の記録(src/oauth.js)。15分で切れる。週1回の掃除で消す。
+--   始めたとき: state(Apple・Google に渡す合言葉)・challenge(アプリの合言葉のハッシュ)・戻り先・nonce
+--   戻ってきたとき: state の行を消し、引換券(ticket_hash)の行を作る。引換券は5分・1回だけ
+CREATE TABLE IF NOT EXISTS oauth_flows (
+  state       TEXT PRIMARY KEY,
+  provider    TEXT NOT NULL,
+  challenge   TEXT NOT NULL,
+  return_to   TEXT NOT NULL,
+  nonce       TEXT NOT NULL,
+  expires_at  TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  ticket_hash TEXT UNIQUE,                -- 引換券のハッシュ(戻ってきたあとの行だけ)
+  user_id     TEXT,
+  existing    INTEGER
+);
