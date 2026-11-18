@@ -491,7 +491,7 @@ export async function syncNow(manual = false) {
     }
     const time = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
     let note = '';
-    if (newer) note = '。ほかの端末が新しい版の大学ノートで書いた変更があります。アプリを更新してください';
+    if (newer) note = '。ほかの端末が新しいバージョンの大学ノートで書いた変更があります。アプリを更新してください';
     else if (broken) note = '。ほかの端末の変更のファイルに読めないものがありました。次の同期で読み直します';
     if (st.lost) {
       note += `。ほかの端末の変更のファイルのうち ${st.lost} 個が壊れていて読めませんでした`;

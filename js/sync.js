@@ -28,7 +28,7 @@ export async function buildSyncFile(device, noteId = null) {
 
 export async function importSyncFile(json, recorder) {
   if (!json || json.format !== FORMAT) throw new Error('大学ノートの同期ファイルではありません');
-  if (json.version > 1) throw new Error('新しい版の大学ノートで作られたファイルです。アプリを更新してください');
+  if (json.version > 1) throw new Error('新しいバージョンの大学ノートで作られたファイルです。アプリを更新してください');
   let newFiles = 0;
   for (const f of json.files || []) {
     if (await db.hasFile(f.hash)) continue;

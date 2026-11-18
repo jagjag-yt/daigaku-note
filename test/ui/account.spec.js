@@ -283,7 +283,7 @@ test('番号の入力の間違い・全角の入力・読み込み直したと�
   await expect(a.locator('#acct-code')).toHaveValue(''); // 間違えた番号は消える(打ち足しで古い番号が送られないように)
   // 同じ間違いをもう一度打っても送らずに知らせる
   await a.locator('#acct-code').fill(wrong);
-  await expect(a.locator('#acct-code-msg')).toContainText('先ほど違っていました');
+  await expect(a.locator('#acct-code-msg')).toContainText('先ほど入力して違っていた番号です');
   await a.locator('#acct-code').fill('');
   // メールの件名をそのまま貼り付けても(全角の数字でも)、番号だけを読み取る
   const zen = [...devCode].map((c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0)).join('');
