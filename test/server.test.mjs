@@ -220,6 +220,31 @@ test('ログインとアカウント作成: purpose で文面と扱いが変わ�
   assert.equal(li.data.existing, true);
 });
 
+test('ログイン: 他人が同じアドレスへ送り続けても、別の IP の本人は送れる。サービス全体の上限', async () => {
+  const e2 = fakeEnv({ OTP_DAILY_LIMIT: '25' });
+  const s2 = await startWorker(worker, e2);
+  try {
+    const send = (email, ip) => fetch(s2.url + '/otp/send', { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': ip }, body: JSON.stringify({ email }) });
+    e2.OTP_BURST_SECONDS = '0';
+    // 攻撃する人: 1つの IP から同じアドレスへ10回まで
+    const codes = [];
+    for (let i = 0; i < 11; i++) codes.push((await send('victim@example.com', '203.0.113.50')).status);
+    assert.deepEqual(codes.slice(0, 10), Array(10).fill(200));
+    assert.equal(codes[10], 429);
+    // 本人(別の IP)はまだ送れる
+    assert.equal((await send('victim@example.com', '198.51.100.7')).status, 200);
+    // サービス全体: 1日25通(ここまで11通)。ほかの上限で断られたものは数えない
+    let st;
+    for (let i = 0; i < 14; i++) st = (await send(`other${i}@example.com`, `192.0.2.${i}`)).status;
+    assert.equal(st, 200);
+    const over = await send('late@example.com', '192.0.2.200');
+    assert.equal(over.status, 503);
+    assert.match((await over.json()).message, /この端末だけで使う/);
+  } finally {
+    await s2.close();
+  }
+});
+
 test('ログイン: 送信の回数の上限(続けての送信・IP ごと)', async () => {
   const burstEnv = fakeEnv(); // OTP_BURST_SECONDS なし = 60秒
   const s2 = await startWorker(worker, burstEnv);
@@ -229,9 +254,9 @@ test('ログイン: 送信の回数の上限(続けての送信・IP ごと)', a
     const r = await send('burst@example.com');
     assert.equal(r.status, 429);
     assert.match((await r.json()).message, /続けて/);
-    // IP ごと: 1時間に30回まで(アドレスを変えても)
+    // IP ごと: 1時間に20回まで(アドレスを変えても)
     let last;
-    for (let i = 0; i < 31; i++) last = await send(`ip${i}@example.com`, '203.0.113.9');
+    for (let i = 0; i < 21; i++) last = await send(`ip${i}@example.com`, '203.0.113.9');
     assert.equal(last.status, 429);
     // 本番(cf-connecting-ip あり)では DEV_ECHO_OTP を入れても番号を返さない
     burstEnv.DEV_ECHO_OTP = '1';

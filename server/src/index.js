@@ -65,6 +65,15 @@ const TOKEN_IDLE_DAYS = 180;
 const OTP_MINUTES = 10;
 const OTP_MAX_ATTEMPTS = 5;
 
+/**
+ * サービス全体で1日・1か月に送る番号のメールの上限。メールの送信サービス(Resend)の枠に合わせる。
+ * 無料の枠は1日100通・月3,000通なので、既定はそれより少し下。有料にしたら wrangler.jsonc の vars で上げる。
+ */
+const otpLimit = (env, key, def) => {
+  const v = Number(env[key]);
+  return Number.isFinite(v) && v > 0 ? v : def;
+};
+
 /** 続けて番号を送れない間隔(秒)。手元の試験だけ短くできる(本番では設定しない = 60秒)。 */
 const otpBurstSeconds = (env) => Number(env.OTP_BURST_SECONDS ?? 60);
 
@@ -166,12 +175,22 @@ async function handleOtpSend(request, env) {
   const purpose = purposeOf(body);
   if (!looksLikeEmail(email)) return fail(400, 'メールアドレスの形式が正しくありません。');
 
+  // 回数の上限。他人がそのアドレスへ送り続けて本人を締め出せないよう、アドレスだけでなくアドレスと IP の組でも数える
+  // (アドレスだけの上限は、受信箱を埋められないための大きめの値)
   const ip = clientIp(request);
-  const okEmail = await allowRate(env.DB, `otp:send:${email}`, 20, 24 * 60 * 60);
-  const okIp = !ip || (await allowRate(env.DB, `otp:ip:${ip}`, 30, 60 * 60));
+  const okPair = !ip || (await allowRate(env.DB, `otp:pair:${email}:${ip}`, 10, 24 * 60 * 60));
+  const okEmail = await allowRate(env.DB, `otp:send:${email}`, 30, 24 * 60 * 60);
+  const okIp = !ip || (await allowRate(env.DB, `otp:ip:${ip}`, 20, 60 * 60));
   const okBurst = await allowRate(env.DB, `otp:burst:${email}`, 1, otpBurstSeconds(env));
-  if (!okEmail || !okIp) return fail(429, '送信の回数が上限に達しました。しばらく待ってからお試しください。');
+  if (!okPair || !okEmail || !okIp) return fail(429, '送信の回数が上限に達しました。しばらく待ってからお試しください。');
   if (!okBurst) return fail(429, '続けて送信できません。1分ほど待ってからお試しください。');
+  // サービス全体の上限(メールの送信サービスの枠を使い切らない・大量に送らされて止められないため)。ほかの上限を通ったものだけを数える
+  const okDay = await allowRate(env.DB, 'otp:all:day', otpLimit(env, 'OTP_DAILY_LIMIT', 90), 24 * 60 * 60);
+  const okMonth = okDay && (await allowRate(env.DB, 'otp:all:month', otpLimit(env, 'OTP_MONTHLY_LIMIT', 2900), 30 * 24 * 60 * 60));
+  if (!okDay || !okMonth) {
+    console.log('otp global limit reached', okDay ? 'month' : 'day');
+    return fail(503, 'ただいまログインの番号を送れません。時間をおいてお試しください。この端末だけで使うことはできます。');
+  }
 
   const code = newOtpCode();
   const codeHash = await hashSecret(code, env.SECRET_PEPPER);
