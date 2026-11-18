@@ -219,7 +219,10 @@ async function handleOtpSend(request, env) {
   if (!(await rate(`otp:burst:${email}${ip ? `:${ip}` : ''}`, 1, otpBurstSeconds(env)))) return fail(429, '続けて送信できません。1分ほど待ってからお試しください。');
   const tooMany = () => fail(429, '送信の回数が上限に達しました。しばらく待ってからお試しください。');
   if (ip && !(await rate(`otp:pair:${email}:${ip}`, 10, 24 * 60 * 60))) return tooMany();
-  if (!(await rate(`otp:send:${email}`, 30, 24 * 60 * 60))) return tooMany();
+  // アドレスごとの上限(受信箱を埋められないため)。ただし、その IP からそのアドレスへの1日の最初の2通は数えない
+  // (他人がいくつかの IP から送り続けて、アドレスの枠を使い切っても、本人は自分の IP から番号を受け取れるように)
+  const fresh = !ip || (await rate(`otp:pairfresh:${email}:${ip}`, 2, 24 * 60 * 60));
+  if (!(ip && fresh) && !(await rate(`otp:send:${email}`, 30, 24 * 60 * 60))) return tooMany();
   // IP ごとの1日の上限は、サービス全体の1日の枠の3割(/48 は45%)。1か所からサービス全体の枠を使い切れないようにする。
   // 大学など大勢が1つの IP を共有する場所では足りなくなるが、それは全体の枠(無料の Resend は1日100通)が小さいため。
   // 枠を上げれば(Resend を有料にして OTP_DAILY_LIMIT を上げれば)一緒に上がる。
@@ -443,11 +446,11 @@ export async function purgeUser(env, uid, email, { keepOtp = false } = {}) {
     console.log('r2 delete failed', String(err));
     return false;
   }
-  // 特典・クーポン・お知らせの記録は、表がまだない(schema.sql を流す前に配信した)ときでも止めないよう、batch の外で行う。
-  // 使ったクーポンは「使用済み」のまま残し、誰が使ったかだけを消す(NULL に戻すと、もう一度使えてしまうため)
-  for (const sql of ['DELETE FROM perks WHERE user_id = ?', "UPDATE coupons SET redeemed_by = 'deleted' WHERE redeemed_by = ?", 'DELETE FROM inactive_notices WHERE user_id = ?']) {
-    await env.DB.prepare(sql).bind(uid).run().catch((err) => console.log('cleanup failed', String(err)));
-  }
+  // 使ったクーポンは「使用済み」のまま残し、誰が使ったかだけを消す(NULL に戻すと、もう一度使えてしまうため)。
+  // 表がまだない(schema.sql を流す前に配信した)ときでも止めないよう、batch の外で行う。
+  // 特典(perks)と片づけの記録(inactive_notices)は、下の users の削除で一緒に消える(ON DELETE CASCADE)。
+  // 先に消すと、batch が失敗したときに「消している途中」の印まで消えて、続きから消せなくなる
+  await env.DB.prepare("UPDATE coupons SET redeemed_by = 'deleted' WHERE redeemed_by = ?").bind(uid).run().catch((err) => console.log('cleanup failed', String(err)));
   await env.DB.batch([
     env.DB.prepare('DELETE FROM op_files WHERE user_id = ?').bind(uid),
     env.DB.prepare('DELETE FROM op_logs WHERE user_id = ?').bind(uid),

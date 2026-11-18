@@ -307,6 +307,42 @@ test('ログイン: 片づけが途中で止まっていたアカウントは、
   assert.notEqual(again.data.userId, u.userId);
 });
 
+test('ログイン: 片づけの続きに失敗したら 503。番号は使えるまま、印も残る', async () => {
+  const u = await login('purging2@example.com');
+  env.DB.x("INSERT INTO inactive_notices (user_id, sent_at, purging) VALUES (?, '2020-01-01T00:00:00.000Z', 1)", u.userId);
+  await api('/otp/send', { method: 'POST', body: { email: 'purging2@example.com', purpose: 'signup' } });
+  const code = mail.lastCode('purging2@example.com');
+  const realList = env.FILES.list;
+  env.FILES.list = async () => { throw new Error('R2 の障害(テスト)'); };
+  try {
+    const v = await api('/otp/verify', { method: 'POST', body: { email: 'purging2@example.com', code, purpose: 'signup' } });
+    assert.equal(v.status, 503);
+  } finally {
+    env.FILES.list = realList;
+  }
+  assert.equal(env.DB.q('SELECT purging FROM inactive_notices WHERE user_id = ?', u.userId)[0].purging, 1);
+  const again = await api('/otp/verify', { method: 'POST', body: { email: 'purging2@example.com', code, purpose: 'signup' } });
+  assert.equal(again.status, 200);
+  assert.notEqual(again.data.userId, u.userId);
+  assert.equal(env.DB.q('SELECT COUNT(*) AS n FROM inactive_notices WHERE user_id = ?', u.userId)[0].n, 0);
+});
+
+test('ログイン: 他人がいくつもの IP からアドレスの枠を使い切っても、本人は自分の IP から受け取れる', async () => {
+  const e8 = fakeEnv({ OTP_BURST_SECONDS: '0' });
+  const s8 = await startWorker(worker, e8);
+  try {
+    const send = (ip) => fetch(s8.url + '/otp/send', { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': ip }, body: JSON.stringify({ email: 'owner@example.com' }) });
+    const st = [];
+    for (let k = 0; k < 4; k++) for (let i = 0; i < 10; i++) st.push((await send(`203.0.113.${100 + k}`)).status);
+    assert.ok(st.includes(429), 'アドレスの枠は使い切られる');
+    assert.equal((await send('198.51.100.200')).status, 200);
+    assert.equal((await send('198.51.100.200')).status, 200);
+    assert.equal((await send('198.51.100.200')).status, 429);
+  } finally {
+    await s8.close();
+  }
+});
+
 test('IP: IPv6 の /64 の取り出し', () => {
   assert.equal(ipv6Prefix64('2001:db8:1:2::5'), '2001:db8:1:2');
   assert.equal(ipv6Prefix64('2001:0db8:0001:0002:aaaa:bbbb:cccc:dddd'), '2001:db8:1:2');
