@@ -287,7 +287,7 @@ async function sendOtpMail(env, email, code, purpose) {
     `    ${code}`,
     '',
     `この番号は ${OTP_MINUTES} 分で使えなくなります。`,
-    'お心当たりがない場合は、このメールを破棄してください(番号を誰にも教えないでください)。',
+    'お心当たりがない場合は、このメールを破棄してください。番号は誰にも教えないでください。',
     '',
     '大学ノート https://jagjag-yt.github.io/daigaku-note/',
   ].join('\n');
@@ -307,7 +307,7 @@ async function handleOtpVerify(request, env) {
   const ip = clientIp(request);
   const okEmail = await allowRate(env.DB, `otp:verify:${email}${ip ? `:${ip}` : ''}`, 30, 60 * 60);
   const okIp = !ip || (await allowRate(env.DB, `otp:verify:ip:${ip}`, 100, 60 * 60));
-  if (!okEmail || !okIp) return fail(429, '確かめる回数が上限に達しました。しばらく待ってからお試しください。');
+  if (!okEmail || !okIp) return fail(429, '番号を確かめる回数が上限に達しました。しばらく待ってからお試しください。');
 
   const row = await env.DB.prepare(
     'SELECT id, code_hash, expires_at, consumed_at FROM otp_requests WHERE email = ? ORDER BY created_at DESC LIMIT 1',
@@ -435,7 +435,7 @@ async function handleDeviceDelete(url, env, device) {
  */
 async function handleDeleteAccount(env, device) {
   const done = await purgeUser(env, device.user_id, device.email);
-  if (!done) return fail(500, '途中で失敗しました。もう一度ログインしてから、退会をやり直してください。');
+  if (!done) return fail(500, '途中で失敗しました。もう一度ログインしてから、アカウントの削除をやり直してください。');
   return json({ ok: true });
 }
 

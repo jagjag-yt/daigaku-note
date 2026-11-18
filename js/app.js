@@ -511,7 +511,7 @@ function syncSizeSel(el) {
   if (!sel) return;
   const custom = (el.dataset.value || '').startsWith('c:');
   sel.disabled = custom;
-  sel.title = custom ? '自作テンプレートは、その大きさで作ります' : '';
+  sel.title = custom ? 'ページは自作テンプレートと同じ大きさで作ります' : '';
   for (const b of $(el.id === 'nn-tpl' ? '#nn-paper' : '#pp-paper').children) b.disabled = custom;
 }
 const customTpl = (v) => (v && v.startsWith('c:') ? S.ctpl.find((t) => t.id === v.slice(2)) : null);
@@ -535,7 +535,7 @@ async function addCustomTpl(file, pickerEl) {
       const size = id === 'nn-tpl' ? sizeById($('#nn-size').value) : $('#pp-size').value ? sizeById($('#pp-size').value) : addRef || PAGE_A4;
       tplPicker(el, el === pickerEl ? pick : el.dataset.value, size);
     }
-    toast(sizes.length > 20 ? `テンプレートを20ページ分追加しました(${sizes.length}ページのうち)` : `テンプレートを${Math.min(sizes.length, 20)}つ追加しました`);
+    toast(sizes.length > 20 ? `${sizes.length}ページのうち、最初の20ページをテンプレートに追加しました` : `テンプレートを${Math.min(sizes.length, 20)}つ追加しました`);
   } catch (err) {
     toast('テンプレートを読み込めませんでした: ' + err.message, 6000);
   }
@@ -620,7 +620,7 @@ function mk(t, p, n = S.note.id) {
 }
 async function commit(ops) {
   // 閲覧専用のノートは書き換えない(ページの追加・貼り付け・取り消しなど、どの操作から来ても)
-  if (isRO() && ops.some((op) => op.n === S.note.id)) { toast('閲覧専用です。書くには、その他のメニューで外してください'); return false; }
+  if (isRO() && ops.some((op) => op.n === S.note.id)) { toast('閲覧専用です。書くには、その他のメニューの「閲覧専用」を外してください'); return false; }
   for (const op of ops) if (S.note && op.n === S.note.id) applyOp(S.note, op);
   try {
     await db.putOps(ops, S.rec.clock);
@@ -1316,10 +1316,10 @@ function refreshToolbar() {
   $('#tool-pen').style.setProperty('--tc', S.pen.color);
   // 図形を描く設定のときは、ペンのボタンに印を付ける
   $('#tool-pen').classList.toggle('shape-on', !!S.pen.shape);
-  $('#tool-pen').title = S.pen.shape ? `ペン: ${SHAPES[S.pen.shape]}を描く (P)。もう一度押すと設定` : 'ペン (P)';
+  $('#tool-pen').title = S.pen.shape ? `ペン: ${SHAPES[S.pen.shape]}を描く (P)。もう一度押すと設定を開く` : 'ペン (P)';
   $('#tool-marker').style.setProperty('--tc', S.markerMode === 'tape' ? S.tape.color : S.marker.color);
   $('#tool-marker').classList.toggle('tape-on', S.markerMode === 'tape');
-  $('#tool-marker').title = S.markerMode === 'tape' ? 'マスキングテープ (H)。もう一度押すと設定' : '蛍光ペン (H)。もう一度押すと設定';
+  $('#tool-marker').title = S.markerMode === 'tape' ? 'マスキングテープ (H)。もう一度押すと設定を開く' : '蛍光ペン (H)。もう一度押すと設定を開く';
   const sh = $('#shapes');
   sh.classList.toggle('on', S.shapes);
   sh.setAttribute('aria-pressed', S.shapes);
@@ -1511,7 +1511,7 @@ function colorPopover(anchor, k, i) {
         const drop = main.querySelector('.cp-drop');
         if (drop) drop.onclick = async () => { try { const r = await new window.EyeDropper().open(); set(r.sRGBHex, true); } catch {} };
         main.querySelector('.cp-add').onclick = () => {
-          if (S.palettes[k].length >= PALETTE_MAX) toast(`プリセットは${PALETTE_MAX}色までです。編集で外してから追加してください`);
+          if (S.palettes[k].length >= PALETTE_MAX) toast(`プリセットは${PALETTE_MAX}色までです。「編集」で色を外してから追加してください`);
           else if (!S.palettes[k].includes(chosen)) { S.palettes[k].push(chosen); savePrefs(); toast('プリセットに追加しました'); }
           else toast('この色はもうプリセットにあります');
         };
@@ -1590,7 +1590,7 @@ function eraserSizePopover(anchor) {
 }
 
 const ERASER_MODES = {
-  precise: { label: '正確な消しゴム', short: '正確', note: 'なぞった所だけを、普通の半分の幅で細かく消します' },
+  precise: { label: '正確な消しゴム', short: '正確', note: 'なぞった所だけを普通の半分の幅で細かく消します' },
   normal: { label: '普通の消しゴム', short: '普通', note: 'なぞった所だけを消します' },
   stroke: { label: 'ストローク消しゴム', short: 'ストローク', note: '触れた線を丸ごと消します' },
 };
@@ -1622,7 +1622,7 @@ function eraserPopover(anchor) {
     show();
     const toggle = (k) => (b) => {
       const p = S.eraser.pick;
-      if (p[k] && Object.values(p).filter(Boolean).length === 1) return toast('少なくとも1つは消せるようにしてください');
+      if (p[k] && Object.values(p).filter(Boolean).length === 1) return toast('消すものは1つ以上選んだままにしてください');
       p[k] = !p[k];
       b.classList.toggle('checked', p[k]);
       b.setAttribute('aria-checked', p[k]);
@@ -1674,7 +1674,7 @@ function penPopover(anchor) {
       // 図形を描くときは筆圧を使わない(いつも同じ太さ)ので、ペン先と筆圧感度は効かない
       sens.disabled = pen.nib === 'ball' || !!pen.dash || !S.pressure || !!pen.shape;
       for (const b of nibs.children) b.disabled = !!pen.shape;
-      if (pen.shape) body.querySelector('.pp-note').textContent = `いまは${SHAPES[pen.shape]}を描きます(いつも同じ太さ)。ふつうに書くときは「なし」`;
+      if (pen.shape) body.querySelector('.pp-note').textContent = `いまは${SHAPES[pen.shape]}を描きます(いつも同じ太さ)。ふつうに書くときは「なし」を選びます`;
       sens.closest('.pp-row').classList.toggle('off', sens.disabled);
       // 見本の線(軽い→強い→軽い筆圧で書いたつもり)
       const pts = [];
@@ -1739,7 +1739,7 @@ function lassoPopover(anchor) {
         icon: ic, label, on: S.lasso.pick[k], keepOpen: true, attrs: { 'data-pick': k },
         onClick: (b) => {
           // 全部をオフにはしない(何も選べなくなるので)
-          if (S.lasso.pick[k] && Object.values(S.lasso.pick).filter(Boolean).length === 1) return toast('少なくとも1つは選べるようにしてください');
+          if (S.lasso.pick[k] && Object.values(S.lasso.pick).filter(Boolean).length === 1) return toast('選ぶものは1つ以上選んだままにしてください');
           S.lasso.pick[k] = !S.lasso.pick[k];
           b.classList.toggle('checked', S.lasso.pick[k]);
           b.setAttribute('aria-checked', S.lasso.pick[k]);
@@ -1805,12 +1805,12 @@ function moreMenu(anchor) {
     { icon: 'finger', label: '指で書く', id: 'finger', on: S.fingerDraw, onClick: () => {
       S.fingerDraw = !S.fingerDraw;
       savePrefs();
-      toast(S.fingerDraw ? '指でも書けるようにしました' : 'ペンだけで書けるようにしました(指はスクロール)');
+      toast(S.fingerDraw ? '指でも書けるようにしました' : 'ペンだけで書けるようにしました。指ではスクロールします');
     } },
     { icon: 'pen', label: '筆圧で太さを変える', id: 'pressure', on: S.pressure, onClick: () => {
       S.pressure = !S.pressure;
       savePrefs();
-      toast(S.pressure ? '筆圧で線の太さが変わるようにしました(ペンのみ)' : '筆圧を使わず、一定の太さで書くようにしました');
+      toast(S.pressure ? 'ペンで書くと、筆圧で線の太さが変わるようにしました' : '筆圧を使わず、一定の太さで書くようにしました');
     } },
   ], close), { align: 'end' });
 }
@@ -1906,9 +1906,9 @@ function openSettings() {
   choice('画面の色', 'theme', [['system', '端末に合わせる'], ['light', 'ライト'], ['dark', 'ダーク']], S.theme, (v) => { S.theme = v; applyTheme(); savePrefs(); });
   choice('ページの送り方', 'hs', [['v', '縦にスクロール'], ['h', '横に1ページずつ']], S.hs ? 'h' : 'v', (v) => { S.hs = v === 'h'; savePrefs(); applyHs(); });
   section('書く');
-  toggle('指で書く', '切ると、指はスクロールと拡大だけになり、書くのはペンだけ', () => S.fingerDraw, (v) => { S.fingerDraw = v; }, 'set-finger');
+  toggle('指で書く', '切ると、指はスクロールと拡大だけになり、書けるのはペンだけになる', () => S.fingerDraw, (v) => { S.fingerDraw = v; }, 'set-finger');
   toggle('筆圧で太さを変える', 'ペンで書いたときだけ', () => S.pressure, (v) => { S.pressure = v; }, 'set-pressure');
-  toggle('図形補正', '書いてから少し止めると、まっすぐな線や図形に直す', () => S.shapes, (v) => { S.shapes = v; refreshToolbar(); }, 'set-shapes');
+  toggle('図形補正', '書き終えると、まっすぐな線や図形に直す。ペンを止めると、離す前に確かめられる', () => S.shapes, (v) => { S.shapes = v; refreshToolbar(); }, 'set-shapes');
   toggle('消したら前の道具に戻す', '消しゴムで1回消したら、その前に使っていた道具に戻る', () => S.eraser.back, (v) => { S.eraser.back = v; }, 'set-eraser-back');
   section('ツールバー');
   choice('置く場所', 'tbpos', [['top', '上'], ['bottom', '下']], S.tb.pos, (v) => { S.tb.pos = v; savePrefs(); applyToolbarLayout(); });
@@ -1928,7 +1928,7 @@ function openSettings() {
         <button type="button" class="icon-btn small tb-up" aria-label="${TOOL_INFO[k].label}を前へ" title="前へ"${i === 0 ? ' disabled' : ''}>${icon('up', 18)}</button>
         <button type="button" class="icon-btn small tb-down" aria-label="${TOOL_INFO[k].label}を後ろへ" title="後ろへ"${i === S.tb.order.length - 1 ? ' disabled' : ''}>${icon('down', 18)}</button>
         <button type="button" class="tb-show" role="switch" aria-checked="${shown}" aria-label="${TOOL_INFO[k].label}を出す"${k === 'pen' ? ' disabled title="ペンはいつも出します"' : ''}><span class="switch${shown ? ' on' : ''}" aria-hidden="true"></span></button>`;
-      row.querySelector('.tb-name').textContent = TOOL_INFO[k].label + (k === 'shapes' ? '(スマホの幅では、その他のメニューに出ます)' : '');
+      row.querySelector('.tb-name').textContent = TOOL_INFO[k].label + (k === 'shapes' ? '(スマホの幅ではその他のメニューに出ます)' : '');
       const move = (d) => {
         const o = S.tb.order;
         [o[i], o[i + d]] = [o[i + d], o[i]];
@@ -1957,12 +1957,12 @@ function openSettings() {
   section('ロック');
   const lockRow = document.createElement('div');
   lockRow.className = 'set-row';
-  lockRow.innerHTML = `<span class="set-text"><span class="set-label">ロック用のパスコード</span><span class="set-hint">ノートのメニューの「ロックする」で使います。この端末だけのもので、ノートの中身を暗号にするものではありません</span></span><span class="set-btns"></span>`;
+  lockRow.innerHTML = `<span class="set-text"><span class="set-label">ロック用のパスコード</span><span class="set-hint">ノートのメニューの「ロックする」で使います。パスコードはこの端末だけのもので、ノートの中身は暗号化されません</span></span><span class="set-btns"></span>`;
   const lb = lockRow.querySelector('.set-btns');
   const mkBtn = (label, fn) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.onclick = fn; lb.appendChild(b); };
   if (S.lockHash) {
     mkBtn('変更…', async () => { if ((await checkPasscode('今のパスコード')) && (await setPasscode())) openSettings(); });
-    mkBtn('消す…', async () => { if (await checkPasscode('今のパスコード')) { S.lockHash = null; savePrefs(); toast('パスコードを消しました。ロック中のノートを開くときに、また決めます'); openSettings(); } });
+    mkBtn('消す…', async () => { if (await checkPasscode('今のパスコード')) { S.lockHash = null; savePrefs(); toast('パスコードを消しました。ロック中のノートを開くときに、パスコードをまた決めます'); openSettings(); } });
   } else mkBtn('決める…', async () => { if (await setPasscode()) openSettings(); });
   body.appendChild(lockRow);
   section('このアプリについて');
@@ -2159,7 +2159,7 @@ function bindEditor() {
     S.shapes = !S.shapes;
     savePrefs();
     refreshToolbar();
-    toast(S.shapes ? '図形補正をオンにしました(書き終えると、直線・折れ線・弧・円・三角形・四角形などに整えます)' : '図形補正をオフにしました');
+    toast(S.shapes ? '図形補正をオンにしました。書き終えると、直線・折れ線・弧・円・三角形・四角形などに整えます' : '図形補正をオフにしました');
   };
   $('#undo').onclick = undo;
   $('#redo').onclick = redo;
@@ -2688,7 +2688,7 @@ async function setRO(on) {
   } else S.ro.delete(S.note.id);
   savePrefs();
   refreshToolbar();
-  toast(on ? '閲覧専用にしました。書くには、その他のメニューで外してください' : '書けるようにしました');
+  toast(on ? '閲覧専用にしました。書くには、その他のメニューの「閲覧専用」を外してください' : '書けるようにしました');
 }
 
 // ---------- ノートのロック(この端末のパスコードで開く。中身を暗号にするものではない) ----------
@@ -2703,7 +2703,7 @@ async function setPasscode() {
   if (a == null) return false;
   if (!codeOk(a)) { toast('数字 4〜12 桁で入れてください'); return false; }
   const b = await askName('もう一度入れてください', '', { secret: true });
-  if (b !== a) { if (b != null) toast('2 回の入力が違いました'); return false; }
+  if (b !== a) { if (b != null) toast('1 回目と 2 回目の入力が違います'); return false; }
   const salt = [...crypto.getRandomValues(new Uint8Array(12))].map((x) => x.toString(16).padStart(2, '0')).join('');
   S.lockHash = { salt, hash: await passHash(a, salt) };
   savePrefs();
@@ -3132,7 +3132,7 @@ function toggleRuler(on = !S.ruler) {
   const body = $('.ed-body').getBoundingClientRect();
   S.ruler = on ? { x: body.left + body.width / 2, y: body.top + body.height / 2, a: 0 } : null;
   placeRuler();
-  toast(on ? '定規を出しました。縁の近くから書くと、まっすぐ沿います' : '定規をしまいました');
+  toast(on ? '定規を出しました。縁の近くから書くと、線が縁に沿ってまっすぐになります' : '定規をしまいました');
 }
 function placeRuler() {
   const el = $('#ruler');
@@ -3972,7 +3972,7 @@ function markerPopover(anchor) {
     const seg = head.querySelector('.mk-mode'), note = head.querySelector('.mk-note');
     const show = () => {
       for (const b of seg.children) { const on = b.dataset.v === S.markerMode; b.classList.toggle('on', on); b.setAttribute('aria-checked', on); }
-      note.textContent = S.markerMode === 'tape' ? '下の文字を隠す帯。押すとめくれて下が見えます(暗記用)' : '下の文字が透けて見えるペン';
+      note.textContent = S.markerMode === 'tape' ? '下の文字を隠す暗記用の帯。押すとめくれて下が見えます' : '下の文字が透けて見えるペン';
     };
     for (const [v, label] of [['marker', '蛍光ペン'], ['tape', 'マスキングテープ']]) {
       const b = document.createElement('button');
@@ -4908,7 +4908,7 @@ function renderSidebar() {
   if (S.sbView === 'outline') return renderOutline(list, all, cur);
   const pages = S.sbView === 'marks' ? all.filter((p) => p.mark) : all;
   if (!pages.length) {
-    list.innerHTML = '<p class="sb-empty">しおりを付けたページはありません。ページの操作(サムネイルの ⌄)か、その他のメニューから付けられます。</p>';
+    list.innerHTML = '<p class="sb-empty">しおりを付けたページはありません。しおりは、サムネイルの ⌄ で開くページの操作か、その他のメニューから付けられます。</p>';
     return;
   }
   // サムネイルは見えているものだけ描く(ページが多いノート・PDF でも重くならないように)
@@ -5149,7 +5149,7 @@ async function editPageTitle(pg) {
 function renderOutline(list, all, cur) {
   const rows = all.map((pg, i) => ({ pg, i })).filter(({ pg }) => pg.title);
   if (!rows.length) {
-    list.innerHTML = '<p class="sb-empty">目次はまだありません。ページの操作(サムネイルの ⌄)の「目次に追加」で、見出しを付けたページがここに並びます。</p>';
+    list.innerHTML = '<p class="sb-empty">目次はまだありません。サムネイルの ⌄ で開くページの操作から「目次に追加」を選ぶと、見出しを付けたページがここに並びます。</p>';
     return;
   }
   for (const { pg, i } of rows) {
