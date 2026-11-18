@@ -6,6 +6,7 @@ import http from 'node:http';
 import worker, { cleanup } from '../server/src/index.js';
 import { parseDavPath } from '../server/src/dav.js';
 import { fakeEnv, startWorker, captureMail } from './cf-fakes.mjs';
+import { couponHash, newCouponCode, normalizeCoupon } from '../server/src/coupon.js';
 
 const ORIGIN = 'https://jagjag-yt.github.io';
 let env, srv, mail;
@@ -520,4 +521,111 @@ test('定期実行: 期限切れの行を消し、使っている量を数え直
   assert.equal(env.DB.q("SELECT COUNT(*) AS n FROM rate_limits WHERE bucket = 'old'")[0].n, 0);
   assert.equal(env.DB.q("SELECT COUNT(*) AS n FROM otp_requests WHERE id = 'o1'")[0].n, 0);
   assert.equal(env.DB.q('SELECT bytes_used FROM users WHERE id = ?', userId)[0].bytes_used, 0);
+});
+
+// ---- クーポンコード -------------------------------------------------------
+
+
+// scripts/coupon.mjs と同じ形で D1 に入れる(サーバーには発行の受け口がない)
+async function issueCoupon({ perk = 'adfree', days = null, expiresAt = null } = {}) {
+  const code = newCouponCode();
+  env.DB.x('INSERT INTO coupons (code_hash, perk, days, expires_at, note, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    await couponHash(normalizeCoupon(code)), perk, days, expiresAt, 'test', new Date().toISOString());
+  return code;
+}
+
+test('クーポン: コードの形とそろえ方', () => {
+  const c = newCouponCode();
+  assert.match(c, /^[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}$/);
+  assert.equal(normalizeCoupon(c.toLowerCase().replace(/-/g, ' ')), c.replace(/-/g, ''));
+  // 全角・長音記号のハイフンも受ける
+  const wide = c.replace(/[A-Z0-9]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) + 0xfee0)).replace(/-/g, 'ー');
+  assert.equal(normalizeCoupon(wide), c.replace(/-/g, ''));
+  assert.equal(normalizeCoupon('ABCD-EFGH-IJKL'), null); // I は使わない文字
+  assert.equal(normalizeCoupon('ABCD-EFGH-JKL'), null); // 短い
+  assert.equal(normalizeCoupon(''), null);
+});
+
+test('クーポン: 1回だけ使える。特典が /me に載る。ほかの人は使えない', async () => {
+  const a = await login('coupon-a@example.com');
+  const b = await login('coupon-b@example.com');
+  assert.deepEqual((await api('/me', { token: a.token })).data.perks, []);
+  const code = await issueCoupon();
+
+  const r = await api('/coupon', { method: 'POST', token: a.token, body: { code: code.toLowerCase() } });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.perk, 'adfree');
+  assert.equal(r.data.expiresAt, null);
+  assert.deepEqual((await api('/me', { token: a.token })).data.perks, [{ perk: 'adfree', name: '広告なし', expiresAt: null }]);
+
+  const again = await api('/coupon', { method: 'POST', token: a.token, body: { code } });
+  assert.equal(again.status, 409);
+  const other = await api('/coupon', { method: 'POST', token: b.token, body: { code } });
+  assert.equal(other.status, 400);
+  assert.deepEqual((await api('/me', { token: b.token })).data.perks, []);
+  const row = env.DB.q('SELECT redeemed_by FROM coupons WHERE code_hash = ?', await couponHash(normalizeCoupon(code)))[0];
+  assert.equal(row.redeemed_by, a.userId);
+
+  // 鍵がなければ使えない
+  assert.equal((await api('/coupon', { method: 'POST', body: { code } })).status, 401);
+});
+
+test('クーポン: 同時に2人が送っても、使えるのは1人だけ', async () => {
+  const users = await Promise.all([1, 2, 3, 4].map((i) => login(`race${i}@example.com`)));
+  const code = await issueCoupon();
+  const rs = await Promise.all(users.map((u) => api('/coupon', { method: 'POST', token: u.token, body: { code } })));
+  assert.equal(rs.filter((r) => r.status === 200).length, 1);
+  assert.equal(env.DB.q("SELECT COUNT(*) AS n FROM perks WHERE perk = 'adfree' AND user_id IN (?, ?, ?, ?)", ...users.map((u) => u.userId))[0].n, 1);
+});
+
+test('クーポン: 期限切れ・存在しない・形が違う・止めたコード。ずっと持っている特典では使い切らない', async () => {
+  const u = await login('coupon-c@example.com');
+  const expired = await issueCoupon({ expiresAt: '2000-01-01T00:00:00.000Z' });
+  assert.equal((await api('/coupon', { method: 'POST', token: u.token, body: { code: expired } })).status, 400);
+  assert.equal((await api('/coupon', { method: 'POST', token: u.token, body: { code: newCouponCode() } })).status, 400);
+  assert.equal((await api('/coupon', { method: 'POST', token: u.token, body: { code: 'hello' } })).status, 400);
+  assert.equal((await api('/coupon', { method: 'POST', token: u.token, body: { code: '' } })).status, 400);
+
+  const first = await issueCoupon();
+  assert.equal((await api('/coupon', { method: 'POST', token: u.token, body: { code: first } })).status, 200);
+  const second = await issueCoupon();
+  const dup = await api('/coupon', { method: 'POST', token: u.token, body: { code: second } });
+  assert.equal(dup.status, 409);
+  assert.equal(env.DB.q('SELECT redeemed_by FROM coupons WHERE code_hash = ?', await couponHash(normalizeCoupon(second)))[0].redeemed_by, null);
+});
+
+test('クーポン: 日数つきの特典。期限つきどうしは遅いほう、切れたら /me から消える', async () => {
+  const u = await login('coupon-d@example.com');
+  const c30 = await issueCoupon({ perk: 'adfree', days: 30 });
+  const r = await api('/coupon', { method: 'POST', token: u.token, body: { code: c30 } });
+  assert.equal(r.status, 200);
+  const exp = Date.parse(r.data.expiresAt);
+  assert.ok(Math.abs(exp - (Date.now() + 30 * 86_400_000)) < 60_000, r.data.expiresAt);
+  const c10 = await issueCoupon({ perk: 'adfree', days: 10 });
+  const r2 = await api('/coupon', { method: 'POST', token: u.token, body: { code: c10 } });
+  assert.equal(r2.status, 200);
+  assert.equal(r2.data.expiresAt, r.data.expiresAt); // 短いほうでは縮まない
+  env.DB.x("UPDATE perks SET expires_at = '2000-01-01T00:00:00.000Z' WHERE user_id = ?", u.userId);
+  assert.deepEqual((await api('/me', { token: u.token })).data.perks, []);
+  // 切れたあとに使えば、そこから数え直す
+  const c5 = await issueCoupon({ perk: 'adfree', days: 5 });
+  const r3 = await api('/coupon', { method: 'POST', token: u.token, body: { code: c5 } });
+  assert.ok(Math.abs(Date.parse(r3.data.expiresAt) - (Date.now() + 5 * 86_400_000)) < 60_000);
+});
+
+test('クーポン: 試す回数は1時間に10回まで', async () => {
+  const u = await login('coupon-e@example.com');
+  for (let i = 0; i < 10; i++) assert.equal((await api('/coupon', { method: 'POST', token: u.token, body: { code: newCouponCode() } })).status, 400);
+  const good = await issueCoupon();
+  assert.equal((await api('/coupon', { method: 'POST', token: u.token, body: { code: good } })).status, 429);
+});
+
+test('クーポン: 退会すると特典は消え、使ったコードは使用済みのまま残る', async () => {
+  const u = await login('coupon-f@example.com');
+  const code = await issueCoupon();
+  assert.equal((await api('/coupon', { method: 'POST', token: u.token, body: { code } })).status, 200);
+  assert.equal((await api('/account', { method: 'DELETE', token: u.token })).status, 200);
+  assert.equal(env.DB.q('SELECT COUNT(*) AS n FROM perks WHERE user_id = ?', u.userId)[0].n, 0);
+  const again = await login('coupon-f@example.com');
+  assert.equal((await api('/coupon', { method: 'POST', token: again.token, body: { code } })).status, 400);
 });

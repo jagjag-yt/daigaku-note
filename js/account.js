@@ -57,3 +57,25 @@ export const devices = (token) => call('/devices', { token }).then((d) => d.devi
 export const revoke = (token, id) => call(`/devices?id=${encodeURIComponent(id)}`, { method: 'DELETE', token });
 export const logout = (token) => call('/logout', { method: 'POST', token });
 export const deleteAccount = (token) => call('/account', { method: 'DELETE', token });
+// クーポンコードを使う → { perk, name, expiresAt, perks }
+export const redeemCoupon = (token, code) => call('/coupon', { method: 'POST', body: { code }, token });
+
+// 特典(クーポンなどで付いたもの)を端末に覚えておく。オフラインでも「広告なし」などを判断できるように。
+// サーバーの /me・/coupon の perks を受け取るたびに書き直す。ログアウトしたら消す。
+const PERKS_KEY = 'daigaku-note.perks';
+export function savePerks(userId, perks) {
+  try {
+    if (!userId) globalThis.localStorage?.removeItem(PERKS_KEY);
+    else globalThis.localStorage?.setItem(PERKS_KEY, JSON.stringify({ userId, perks: Array.isArray(perks) ? perks : [] }));
+  } catch { /* 保存できない環境では、毎回サーバーに聞く */ }
+}
+/** その特典をいま持っているか(端末に覚えたものだけで決める。通信はしない) */
+export function hasPerk(perk, userId) {
+  try {
+    const v = JSON.parse(globalThis.localStorage?.getItem(PERKS_KEY) || 'null');
+    if (!v || (userId && v.userId !== userId)) return false;
+    return v.perks.some((p) => p.perk === perk && (!p.expiresAt || Date.parse(p.expiresAt) > Date.now()));
+  } catch {
+    return false;
+  }
+}

@@ -89,3 +89,27 @@ CREATE TABLE IF NOT EXISTS rate_limits (
   count      INTEGER NOT NULL,
   reset_at   TEXT NOT NULL
 );
+
+-- クーポンコード(テストに協力してくれた人への特典など)。発行は scripts/coupon.mjs だけ(サーバーに発行の受け口はない)。
+-- コードそのものは持たず、ハッシュだけ(src/coupon.js の couponHash)。1つのコードは1回だけ使える。
+CREATE TABLE IF NOT EXISTS coupons (
+  code_hash   TEXT PRIMARY KEY,
+  perk        TEXT NOT NULL,              -- 付ける特典。今は 'adfree'(広告なし)だけ
+  days        INTEGER,                    -- 特典の日数。NULL ならずっと
+  expires_at  TEXT,                       -- このコードを使える期限。NULL なら期限なし
+  note        TEXT NOT NULL DEFAULT '',   -- 発行したときのメモ(「テスト協力 2026-11」など)。利用者には見せない
+  created_at  TEXT NOT NULL,
+  redeemed_by TEXT,                       -- 使った利用者(users.id)。退会しても残す(同じコードをもう一度使わせないため)
+  redeemed_at TEXT
+);
+
+-- 利用者が持っている特典。特典1種類につき1行。
+CREATE TABLE IF NOT EXISTS perks (
+  user_id     TEXT NOT NULL,
+  perk        TEXT NOT NULL,
+  granted_at  TEXT NOT NULL,
+  expires_at  TEXT,                       -- NULL ならずっと
+  coupon_hash TEXT,                       -- どのコードで付いたか
+  PRIMARY KEY (user_id, perk),
+  FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+);

@@ -18,6 +18,7 @@
 //   DELETE /devices?id=…      端末を1台外す(なくした端末など)
 //   POST   /logout            この端末を外す
 //   DELETE /account           退会(預かった変更・PDF・画像も全部消す)
+//   POST   /coupon            { code } → クーポンコードを使って特典を付ける(1つのコードは1回だけ。src/coupon.js)
 //   *      /dav/…             同期の置き場(MKCOL・PROPFIND・PUT・GET・HEAD)
 //
 // 鍵の渡し方(/me などと /dav/ のどちらも):
@@ -46,12 +47,13 @@ import {
   safeEqual,
 } from './lib.js';
 import { QUOTA_BYTES, handleDav, parseDavPath } from './dav.js';
+import { activePerks, handleCouponRedeem } from './coupon.js';
 
 /**
  * 配信されている版。/health に載せて、外から「どれが動いているか」を確かめられるようにする。
  * 受け口を足したり応答を変えたりしたら、この文字列も更新すること。
  */
-export const API_VERSION = '2026-11-15-purpose';
+export const API_VERSION = '2026-11-18-coupon';
 
 /** 1人が同時にログインできる端末の数。超えたら、いちばん長く使っていない端末を外す。 */
 const MAX_DEVICES = 5;
@@ -301,7 +303,7 @@ async function handleOtpVerify(request, env) {
 
 // ---- ログイン中の操作 -----------------------------------------------------
 
-function handleMe(env, device) {
+async function handleMe(env, device) {
   return json({
     ok: true,
     email: device.email,
@@ -310,6 +312,8 @@ function handleMe(env, device) {
     deviceId: device.id,
     deviceLabel: device.label,
     usage: { bytes: device.bytes_used, quota: Number(env.QUOTA_BYTES) || QUOTA_BYTES },
+    // クーポンなどで付いた特典 [{ perk, name, expiresAt }]。表がまだない(schema.sql を流す前に配信した)ときは空にして、ほかは返す
+    perks: await activePerks(env.DB, device.user_id).catch((err) => (console.log('perks failed', String(err)), [])),
   });
 }
 
@@ -350,6 +354,8 @@ async function handleDeleteAccount(env, device) {
     env.DB.prepare('DELETE FROM op_files WHERE user_id = ?').bind(uid),
     env.DB.prepare('DELETE FROM op_logs WHERE user_id = ?').bind(uid),
     env.DB.prepare('DELETE FROM blobs WHERE user_id = ?').bind(uid),
+    env.DB.prepare('DELETE FROM perks WHERE user_id = ?').bind(uid),
+    env.DB.prepare('DELETE FROM rate_limits WHERE bucket = ?').bind(`coupon:u:${uid}`),
     env.DB.prepare('DELETE FROM otp_requests WHERE email = ?').bind(String(device.email ?? '').toLowerCase()),
     env.DB.prepare('DELETE FROM rate_limits WHERE bucket = ?').bind(`dav:w:${uid}`),
     env.DB.prepare('DELETE FROM users WHERE id = ?').bind(uid),
@@ -431,7 +437,8 @@ export default {
       }
 
       if (davPath) return finish(await handleDav(request, env, device, davPath));
-      if (url.pathname === '/me' && request.method === 'GET') return finish(handleMe(env, device));
+      if (url.pathname === '/me' && request.method === 'GET') return finish(await handleMe(env, device));
+      if (url.pathname === '/coupon' && request.method === 'POST') return finish(await handleCouponRedeem(request, env, device, clientIp(request)));
       if (url.pathname === '/devices' && request.method === 'GET') return finish(await handleDevices(env, device));
       if (url.pathname === '/devices' && request.method === 'DELETE') return finish(await handleDeviceDelete(url, env, device));
       if (url.pathname === '/logout' && request.method === 'POST') {

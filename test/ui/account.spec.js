@@ -296,3 +296,36 @@ test('番号の入力の間違い・全角の入力・読み込み直したと�
   await a.locator('#account-btn').click();
   await expect(a.locator('#acct-who')).toHaveText(email);
 });
+
+test('クーポンコード: アカウントの画面で使うと特典が付く。2回目は使えない', async ({ browser, request }, testInfo) => {
+  const a = await open(browser);
+  await signup(a, freshEmail('coupon', testInfo));
+  const { code } = await (await request.post(`${API}/__test/coupon`, { data: { perk: 'adfree' } })).json();
+
+  await a.locator('#account-btn').click();
+  await expect(a.locator('#acct-perks')).toContainText('付いている特典はありません');
+  // 空のまま押すと知らせる
+  await a.locator('#acct-coupon-use').click();
+  await expect(a.locator('#acct-coupon-msg')).toContainText('コードを入力してください');
+  // 小文字・ハイフンなしでも通る
+  await a.locator('#acct-coupon').fill(code.toLowerCase().replace(/-/g, ''));
+  await a.locator('#acct-coupon-use').click();
+  await expect(a.locator('#acct-coupon-msg')).toContainText('「広告なし」の特典が付きました');
+  await expect(a.locator('#acct-perks')).toContainText('広告なし');
+  await expect(a.locator('#acct-perks')).toContainText('期限なし');
+  await expect(a.locator('#acct-coupon')).toHaveValue('');
+  expect(await a.evaluate(() => JSON.parse(localStorage.getItem('daigaku-note.perks')).perks[0].perk)).toBe('adfree');
+
+  await a.locator('#acct-coupon').fill(code);
+  await a.locator('#acct-coupon-use').click();
+  await expect(a.locator('#acct-coupon-msg')).toContainText('すでに使っています');
+  await a.locator('#acct-coupon').fill('ABCD');
+  await expect(a.locator('#acct-coupon-msg')).toBeEmpty();
+  await a.locator('#acct-coupon-use').click();
+  await expect(a.locator('#acct-coupon-msg')).toContainText('形が正しくありません');
+
+  // 開き直しても特典が出る(サーバーから読む)
+  await a.keyboard.press('Escape');
+  await a.locator('#account-btn').click();
+  await expect(a.locator('#acct-perks')).toContainText('広告なし');
+});

@@ -50,7 +50,7 @@ const PEN_NIBS = {
 };
 const PEN_DEFAULTS = { nib: 'fountain', sens: 50, stab: 0, dash: '', shape: '' }; // shape: ドラッグで描く図形(空ならふつうに書く)
 
-const APP_VERSION = 'v51'; // sw.js の VERSION と合わせる
+const APP_VERSION = 'v52'; // sw.js の VERSION と合わせる
 const MAX_TABS = 12; // 開いておけるタブの数
 const DEFAULT_HIDDEN = ['laser']; // 最初は隠しておく道具(設定やその他のメニューから使う)
 

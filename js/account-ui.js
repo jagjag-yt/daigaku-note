@@ -7,7 +7,7 @@
 // ログインしたあと:
 //   本棚の右上の人のボタン(#account-btn) … 頭文字を出す。押すとアカウントの画面
 //   同期のダイアログ(#sync-dialog)      … アカウントの要約(#acct-summary)
-//   アカウントの画面(#account-dialog)   … 容量・端末・ログアウト・削除
+//   アカウントの画面(#account-dialog)   … 容量・特典(クーポンコード)・端末・ログアウト・削除
 //
 // ログインの状態は端末の中に持つ(同期の設定 dav.config().account)ので、オフラインでもログインしたまま使える。
 // ログアウトしたとき・サーバーに鍵を断られたとき(ほかの端末から外された・退会した)に、ログインのページに戻る。
@@ -100,7 +100,7 @@ const initial = (email) => (String(email || '?').trim()[0] || '?').toUpperCase()
 
 function msg(el, text) { el.textContent = text || ''; }
 const emailMsg = () => $(`#auth-${purpose}-msg`);
-function clearMsgs() { for (const id of ['#auth-login-msg', '#auth-signup-msg', '#acct-code-msg', '#acct-msg']) msg($(id), ''); }
+function clearMsgs() { for (const id of ['#auth-login-msg', '#auth-signup-msg', '#acct-code-msg', '#acct-msg', '#acct-coupon-msg']) msg($(id), ''); }
 
 // 通信のあいだは、画面のボタンを押せないようにする(2回押されないように)。失敗したら el に文言を出す
 async function run(el, fn) {
@@ -477,6 +477,9 @@ export function open() {
 function renderInfo() {
   const acc = dav.config().account;
   msg($('#acct-msg'), '');
+  msg($('#acct-coupon-msg'), '');
+  $('#acct-coupon-msg').classList.remove('ok');
+  $('#acct-coupon').value = '';
   $('#acct-avatar').textContent = initial(acc.email);
   $('#acct-who').textContent = acc.email;
   $('#acct-since').textContent = acc.deviceLabel ? `この端末: ${acc.deviceLabel}` : '';
@@ -513,6 +516,13 @@ async function loadDetails() {
     meter.querySelector('span').style.width = '0%';
     meter.removeAttribute('aria-valuetext');
     $('#acct-usage').textContent = '容量を読み込めませんでした。';
+  }
+
+  if (me.status === 'fulfilled' && Array.isArray(me.value.perks)) {
+    account.savePerks(dav.config().user, me.value.perks);
+    renderPerks(me.value.perks);
+  } else {
+    renderPerks(null);
   }
 
   if (list.status !== 'fulfilled') {
@@ -555,10 +565,26 @@ async function loadDetails() {
   }));
 }
 
+// 特典の一覧。null は読み込めなかったとき
+function renderPerks(perks) {
+  const ul = $('#acct-perks');
+  const li = (text, cls) => { const e = document.createElement('li'); if (cls) e.className = cls; e.textContent = text; return e; };
+  if (!perks) { ul.replaceChildren(li('特典を読み込めませんでした。', 'none')); return; }
+  if (!perks.length) { ul.replaceChildren(li('付いている特典はありません。', 'none')); return; }
+  ul.replaceChildren(...perks.map((p) => {
+    const e = li(p.name || p.perk);
+    const when = document.createElement('small');
+    when.textContent = p.expiresAt ? `${new Date(p.expiresAt).toLocaleDateString('ja-JP')} まで` : '期限なし';
+    e.append(when);
+    return e;
+  }));
+}
+
 // ログアウト・退会のあと: この端末の同期を止めて、ログインのページに戻す(端末の中のノートはそのまま)
 async function accountOff() {
   const cfg = dav.config();
   if (cfg.account) saveLast({ userId: cfg.user, email: cfg.account.email });
+  account.savePerks(null);
   await dav.configure({ url: '', user: '', pass: '', auto: false });
   h.setSyncStatus('');
   refresh();
@@ -661,6 +687,26 @@ export function init(helpers) {
   };
 
   $('#acct-sync').onclick = () => dav.syncNow(true);
+  const coupon = $('#acct-coupon');
+  coupon.oninput = () => { msg($('#acct-coupon-msg'), ''); $('#acct-coupon-msg').classList.remove('ok'); };
+  $('#acct-coupon-form').onsubmit = async (e) => {
+    e.preventDefault();
+    if (busy) return;
+    const el = $('#acct-coupon-msg');
+    el.classList.remove('ok');
+    if (!coupon.value.trim()) { msg(el, 'コードを入力してください。'); coupon.focus(); return; }
+    const r = await run(el, () => account.redeemCoupon(token(), coupon.value));
+    if (!r) {
+      if (run.lastError?.status === 401) dav.syncNow(true); // 鍵が断られた: ログインのページに戻る
+      return;
+    }
+    coupon.value = '';
+    account.savePerks(dav.config().user, r.perks);
+    renderPerks(r.perks);
+    el.classList.add('ok');
+    msg(el, `「${r.name}」の特典が付きました${r.expiresAt ? `(${new Date(r.expiresAt).toLocaleDateString('ja-JP')} まで)` : ''}。`);
+    h.toast(`クーポンを使いました: ${r.name}`);
+  };
   $('#acct-logout').onclick = async () => {
     const yes = await h.askConfirm({
       heading: 'ログアウトしますか?',

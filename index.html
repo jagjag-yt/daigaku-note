@@ -273,6 +273,18 @@
         <div class="acct-meter" id="acct-meter" role="meter" aria-label="使っている容量" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
         <p class="small" id="acct-usage">読み込んでいます…</p>
       </section>
+      <section class="acct-card" id="acct-perks-card">
+        <h3>特典</h3>
+        <ul id="acct-perks" class="acct-perks"></ul>
+        <form id="acct-coupon-form" class="acct-coupon" novalidate>
+          <label for="acct-coupon" class="small">クーポンコードをお持ちの方は入力してください。</label>
+          <div class="acct-coupon-row">
+            <input id="acct-coupon" type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" enterkeyhint="done" maxlength="40" placeholder="XXXX-XXXX-XXXX" aria-describedby="acct-coupon-msg">
+            <button type="submit" id="acct-coupon-use">使う</button>
+          </div>
+          <p class="acct-msg" id="acct-coupon-msg" role="alert"></p>
+        </form>
+      </section>
       <section class="acct-card">
         <h3>ログイン中の端末</h3>
         <ul id="acct-devices" class="acct-devices"></ul>

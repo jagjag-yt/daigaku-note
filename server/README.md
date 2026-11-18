@@ -14,6 +14,8 @@ WebDAV の URL・ユーザー名・アプリパスワードを手で入れなく
 | `src/index.js` | 入口・ログイン(6桁の番号)・端末の一覧・退会・定期実行 |
 | `src/dav.js` | WebDAV のまね(アプリの同期が使う MKCOL・PROPFIND・PUT・GET・HEAD だけ) |
 | `src/lib.js` | 小さな道具(ハッシュ・回数制限など) |
+| `src/coupon.js` | クーポンコード(使う・特典の一覧) |
+| `scripts/coupon.mjs` | クーポンコードの発行・一覧・停止(運営者のパソコンで使う) |
 | `schema.sql` | D1 の表 |
 | `wrangler.jsonc` | デプロイの設定 |
 
@@ -29,6 +31,7 @@ WebDAV の URL・ユーザー名・アプリパスワードを手で入れなく
 | `DELETE /devices?id=…` | 端末を1台外す | 鍵 |
 | `POST /logout` | この端末を外す | 鍵 |
 | `DELETE /account` | 退会(変更・PDF・画像も全部消す) | 鍵 |
+| `POST /coupon` | `{ code }` → クーポンコードを使って特典を付ける。1つのコードは1回だけ。`/me` の `perks` に特典が載る | 鍵 |
 | `/dav/…` | 同期の置き場 | 鍵 |
 
 鍵の渡し方は2つ。どちらでも同じ。
@@ -124,6 +127,42 @@ WebDAV の URL・ユーザー名・アプリパスワードを手で入れなく
    ```
 
    `{"ok":true,"version":"…"}` が返ればよい。`version` は `src/index.js` の `API_VERSION`。
+
+## クーポンコードを配る
+
+テストに協力してくれた人への「広告なし」などの特典は、クーポンコードで配る。
+
+- コードを作れるのは、Cloudflare にログインしたパソコン(`npx wrangler login` 済み)だけ。サーバーには発行の受け口がなく、
+  `scripts/coupon.mjs` が D1 に直接書き込む。
+- 1つのコードは1回だけ使える。使った人はアプリの「アカウント」の「特典」の欄にコードを入れる。
+- サーバーにはコードそのものを置かず、ハッシュだけを置く。作ったコードは、作ったときの画面と `server/coupons/` のファイルにしか残らない
+  (このフォルダはコミットしない)。なくしたら、作り直して古いものは止める。
+
+コマンドはこの `server/` フォルダで打つ(Windows でも `node` のまま)。
+
+```
+node scripts/coupon.mjs make --count 10 --note "テスト協力 2026-11"
+```
+
+広告なし(期限なし)のコードを10個作り、画面に出して `coupons/` に保存する。ほかに付けられるもの:
+
+- `--days 365` … 特典を365日だけにする(付けなければ期限なし)
+- `--until 2027-03-31` … コードを使える期限(その日の終わり、日本時間)。過ぎたコードは使えない
+- `--dry-run` … データベースに書かずに、作る SQL を見るだけ(出たコードは使えない)
+
+```
+node scripts/coupon.mjs list                       … 発行した数と使われた数(メモごと)
+node scripts/coupon.mjs disable XXXX-XXXX-XXXX     … まだ使われていないコードを使えなくする
+```
+
+どれも `--local` を付けると、手元の D1(`wrangler dev` 用)に対して行う。
+
+**はじめて使う前に**、表を足すために schema.sql をもう一度流し、サーバーを配信する(何度流しても壊れない)。
+
+```
+npx wrangler d1 execute daigaku-note --remote --file=schema.sql
+npx wrangler deploy
+```
 
 ## 手元で動かす
 
