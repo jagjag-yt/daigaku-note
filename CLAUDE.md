@@ -13,6 +13,7 @@
 - PR を出す前と、PR の CI が緑になったあとに、`git fetch origin main` をして main を取り込む。ほかのスレッドが同じファイルを変えていることが多い。
 - 競合はハンクごとに解く。`git checkout --theirs <ファイル>` でファイルごと片方に寄せると、競合していない自分の変更まで消える。テキストのファイルでは使わない。
 - 基準のスクショ(`test/ui/__screenshots__/`)の競合は、main の画像を採り、取り込みのコミットのメッセージに `[update-screenshots]` を入れて CI に作り直させる。手元では基準の画像を作らない。
+- CI は同じブランチの前の run を取り消す。`[update-screenshots]` のコミットを push したあと、CI が終わる前に別のコミットを push すると、作り直しが行われずに `ui` が落ちる。続けて push するなら、最後のコミットにも `[update-screenshots]` を入れる。
 - CI が「基準のスクショを更新」のコミットを足すので、続けて push する前に `git pull --rebase`(またはマージ)をする。
 
 ## 文言
