@@ -154,8 +154,9 @@ CREATE TABLE IF NOT EXISTS oauth_flows (
 
 -- 持ち主を確かめられないアドレスで、Apple・Google から作ったアカウント(src/index.js の loginUser)。
 -- Google のアカウントにほかの会社のアドレスを付けた人などは、そのアドレスを今も持っているとは限らない。
--- あとで本当の持ち主がメールの番号でログインしたら、このアカウントからアドレスを外し(…@unverified.invalid)、
--- 持ち主には新しいアカウントを作る(他人が先にアカウントを作って、持ち主のノートを受け取る「事前の乗っ取り」を防ぐ)。
+-- そのアドレスでメールの番号やほかの方法で来た人は、このアカウントに入れず、作った方法を伝える(src/index.js の unverifiedVia)。
+-- 番号の人が「新しいアカウントを作成」を選んだら、このアカウントからアドレスを外し(…@unverified.invalid)、新しく作る
+-- (他人が先にアカウントを作って、持ち主のノートを受け取る「事前の乗っ取り」を防ぐ)。
 CREATE TABLE IF NOT EXISTS unverified_emails (
   user_id    TEXT PRIMARY KEY,
   created_at TEXT NOT NULL,

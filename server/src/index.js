@@ -321,7 +321,8 @@ async function handleOtpVerify(request, env) {
   // 「新しく作る」(replace)を選んだら、そちらのアカウントからアドレスを外して、新しいアカウントを作る
   if (existing) {
     const via = await unverifiedVia(env, existing.id);
-    if (via !== null && !body?.replace) {
+    // 「新しく作る」はアカウント作成としてだけ受け付ける(ログインのまま外すと、外したうえで「アカウントはありません」になるため)
+    if (via !== null && !(body?.replace && purpose === 'signup')) {
       await keepCode();
       return json({ ok: false, reason: 'unverified_owner', via, message: 'このメールアドレスで、Apple・Google から作られたアカウントがあります。' }, 409);
     }
@@ -397,7 +398,8 @@ async function ensureUser(env, email) {
  *   2. なければ、Apple・Google が確かめたメールアドレスの利用者(メールの番号で作ったアカウントにつなぐ)。
  *      ただし、そのアドレスの今の持ち主だと言い切れるとき(owns)だけ。言い切れなければ { error: 'use_email' }
  *   3. それもなければ、そのアドレスで新しく作る。言い切れないときは unverified_emails に印を付けておき、
- *      あとで本当の持ち主が来たら、アドレスを外す(detachUnverified。先に作って持ち主のノートを受け取る「事前の乗っ取り」を防ぐ)
+ *      そのアドレスのメールの番号やほかの方法で来た人には、勝手に入れず「○○から作られたアカウントがあります」と伝える。
+ *      番号の人が「新しいアカウントを作成」を選んだときだけ、アドレスを外す(detachUnverified。先に作って持ち主のノートを受け取る「事前の乗っ取り」を防ぐ)
  * email は Apple・Google が「確かめ済み」としたときだけ渡す。refreshToken は Apple だけ(退会のときの取り消しに使う)。
  * @returns {{ userId, existing } | { error }}
  */

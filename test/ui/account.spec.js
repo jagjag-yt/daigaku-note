@@ -481,3 +481,35 @@ test('Google のログインを取り消したら、ログインのページの�
   await a.context().close();
   await other.context().close();
 });
+
+test('Apple から(持ち主を確かめずに)作られたアカウントのアドレスで番号を確かめると、作った方法を伝え、新しく作るときは確かめる', async ({ browser }, testInfo) => {
+  const email = freshEmail('uv', testInfo); // example.com: Apple はこのアドレスの持ち主を管理していない
+  const a = await open(browser);
+  await fakeIdp(a.context(), { sub: `a-${email}`, email });
+  await a.locator('#auth-signup-social .oauth-apple').click();
+  await expect(a.locator('#library')).toBeVisible();
+  await newNote(a, 'アップルのノート');
+  await logout(a);
+  // 同じアドレスでメールの番号: Apple から作られたアカウントには入れず、作った方法を伝える
+  const code = await sendCode(a, 'login', email);
+  await a.locator('#acct-code').fill(code);
+  await expect(a.locator('#acct-noacct-text')).toContainText('Appleのアカウントから作られたアカウントがあります');
+  await expect(a.locator('#acct-noacct-create')).toHaveText('新しいアカウントを作成');
+  await expect(a.locator('#library')).toBeHidden();
+  // 新しく作る: この端末には前のアカウントのノートがあるので、確かめる
+  await a.locator('#acct-noacct-create').click();
+  await expect(a.locator('#confirm-ok')).toBeVisible();
+  await a.locator('#confirm-ok').click();
+  await expect(a.locator('#library')).toBeVisible();
+  await expect(a.locator('#toast-msg')).toContainText('アカウントを作成しました');
+  // 先に作られたアカウントは Apple でだけ入れる(アドレスは外れている)
+  await logout(a);
+  await a.locator('#auth-login-social .oauth-apple').click();
+  // この端末は直前に新しいアカウントで使っていたので、別のアカウントとして確かめる
+  await expect(a.locator('#confirm-dialog')).toContainText('別のアカウントでログインしますか?');
+  await a.locator('#confirm-ok').click();
+  await expect(a.locator('#library')).toBeVisible();
+  await expect(a.locator('#toast-msg')).toContainText('メールアドレスは、アドレスの持ち主が別のアカウントを作ったため外れました');
+  await expect(a.locator('#account-btn .acct-avatar')).toHaveText('?');
+  await a.context().close();
+});

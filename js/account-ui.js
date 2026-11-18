@@ -404,6 +404,13 @@ async function verify(how) {
     else if (!h.coarse()) $('#acct-code').focus();
     return;
   }
+  // アドレスは前と同じでも、別のアカウントになった(Apple・Google から作られたアカウントではなく、新しいアカウントを作った):
+  // この端末のノートをどうするか、別のアカウントのときと同じく確かめる
+  const discard = () => account.logout(r.token).catch(() => {});
+  if (!(await confirmOtherAccount(email, asPurpose, { userId: r.userId, discard, sameEmail: true }))) {
+    await discard();
+    return;
+  }
   await finishLogin(r, asPurpose);
 }
 
@@ -438,6 +445,7 @@ async function finishLogin(r, asked, el = $('#acct-code-msg')) {
   h.toast(
     r.removedDevices ? `ログインしました。ログインできる端末は${r.maxDevices || 5}台までのため、いちばん長く使っていない端末を外しました`
       : asked === 'signup' && r.existing ? 'このメールアドレスはすでに登録されていたため、ログインしました'
+        : noAddress(r.email) ? 'ログインしました。このアカウントのメールアドレスは、アドレスの持ち主が別のアカウントを作ったため外れました。Apple・Googleでのログインはこれまでどおり使えます'
         : asked === 'oauth-new' ? '新しいアカウントを作成しました。前にメールアドレスで作ったアカウントがある場合は、ログアウトしてメールアドレスでログインしてください'
         : created ? 'アカウントを作成しました。この端末のノートは自動で同期されます'
           : 'ログインしました。この端末のノートとほかの端末のノートを同期します',
@@ -462,14 +470,21 @@ async function refreshPerks() {
 }
 
 // 前の人のアドレスは伏せる(共有の端末で、ほかの人に見えないように)。先頭の1文字と @ から後ろだけ
-const mask = (email) => email.replace(/^(.)[^@]*/, '$1***');
+const mask = (email) => (noAddress(email) ? 'Apple・Googleでログインしているアカウント' : email.replace(/^(.)[^@]*/, '$1***'));
 
-// extra: Apple・Google でログインしたとき { provider, discard, userId }(discard はこの端末のノートを消す前に、受け取った鍵を捨てる)
+// extra: 鍵を受け取ったあとに確かめるとき { provider, discard, userId, sameEmail }
+//   discard はこの端末のノートを消す前に、受け取った鍵を捨てる。
+//   sameEmail: true なら、アドレスが同じでも利用者が違えば確かめる(番号を確かめたあと。利用者が分かるのは鍵を受け取ってから)
 async function confirmOtherAccount(email, how, extra = {}) {
   const cfg = dav.config();
   const prev = cfg.account ? { email: cfg.account.email, userId: cfg.user } : loadLast();
-  // 同じアカウント(アドレスが同じ、またはアドレスが変わっても同じ利用者)なら確かめない
-  if (!prev || prev.email === email || (extra.userId && prev.userId === extra.userId)) return true;
+  if (!prev) return true;
+  if (extra.sameEmail && prev.email !== email) return true; // アドレスが違うときは、番号を送る前に確かめ済み
+  // 同じアカウント(同じ利用者。利用者が分からないときは、アドレスが同じ)なら確かめない
+  if (extra.userId && prev.userId) {
+    if (prev.userId === extra.userId) return true;
+  } else if (prev.email === email) return true;
+  if (prev.email === email && !extra.sameEmail && !extra.provider) return true;
   let n = -1;
   try { n = await h.countNotes(); } catch { /* 数えられないときは確かめる */ }
   if (n === 0) return true;
@@ -650,9 +665,8 @@ const OAUTH_ERRORS = {
   use_email: () => 'このメールアドレスのアカウントがすでにあります。メールアドレスに届く番号でログインしてください。',
   unverified_owner: (n, via) => {
     const v = account.PROVIDER_NAMES[via];
-    return v
-      ? `このメールアドレスで、${v}のアカウントから作られたアカウントがあります。ご自身で作った場合は「${v}で続ける」でログインしてください。`
-      : 'このメールアドレスで、ほかの方法から作られたアカウントがあります。ご自身で作った方法でログインしてください。';
+    const how = v && v !== n ? `ご自身で作った場合は「${v}で続ける」でログインしてください。` : 'ご自身で作った場合は、作ったときの方法でログインしてください。';
+    return `このメールアドレスで、${v ? `${v}のアカウントから` : 'ほかの方法で'}作られたアカウントがあります。${how}作った覚えがない場合は、メールアドレスに届く番号でログインすると、新しいアカウントを作成できます。`;
   },
   busy: () => 'ただいまログインできません。時間をおいてお試しください。',
 };
