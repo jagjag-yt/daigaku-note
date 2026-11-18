@@ -54,7 +54,7 @@ export async function couponHash(normalized) {
 export async function activePerks(db, userId) {
   const rows = await db.prepare('SELECT perk, expires_at FROM perks WHERE user_id = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY perk')
     .bind(userId, nowIso()).all();
-  return rows.results.filter((r) => PERKS[r.perk]).map((r) => ({ perk: r.perk, name: PERKS[r.perk], expiresAt: r.expires_at ?? null }));
+  return rows.results.filter((r) => Object.hasOwn(PERKS, r.perk)).map((r) => ({ perk: r.perk, name: PERKS[r.perk], expiresAt: r.expires_at ?? null }));
 }
 
 const BAD = 'このコードは使えません。入力が正しいか、使用済み・期限切れでないかを確かめてください。';
@@ -76,7 +76,7 @@ export async function handleCouponRedeem(request, env, device, ip) {
   const now = nowIso();
 
   const row = await env.DB.prepare('SELECT perk, days, expires_at, redeemed_by FROM coupons WHERE code_hash = ?').bind(hash).first();
-  if (!row || !PERKS[row.perk]) return fail(400, BAD);
+  if (!row || !Object.hasOwn(PERKS, row.perk)) return fail(400, BAD);
   if (row.redeemed_by === device.user_id) return fail(409, 'このコードは、このアカウントですでに使っています。');
   if (row.redeemed_by || (row.expires_at && row.expires_at <= now)) return fail(400, BAD);
 

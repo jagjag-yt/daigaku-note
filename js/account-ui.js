@@ -392,6 +392,17 @@ async function finishLogin(r, asked) {
   if (!/^#\/note\//.test(location.hash)) history.replaceState(null, '', '#/');
   h.route();
   dav.syncNow(true);
+  refreshPerks();
+}
+
+/** サーバーの特典を端末に覚え直す(ログインしたとき・起動したとき)。失敗しても前に覚えたものを使う */
+async function refreshPerks() {
+  if (!loggedIn()) return;
+  const user = dav.config().user;
+  try {
+    const me = await account.me(token());
+    if (Array.isArray(me.perks) && dav.config().user === user) account.savePerks(user, me.perks);
+  } catch { /* オフラインなど。次の機会に */ }
 }
 
 // 前の人のアドレスは伏せる(共有の端末で、ほかの人に見えないように)。先頭の1文字と @ から後ろだけ
@@ -522,7 +533,9 @@ async function loadDetails() {
     account.savePerks(dav.config().user, me.value.perks);
     renderPerks(me.value.perks);
   } else {
-    renderPerks(null);
+    // 読み込めなかった(オフラインなど): 端末に覚えた特典を出す
+    const cached = account.cachedPerks(dav.config().user);
+    renderPerks(cached, !!cached);
   }
 
   if (list.status !== 'fulfilled') {
@@ -565,13 +578,14 @@ async function loadDetails() {
   }));
 }
 
-// 特典の一覧。null は読み込めなかったとき
-function renderPerks(perks) {
+// 特典の一覧。null は読み込めなかったとき。old は端末に覚えた前回の情報を出しているとき
+function renderPerks(perks, old = false) {
   const ul = $('#acct-perks');
   const li = (text, cls) => { const e = document.createElement('li'); if (cls) e.className = cls; e.textContent = text; return e; };
   if (!perks) { ul.replaceChildren(li('特典を読み込めませんでした。', 'none')); return; }
-  if (!perks.length) { ul.replaceChildren(li('付いている特典はありません。', 'none')); return; }
-  ul.replaceChildren(...perks.map((p) => {
+  const live = perks.filter((p) => !p.expiresAt || Date.parse(p.expiresAt) > Date.now());
+  if (!live.length) { ul.replaceChildren(li(old ? '付いている特典はありません(前回の情報)。' : '付いている特典はありません。', 'none')); return; }
+  ul.replaceChildren(...(old ? [li('サーバーに接続できないため、前回の情報を表示しています。', 'none')] : []), ...live.map((p) => {
     const e = li(p.name || p.perk);
     const when = document.createElement('small');
     when.textContent = p.expiresAt ? `${new Date(p.expiresAt).toLocaleDateString('ja-JP')} まで` : '期限なし';
@@ -596,6 +610,7 @@ export function init(helpers) {
   h = helpers;
   pending = loadPending();
   resumeAfterWipe();
+  refreshPerks();
 
   $('#account-btn').onclick = open;
   $('#acct-open-manage').onclick = () => { $('#sync-dialog').close(); open(); };

@@ -350,11 +350,15 @@ async function handleDeleteAccount(env, device) {
     console.log('r2 delete failed', String(err));
     return fail(500, '途中で失敗しました。もう一度ログインしてから、退会をやり直してください。');
   }
+  // 特典とクーポンの記録は、表がまだない(schema.sql を流す前に配信した)ときでも退会を止めないよう、batch の外で行う。
+  // 使ったクーポンは「使用済み」のまま残し、誰が使ったかだけを消す(NULL に戻すと、もう一度使えてしまうため)
+  for (const sql of ['DELETE FROM perks WHERE user_id = ?', "UPDATE coupons SET redeemed_by = 'deleted' WHERE redeemed_by = ?"]) {
+    await env.DB.prepare(sql).bind(uid).run().catch((err) => console.log('perks cleanup failed', String(err)));
+  }
   await env.DB.batch([
     env.DB.prepare('DELETE FROM op_files WHERE user_id = ?').bind(uid),
     env.DB.prepare('DELETE FROM op_logs WHERE user_id = ?').bind(uid),
     env.DB.prepare('DELETE FROM blobs WHERE user_id = ?').bind(uid),
-    env.DB.prepare('DELETE FROM perks WHERE user_id = ?').bind(uid),
     env.DB.prepare('DELETE FROM rate_limits WHERE bucket = ?').bind(`coupon:u:${uid}`),
     env.DB.prepare('DELETE FROM otp_requests WHERE email = ?').bind(String(device.email ?? '').toLowerCase()),
     env.DB.prepare('DELETE FROM rate_limits WHERE bucket = ?').bind(`dav:w:${uid}`),

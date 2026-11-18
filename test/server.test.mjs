@@ -626,6 +626,7 @@ test('クーポン: 退会すると特典は消え、使ったコードは使用
   assert.equal((await api('/coupon', { method: 'POST', token: u.token, body: { code } })).status, 200);
   assert.equal((await api('/account', { method: 'DELETE', token: u.token })).status, 200);
   assert.equal(env.DB.q('SELECT COUNT(*) AS n FROM perks WHERE user_id = ?', u.userId)[0].n, 0);
+  assert.equal(env.DB.q('SELECT redeemed_by FROM coupons WHERE code_hash = ?', await couponHash(normalizeCoupon(code)))[0].redeemed_by, 'deleted');
   const again = await login('coupon-f@example.com');
   assert.equal((await api('/coupon', { method: 'POST', token: again.token, body: { code } })).status, 400);
 });

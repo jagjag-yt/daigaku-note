@@ -26,13 +26,18 @@ import { PERKS, couponHash, newCouponCode, normalizeCoupon } from '../src/coupon
 const SERVER_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DB_NAME = 'daigaku-note';
 
+const FLAGS = new Set(['--local', '--dry-run']);
+const VALUES = new Set(['--count', '--days', '--until', '--note', '--perk']);
+
 function parseArgs(argv) {
   const [cmd, ...rest] = argv;
   const opts = { _: [] };
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i];
-    if (a === '--local' || a === '--dry-run') opts[a.slice(2)] = true;
+    if (FLAGS.has(a)) opts[a.slice(2)] = true;
     else if (a.startsWith('--')) {
+      // 打ち間違い(--cont など)を黙って無視しない
+      if (!VALUES.has(a)) die(`${a} という指定はありません。使えるのは ${[...FLAGS, ...VALUES].join(' ')} です。`);
       const v = rest[i + 1];
       if (v === undefined || v.startsWith('--')) die(`${a} の値がありません。`);
       opts[a.slice(2)] = v;
@@ -70,8 +75,12 @@ function runSql({ sql, local, dryRun, file = false }) {
     if (/["%]/.test(sql)) throw new Error('SQL に " や % は使えません');
     args.push('--json', win ? `--command="${sql}"` : `--command=${sql}`);
   }
-  // Windows の npx は npx.cmd。.cmd は shell を通さないと動かないので、そのときだけ shell を使う(引数は自分で作ったものだけ)
-  const r = spawnSync(win ? 'npx.cmd' : 'npx', args, { cwd: SERVER_DIR, encoding: 'utf8', shell: win, stdio: file ? 'inherit' : ['inherit', 'pipe', 'inherit'] });
+  // Windows の npx は npx.cmd で、コマンドプロンプトを通さないと動かない。1本のコマンドの文字列にして cmd.exe に渡す
+  // (引数は自分で作ったものだけ。SQL には " と % を入れていない)
+  const opt = { cwd: SERVER_DIR, encoding: 'utf8', stdio: file ? 'inherit' : ['inherit', 'pipe', 'inherit'] };
+  const r = win
+    ? spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `"npx.cmd ${args.join(' ')}"`], { ...opt, windowsVerbatimArguments: true })
+    : spawnSync('npx', args, opt);
   if (tmp) fs.rmSync(path.dirname(tmp), { recursive: true, force: true });
   if (r.status !== 0) {
     if (r.stdout) console.error(r.stdout);
@@ -91,7 +100,8 @@ function runSql({ sql, local, dryRun, file = false }) {
 function endOfDayJst(ymd) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) die('--until は 2027-03-31 の形で書いてください。');
   const t = Date.parse(`${ymd}T23:59:59.999+09:00`);
-  if (Number.isNaN(t)) die('--until の日付が正しくありません。');
+  // 2027-02-31 のような、ない日付は Date が勝手に次の月へ回すので、戻して確かめる
+  if (Number.isNaN(t) || new Date(t + 9 * 3_600_000).toISOString().slice(0, 10) !== ymd) die('--until の日付が正しくありません。');
   if (t <= Date.now()) die('--until が過去の日付です。');
   return new Date(t).toISOString();
 }
@@ -100,7 +110,7 @@ async function make(opts) {
   const count = Number(opts.count ?? 1);
   if (!Number.isInteger(count) || count < 1 || count > 500) die('--count は 1〜500 の整数にしてください。');
   const perk = opts.perk ?? 'adfree';
-  if (!PERKS[perk]) die(`--perk は ${Object.keys(PERKS).join('・')} のどれかです。`);
+  if (!Object.hasOwn(PERKS, perk)) die(`--perk は ${Object.keys(PERKS).join('・')} のどれかです。`);
   let days = null;
   if (opts.days !== undefined) {
     days = Number(opts.days);

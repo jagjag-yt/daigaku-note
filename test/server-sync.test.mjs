@@ -107,8 +107,8 @@ test('2台の端末が、メールのログインだけで変更と PDF を送�
   // A: ノートを作り、PDF のページと線を書く
   await A.db.putFile({ hash: PDF_HASH, name: 'lecture.pdf', type: 'application/pdf', data: new Blob([PDF], { type: 'application/pdf' }) });
   await A.write('n1', 'note.create', { title: '線形代数' });
-  await A.write('n1', 'page.add', { page: { id: 'p1', bg: { type: 'pdf', hash: PDF_HASH, page: 1 } } });
-  await A.write('n1', 'stroke.add', { page: 'p1', s: { id: 's1', tool: 'pen', pts: pts(50), color: '#000', width: 2 } });
+  await A.write('n1', 'page.add', { page: { id: 'p1', w: 595, h: 842, bg: { type: 'pdf', hash: PDF_HASH, page: 1 } } });
+  await A.write('n1', 'stroke.add', { page: 'p1', s: { id: 's1', pageId: 'p1', tool: 'pen', pts: pts(50), color: '#000', width: 2 } });
   ok(await A.sync());
   assert.match(A.status(), /送信 3件/);
   // サーバーには1つの変更のファイルと PDF
@@ -125,7 +125,7 @@ test('2台の端末が、メールのログインだけで変更と PDF を送�
   assert.deepEqual(new Uint8Array(await f.data.arrayBuffer()), PDF);
 
   // B が書き足し、A が(手動ではない)同期で受け取る
-  await B.write('n1', 'stroke.add', { page: 'p1', s: { id: 's2', tool: 'pen', pts: pts(20, 2), color: '#f00', width: 2 } });
+  await B.write('n1', 'stroke.add', { page: 'p1', s: { id: 's2', pageId: 'p1', tool: 'pen', pts: pts(20, 2), color: '#f00', width: 2 } });
   await B.write('n1', 'note.rename', { title: '線形代数 第2回' });
   ok(await B.sync());
   ok(await A.sync(false));
@@ -138,7 +138,7 @@ test('2台の端末が、メールのログインだけで変更と PDF を送�
   assert.ok(!quiet.some((r) => r.startsWith('GET')));
 
   // B が書いたら、B のフォルダの ETag が変わり、A は中を見て受け取る
-  await B.write('n1', 'stroke.del', { page: 'p1', id: 's1' });
+  await B.write('n1', 'stroke.del', { ids: ['s1'] });
   ok(await B.sync(false));
   const changedReqs = await requests(() => A.sync(false));
   assert.ok(changedReqs.includes('PROPFIND /dav/daigaku-note/ops/bbbb2222/'), changedReqs.join('\n'));
@@ -152,7 +152,7 @@ test('2台の端末が、メールのログインだけで変更と PDF を送�
   assert.deepEqual(st.cur, { bbbb2222: 3 });
 
   // 大きな変更は約500KBずつのファイルに分けて送られ、全部届く
-  for (let i = 0; i < 40; i++) await A.write('n1', 'stroke.add', { page: 'p1', s: { id: `big${i}`, tool: 'pen', pts: pts(2000, i), color: '#00f', width: 1 } });
+  for (let i = 0; i < 40; i++) await A.write('n1', 'stroke.add', { page: 'p1', s: { id: `big${i}`, pageId: 'p1', tool: 'pen', pts: pts(2000, i), color: '#00f', width: 1 } });
   ok(await A.sync());
   const parts = env.DB.q('SELECT from_n, to_n, bytes FROM op_files WHERE device = ? ORDER BY to_n', 'aaaa1111');
   assert.ok(parts.length >= 3, `分けて送られていない: ${JSON.stringify(parts)}`);
@@ -213,7 +213,7 @@ test('PDF が大きすぎる(413)なら変更だけ送る。容量がいっぱ�
     // 5000 バイトの PDF は上限(4000)を超える: 送れなかったと出るが、変更は届く
     await A.db.putFile({ hash: PDF_HASH, name: 'big.pdf', type: 'application/pdf', data: new Blob([PDF], { type: 'application/pdf' }) });
     await A.write('q', 'note.create', { title: '大きい PDF' });
-    await A.write('q', 'page.add', { page: { id: 'p', bg: { type: 'pdf', hash: PDF_HASH, page: 1 } } });
+    await A.write('q', 'page.add', { page: { id: 'p', w: 595, h: 842, bg: { type: 'pdf', hash: PDF_HASH, page: 1 } } });
     const s = await A.sync();
     assert.match(s, /同期しました/);
     assert.match(s, /PDF・画像のうち 1 個はサーバーに送れませんでした/);

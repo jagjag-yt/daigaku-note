@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS coupons (
   expires_at  TEXT,                       -- このコードを使える期限。NULL なら期限なし
   note        TEXT NOT NULL DEFAULT '',   -- 発行したときのメモ(「テスト協力 2026-11」など)。利用者には見せない
   created_at  TEXT NOT NULL,
-  redeemed_by TEXT,                       -- 使った利用者(users.id)。退会しても残す(同じコードをもう一度使わせないため)
+  redeemed_by TEXT,                       -- 使った利用者(users.id)。退会したら 'deleted' にする(NULL に戻すと、もう一度使えてしまうため)
   redeemed_at TEXT
 );
 

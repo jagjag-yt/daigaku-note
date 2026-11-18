@@ -20,6 +20,7 @@
 import * as db from './db.js';
 import { fileRefs, fileExt } from './model.js';
 import { http, isNative } from './native.js';
+import { cleanOps } from './validate.js';
 
 const FORMAT = 'daigaku-note-ops';
 let cfg = {};
@@ -430,7 +431,7 @@ export async function syncNow(manual = false) {
           newer = stopped = true; // 新しい版のアプリが書いた形。読んだことにはせず、アプリの更新を待つ
           break;
         }
-        const ops = (json.ops || []).filter((o) => o && typeof o.id === 'string' && typeof o.l === 'number' && o.n && o.t);
+        const ops = cleanOps(json.ops); // ほかの端末から届いたものも信用しない(js/validate.js)
         for (const op of ops) {
           for (const ref of fileRefs(op)) {
             if ((await fetchFile(ref)) !== true) { addMissing(ref, op.n); missedNow.add(ref.hash); }

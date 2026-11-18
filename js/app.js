@@ -2,6 +2,7 @@ import * as db from './db.js';
 import {
   Recorder, emptyNote, applyOp, customTemplates, foldersOf, folderOfNote, folderTree, pagesOf, strokesOf, buildLibrary, newId, strokeHit, styleOf, bgOf, PAGE_A4, addType,
 } from './model.js';
+import { isColor } from './validate.js';
 import { drawStroke, recognizeShape, strokeInLasso, geometry, strokeSvg, pointInPolygon } from './ink.js';
 import { isItem, itemSvg, drawItem, itemInLasso, onImageReady, releaseImages, imageElement, itemRect, cornerPts, textHeight, fontFamily, fontOf, LINE_HEIGHT } from './items.js';
 import { TEMPLATES, SIZES, PAPERS, templatePrims, sizeById, paperColor } from './templates.js';
@@ -851,7 +852,7 @@ async function runSearch() {
 }
 
 function coverColor(n) {
-  if (n.cover) return n.cover;
+  if (isColor(n.cover)) return n.cover; // 形の違う色は使わない(HTML の style に入るため)
   let h = 0;
   for (const ch of n.id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   return COVERS[h % 6]; // 表紙を選べるようになる前のノートは、前と同じ6色から決める
@@ -922,11 +923,11 @@ async function showLibrary() {
     const card = document.createElement('div');
     card.className = 'card' + (trash ? ' in-trash' : '');
     card.innerHTML = `
-      ${trash ? '<button type="button" class="cover" aria-haspopup="menu"' : `<a class="cover" href="#/note/${n.id}"`} style="--cover:${coverColor(n)}">
+      ${trash ? '<button type="button" class="cover" aria-haspopup="menu"' : `<a class="cover" href="#/note/${esc(n.id)}"`} style="--cover:${coverColor(n)}">
         <span class="label"><span class="label-title"></span></span>
       ${trash ? '</button>' : '</a>'}
       ${n.locked ? `<span class="lock-badge" title="ロック中" aria-label="ロック中">${icon('lock', 16)}</span>` : ''}
-      ${trash ? '' : `<button class="fav-btn${n.fav ? ' on' : ''}" type="button" data-id="${n.id}" aria-pressed="${!!n.fav}" title="お気に入り" aria-label="お気に入り">${icon('star', 18)}</button>`}
+      ${trash ? '' : `<button class="fav-btn${n.fav ? ' on' : ''}" type="button" data-id="${esc(n.id)}" aria-pressed="${!!n.fav}" title="お気に入り" aria-label="お気に入り">${icon('star', 18)}</button>`}
       <div class="meta">
         <button class="name-btn" aria-haspopup="menu" title="ノートの操作"><span class="name"></span>${icon('chevron', 16)}</button>
         <div class="date"></div>
@@ -945,7 +946,7 @@ async function showLibrary() {
       fb.disabled = true; // 描き直すまで連打を受けない
       try { await setFav(n, fb.getAttribute('aria-pressed') !== 'true'); } finally { fb.disabled = false; }
       // 描き直したあとも同じボタンにフォーカス(お気に入りの絞り込みで消えたら、帯のボタンへ)
-      ($(`#notes .fav-btn[data-id="${n.id}"]`) || $('.lib-filter .on'))?.focus();
+      ($(`#notes .fav-btn[data-id="${CSS.escape(n.id)}"]`) || $('.lib-filter .on'))?.focus();
     };
     grid.appendChild(card);
   }

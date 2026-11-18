@@ -2,6 +2,9 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
+  <!-- 読み込めるもの・通信できる先を絞る(他人のノートなどに仕込まれたスクリプトを動かさない・鍵をよそへ送らせないため)。
+       通信先は同期サーバーと、開発・試験用の手元のサーバーだけ。広告などを足すときは、ここに足す -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://note-api.quiz-make.com http://localhost:* http://127.0.0.1:*; worker-src 'self' blob:; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>大学ノート</title>
   <meta name="description" content="無料・オフラインで使える手書きノート">

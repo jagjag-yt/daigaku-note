@@ -120,6 +120,8 @@ WebDAV の URL・ユーザー名・アプリパスワードを手で入れなく
 
    これで main に入るたびにデプロイされる。手元から1回だけ出すなら `npx wrangler deploy`。
 
+   schema.sql を変えた変更は、main に入れる前に「3. 表を作る」のコマンドを流しておく(表より先に新しいサーバーが動かないように)。
+
 7. **確かめる**
 
    ```
@@ -158,6 +160,8 @@ node scripts/coupon.mjs disable XXXX-XXXX-XXXX     … まだ使われていな�
 どれも `--local` を付けると、手元の D1(`wrangler dev` 用)に対して行う。
 
 **はじめて使う前に**、表を足すために schema.sql をもう一度流し、サーバーを配信する(何度流しても壊れない)。
+**schema.sql は、この変更を main に入れる前に流す**(手順6の自動デプロイをつないでいると、main に入った時点で新しいサーバーが動くため)。
+表がないまま動いても、`/me` の特典が空になり、`/coupon` が失敗するだけで、ログイン・同期・退会は止まらない。
 
 ```
 npx wrangler d1 execute daigaku-note --remote --file=schema.sql

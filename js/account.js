@@ -11,7 +11,8 @@ export const API_BASE = 'https://note-api.quiz-make.com';
 export function apiBase() {
   try {
     const v = globalThis.localStorage?.getItem('daigaku-note.api');
-    if (v && /^https?:\/\/[^/]+$/.test(v)) return v;
+    // 開発・試験用に変えられるのは、手元のサーバーだけ(ほかの住所にすると、ログインの番号や鍵がそこへ送られるため)
+    if (v && /^http:\/\/(localhost|127\.0\.0\.1)(:\d{1,5})?$/.test(v)) return v;
   } catch { /* 使えない環境(プライベートブラウズなど)ではふだんの住所 */ }
   return API_BASE;
 }
@@ -69,11 +70,23 @@ export function savePerks(userId, perks) {
     else globalThis.localStorage?.setItem(PERKS_KEY, JSON.stringify({ userId, perks: Array.isArray(perks) ? perks : [] }));
   } catch { /* 保存できない環境では、毎回サーバーに聞く */ }
 }
-/** その特典をいま持っているか(端末に覚えたものだけで決める。通信はしない) */
+/** 端末に覚えた特典の一覧。そのアカウントのものがなければ null */
+export function cachedPerks(userId) {
+  try {
+    const v = JSON.parse(globalThis.localStorage?.getItem(PERKS_KEY) || 'null');
+    return v && userId && v.userId === userId && Array.isArray(v.perks) ? v.perks : null;
+  } catch {
+    return null;
+  }
+}
+/**
+ * その特典をいま持っているか(端末に覚えたものだけで決める。通信はしない)。
+ * 広告を出すときに使う予定(広告はまだ入っていない)。userId は今ログインしているアカウント
+ */
 export function hasPerk(perk, userId) {
   try {
     const v = JSON.parse(globalThis.localStorage?.getItem(PERKS_KEY) || 'null');
-    if (!v || (userId && v.userId !== userId)) return false;
+    if (!v || !userId || v.userId !== userId) return false;
     return v.perks.some((p) => p.perk === perk && (!p.expiresAt || Date.parse(p.expiresAt) > Date.now()));
   } catch {
     return false;
