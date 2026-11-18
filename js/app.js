@@ -529,7 +529,7 @@ async function addCustomTpl(file, pickerEl) {
       const size = id === 'nn-tpl' ? sizeById($('#nn-size').value) : $('#pp-size').value ? sizeById($('#pp-size').value) : addRef || PAGE_A4;
       tplPicker(el, el === pickerEl ? pick : el.dataset.value, size);
     }
-    toast(sizes.length > 20 ? `${sizes.length}ページのうち、20ページ分をテンプレートに追加しました` : `テンプレートを${Math.min(sizes.length, 20)}つ追加しました`);
+    toast(sizes.length > 20 ? `${sizes.length}ページのうち、最初の20ページをテンプレートに追加しました` : `テンプレートを${Math.min(sizes.length, 20)}つ追加しました`);
   } catch (err) {
     toast('テンプレートを読み込めませんでした: ' + err.message, 6000);
   }
@@ -1473,7 +1473,7 @@ function colorPopover(anchor, k, i) {
         const drop = main.querySelector('.cp-drop');
         if (drop) drop.onclick = async () => { try { const r = await new window.EyeDropper().open(); set(r.sRGBHex, true); } catch {} };
         main.querySelector('.cp-add').onclick = () => {
-          if (S.palettes[k].length >= PALETTE_MAX) toast(`プリセットは${PALETTE_MAX}色までです。「編集」でほかの色を外してから追加してください`);
+          if (S.palettes[k].length >= PALETTE_MAX) toast(`プリセットは${PALETTE_MAX}色までです。「編集」で色を外してから追加してください`);
           else if (!S.palettes[k].includes(chosen)) { S.palettes[k].push(chosen); savePrefs(); toast('プリセットに追加しました'); }
           else toast('この色はもうプリセットにあります');
         };
@@ -1584,7 +1584,7 @@ function eraserPopover(anchor) {
     show();
     const toggle = (k) => (b) => {
       const p = S.eraser.pick;
-      if (p[k] && Object.values(p).filter(Boolean).length === 1) return toast('消すものは少なくとも1つ残してください');
+      if (p[k] && Object.values(p).filter(Boolean).length === 1) return toast('消すものは1つ以上選んだままにしてください');
       p[k] = !p[k];
       b.classList.toggle('checked', p[k]);
       b.setAttribute('aria-checked', p[k]);
@@ -1701,7 +1701,7 @@ function lassoPopover(anchor) {
         icon: ic, label, on: S.lasso.pick[k], keepOpen: true, attrs: { 'data-pick': k },
         onClick: (b) => {
           // 全部をオフにはしない(何も選べなくなるので)
-          if (S.lasso.pick[k] && Object.values(S.lasso.pick).filter(Boolean).length === 1) return toast('選ぶものは少なくとも1つ残してください');
+          if (S.lasso.pick[k] && Object.values(S.lasso.pick).filter(Boolean).length === 1) return toast('選ぶものは1つ以上選んだままにしてください');
           S.lasso.pick[k] = !S.lasso.pick[k];
           b.classList.toggle('checked', S.lasso.pick[k]);
           b.setAttribute('aria-checked', S.lasso.pick[k]);
@@ -1870,7 +1870,7 @@ function openSettings() {
   section('書く');
   toggle('指で書く', '切ると、指はスクロールと拡大だけになり、書けるのはペンだけになる', () => S.fingerDraw, (v) => { S.fingerDraw = v; }, 'set-finger');
   toggle('筆圧で太さを変える', 'ペンで書いたときだけ', () => S.pressure, (v) => { S.pressure = v; }, 'set-pressure');
-  toggle('図形補正', '書いてから少し止めると、まっすぐな線や図形に直す', () => S.shapes, (v) => { S.shapes = v; refreshToolbar(); }, 'set-shapes');
+  toggle('図形補正', '書き終えると、まっすぐな線や図形に直す。ペンを止めると、離す前に確かめられる', () => S.shapes, (v) => { S.shapes = v; refreshToolbar(); }, 'set-shapes');
   toggle('消したら前の道具に戻す', '消しゴムで1回消したら、その前に使っていた道具に戻る', () => S.eraser.back, (v) => { S.eraser.back = v; }, 'set-eraser-back');
   section('ツールバー');
   choice('置く場所', 'tbpos', [['top', '上'], ['bottom', '下']], S.tb.pos, (v) => { S.tb.pos = v; savePrefs(); applyToolbarLayout(); });
@@ -1919,7 +1919,7 @@ function openSettings() {
   section('ロック');
   const lockRow = document.createElement('div');
   lockRow.className = 'set-row';
-  lockRow.innerHTML = `<span class="set-text"><span class="set-label">ロック用のパスコード</span><span class="set-hint">ノートのメニューの「ロックする」で使います。この端末だけで使います。ノートの中身は暗号化されません</span></span><span class="set-btns"></span>`;
+  lockRow.innerHTML = `<span class="set-text"><span class="set-label">ロック用のパスコード</span><span class="set-hint">ノートのメニューの「ロックする」で使います。パスコードはこの端末だけのもので、ノートの中身は暗号化されません</span></span><span class="set-btns"></span>`;
   const lb = lockRow.querySelector('.set-btns');
   const mkBtn = (label, fn) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.onclick = fn; lb.appendChild(b); };
   if (S.lockHash) {
@@ -2121,7 +2121,7 @@ function bindEditor() {
     S.shapes = !S.shapes;
     savePrefs();
     refreshToolbar();
-    toast(S.shapes ? '図形補正をオンにしました(書き終えると、直線・折れ線・弧・円・三角形・四角形などに整えます)' : '図形補正をオフにしました');
+    toast(S.shapes ? '図形補正をオンにしました。書き終えると、直線・折れ線・弧・円・三角形・四角形などに整えます' : '図形補正をオフにしました');
   };
   $('#undo').onclick = undo;
   $('#redo').onclick = redo;

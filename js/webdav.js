@@ -505,7 +505,7 @@ export async function syncNow(manual = false) {
       note += `。PDF・画像のうち ${st.tooBig.length} 個はサーバーに送れませんでした(大きさの上限を超えた可能性があります)`;
       note += '。手動で同期すると、もう一度送ってみます';
     }
-    if (st.gaveUp && st.gaveUp.length) note += `。ほかの端末の PDF・画像のうち ${st.gaveUp.length} 個を取得できませんでした(手動で同期すると、もう一度取りに行きます)`;
+    if (st.gaveUp && st.gaveUp.length) note += `。ほかの端末の PDF・画像のうち ${st.gaveUp.length} 個を取得できませんでした。手動で同期すると、もう一度取得します`;
     onStatus(`クラウド同期: ${time} に同期しました` + (manual ? `(送信 ${sent}件・受信 ${got}件)` : '') + note);
     if (got) onRemoteChange(changed);
   } catch (e) {

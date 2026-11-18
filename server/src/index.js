@@ -344,7 +344,7 @@ async function handleDeleteAccount(env, device) {
     await deletePrefix(env.FILES, `u/${uid}/`);
   } catch (err) {
     console.log('r2 delete failed', String(err));
-    return fail(500, '途中で失敗しました。もう一度ログインしてから、退会をやり直してください。');
+    return fail(500, '途中で失敗しました。もう一度ログインしてから、アカウントの削除をやり直してください。');
   }
   await env.DB.batch([
     env.DB.prepare('DELETE FROM op_files WHERE user_id = ?').bind(uid),

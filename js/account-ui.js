@@ -234,7 +234,7 @@ async function showLocalNotice() {
   $('#auth-offline').hidden = navigator.onLine;
   const parts = [];
   if (cfg.url && !cfg.account) parts.push('自分のサーバー(WebDAV)での同期は、このバージョンから使えなくなりました。ログインすると、この端末で書いた内容を大学ノートアカウントで同期します。ほかの端末で書いた内容は、その端末でもログインすると同期されます。');
-  if (n > 0) parts.push(`この端末にあるノート(${n}冊)は消えません。この端末で書いた内容は、ログインするとログインしたアカウントに同期されます。`);
+  if (n > 0) parts.push(`この端末にあるノート(${n}冊)は消えません。この端末で書いた内容は、ログインすると、そのアカウントに同期されます。`);
   el.textContent = parts.join('');
   el.hidden = !parts.length;
 }
@@ -620,7 +620,7 @@ export function init(helpers) {
     const v = setCode(digits);
     toEnd();
     if (noAccountCode && v !== noAccountCode) setNoAccount(''); // 番号を打ち直したら、ふつうのログインに戻す
-    if (v.length === 6 && v === lastTried) msg($('#acct-code-msg'), 'この番号は先ほど入力して違っていた番号です。メールの番号をもう一度確かめてください。');
+    if (v.length === 6 && v === lastTried) msg($('#acct-code-msg'), 'この番号は、先ほど入力して違っていました。メールの番号をもう一度確かめてください。');
     else msg($('#acct-code-msg'), '');
     // 6桁そろったら、そのまま確かめる(貼り付け・自動入力のときも)。断られたのと同じ番号は自動では送らない
     if (v.length === 6 && v !== lastTried && v !== noAccountCode) verify();
