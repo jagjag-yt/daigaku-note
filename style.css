@@ -399,6 +399,22 @@ p.auth-switch { margin: 18px 0 0; padding-top: 6px; line-height: 1.4; border-top
 .auth a { color: var(--accent); font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px; white-space: nowrap; }
 .auth a:hover { text-decoration: underline; }
 button.auth-skip { display: block; width: 100%; min-height: 44px; margin-top: 4px; color: var(--muted); font-size: 14px; }
+/* Apple・Google でのログイン(Apple・Google の決まりに合わせた色: Apple は黒、暗い画面では白。Google は白地に灰色の枠) */
+.auth-social { display: flex; flex-direction: column; gap: 10px; margin: 0 0 4px; }
+button.oauth-btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 44px; border-radius: 10px; font-size: 15px; font-weight: 600; }
+button.oauth-btn[hidden] { display: none; }
+button.oauth-apple { background: #000; color: #fff; border: 1px solid #000; }
+button.oauth-google { background: #fff; color: #1f1f1f; border: 1px solid #747775; }
+.oauth-logo { width: 18px; height: 18px; flex: none; }
+button.oauth-apple .oauth-logo { width: 17px; height: 17px; margin-top: -2px; }
+p.auth-or { display: flex; align-items: center; gap: 10px; margin: 6px 0 4px; color: var(--muted); font-size: 12px; }
+p.auth-or::before, p.auth-or::after { content: ''; flex: 1; border-top: 1px solid var(--line); }
+:root[data-theme="dark"] button.oauth-apple { background: #fff; color: #000; border-color: #fff; }
+:root[data-theme="dark"] button.oauth-google { background: #131314; color: #e3e3e3; border-color: #8e918f; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) button.oauth-apple { background: #fff; color: #000; border-color: #fff; }
+  :root:not([data-theme="light"]) button.oauth-google { background: #131314; color: #e3e3e3; border-color: #8e918f; }
+}
 p.auth-local { max-width: 420px; margin: 0; padding: 0 4px; font-size: 13px; line-height: 1.6; color: var(--muted); text-align: center; }
 .acct-noacct { margin: 0 0 4px; padding: 12px 14px; border-radius: 10px; background: var(--accent-soft); }
 .acct-noacct p { margin: 0 0 10px; color: var(--text); font-size: 14px; }

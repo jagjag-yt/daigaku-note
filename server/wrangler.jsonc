@@ -5,7 +5,10 @@
   // (リポジトリの直下はアプリ本体。Workers の設定ファイルはここだけ)。
   //
   // 秘密の値は wrangler secret put で入れる(このファイルには書かない):
-  //   RESEND_API_KEY … メール送信の鍵(Resend)
+  //   AWS_ACCESS_KEY_ID・AWS_SECRET_ACCESS_KEY … メール送信の鍵(Amazon SES。入れると Resend の代わりに SES で送る。src/mail.js)
+  //   RESEND_API_KEY … 以前のメール送信の鍵(Resend)。SES の鍵がないときだけ使う
+  //   GOOGLE_CLIENT_ID・GOOGLE_CLIENT_SECRET … Google でのログイン(src/oauth.js)。入れていなければボタンは出ない
+  //   APPLE_CLIENT_ID・APPLE_TEAM_ID・APPLE_KEY_ID・APPLE_PRIVATE_KEY … Apple でのログイン(同上)
   //   SECRET_PEPPER  … ハッシュに混ぜる長い乱数の文字列。変えると全員がログアウトされる(ログインし直せば同期は続く)
   "name": "daigaku-note-api",
   "main": "src/index.js",
@@ -16,8 +19,10 @@
   "routes": [{ "pattern": "note-api.quiz-make.com", "custom_domain": true }],
 
   "vars": {
-    // 送信元。Resend で認証したドメイン(quiz-make.com)のアドレスにする
-    "MAIL_FROM": "大学ノート <no-reply@quiz-make.com>"
+    // 送信元。SES(と Resend)で認証したドメイン(quiz-make.com)のアドレスにする
+    "MAIL_FROM": "大学ノート <no-reply@quiz-make.com>",
+    // SES の地域(東京)。SES の画面で本番の利用(サンドボックスの解除)を申し込んだのと同じ地域にする
+    "SES_REGION": "ap-northeast-1"
   },
 
   // 利用者・端末の鍵・変更のファイル。`npx wrangler d1 create daigaku-note` で作り、出てきた database_id をここに書く

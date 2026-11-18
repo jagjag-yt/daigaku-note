@@ -382,3 +382,95 @@ test('プラン: Pro のクーポンを使うと、アカウントの画面の�
   await expect(a.locator('#acct-devices-note')).toContainText('10台まで');
   expect(await a.evaluate(() => JSON.parse(localStorage.getItem('daigaku-note.perks')).adFree)).toBe(true);
 });
+
+// ---- Apple・Google でのログイン ----
+// Apple・Google のログインの画面は差し替える: 同期サーバーの /oauth/<p>/start の答え(Apple・Google へのリダイレクト)を受け取り、
+// その画面を飛ばして、すぐに同期サーバーの戻り口へ戻す(リダイレクトの先は page.route で差し替えられないため)。
+// code には { sub, email, nonce } を入れる(test/worker-server.mjs がそれを ID トークンにして答える)
+async function fakeIdp(ctx, who, { cancel = false } = {}) {
+  await ctx.route(`${API}/oauth/*/start?**`, async (r) => {
+    const res = await r.fetch({ maxRedirects: 0 });
+    const loc = new URL(res.headers().location);
+    if (!/^https:\/\/(accounts\.google\.com|appleid\.apple\.com)$/.test(loc.origin)) return r.fulfill({ response: res });
+    const q = loc.searchParams;
+    const code = Buffer.from(JSON.stringify({ ...who, nonce: q.get('nonce') })).toString('base64url');
+    if (loc.origin === 'https://accounts.google.com') {
+      const back = new URL(q.get('redirect_uri'));
+      back.searchParams.set('state', q.get('state'));
+      if (cancel) back.searchParams.set('error', 'access_denied');
+      else back.searchParams.set('code', code);
+      return r.fulfill({ status: 302, headers: { location: back.href } });
+    }
+    // Apple はフォームの POST で戻す
+    const fields = cancel ? `<input name="error" value="user_cancelled_authorize">` : `<input name="code" value="${code}">`;
+    return r.fulfill({
+      contentType: 'text/html',
+      body: `<form method="post" action="${q.get('redirect_uri')}"><input name="state" value="${q.get('state')}">${fields}</form><script>document.forms[0].submit()</script>`,
+    });
+  });
+}
+
+test('Google・Apple で続けると、アカウントができて本棚へ。2回目は同じアカウント', async ({ browser }, testInfo) => {
+  const email = freshEmail('g', testInfo);
+  const a = await open(browser);
+  await fakeIdp(a.context(), { sub: `g-${email}`, email });
+  // サーバーで設定が済んでいるので、ボタンが出る。アカウント作成の説明も合わせる
+  await expect(a.locator('#auth-signup-social .oauth-google')).toBeVisible();
+  await expect(a.locator('#auth-signup-social .oauth-apple')).toBeVisible();
+  await expect(a.locator('#auth-signup-how')).toHaveText('メールアドレス、またはApple・Googleのアカウントで作れます。パスワードは不要です');
+  await a.locator('#auth-signup-social .oauth-google').click();
+  await expect(a.locator('#library')).toBeVisible();
+  await expect(a.locator('#toast-msg')).toContainText('アカウントを作成しました');
+  await expect(a.locator('#account-btn .acct-avatar')).toHaveText(email[0].toUpperCase());
+  // 引換券は住所に残さない
+  await expect(a).toHaveURL(/#\/$/);
+  expect(a.url()).not.toContain('ticket');
+  await newNote(a, '解剖学');
+
+  // ログアウトして、ログインのページから同じ Google のアカウントで: 同じアカウント
+  await logout(a);
+  await a.locator('#auth-login-social .oauth-google').click();
+  await expect(a.locator('#library')).toBeVisible();
+  await expect(a.locator('#toast-msg')).toContainText('ログインしました');
+  await expect(a.locator('#notes .card', { hasText: '解剖学' })).toBeVisible();
+
+  // 別の端末で、メールの番号でログインしても同じアカウント(Google が確かめたアドレスでつながる)
+  const b = await open(browser);
+  await login(b, email);
+  await expect(b.locator('#notes .card', { hasText: '解剖学' })).toBeVisible();
+
+  // Apple(フォームの POST で戻る)も同じアドレスなら同じアカウント
+  const c = await open(browser);
+  await fakeIdp(c.context(), { sub: `a-${email}`, email });
+  await c.locator('#auth-signup-social .oauth-apple').click();
+  await expect(c.locator('#library')).toBeVisible();
+  await expect(c.locator('#toast-msg')).toContainText('すでに登録されていたため、ログインしました');
+  await expect(c.locator('#notes .card', { hasText: '解剖学' })).toBeVisible();
+  for (const p of [a, b, c]) await p.context().close();
+});
+
+test('Google のログインを取り消したら、ログインのページのまま。始めていない引換券は使えない', async ({ browser }, testInfo) => {
+  const a = await open(browser);
+  await fakeIdp(a.context(), {}, { cancel: true });
+  await a.locator('#auth-to-login').click();
+  await a.locator('#auth-login-social .oauth-google').click();
+  await expect(a.locator('#auth-login-form')).toBeVisible();
+  await expect(a).toHaveURL(/#\/login$/);
+  await expect(a.locator('#auth-login-msg')).toBeHidden(); // 取り消しは失敗ではないので、何も出さない
+
+  // 他人が自分の引換券を踏ませても(ログイン CSRF)、この端末で始めていないので使われない
+  const email = freshEmail('csrf', testInfo);
+  const other = await open(browser);
+  await fakeIdp(other.context(), { sub: `g-${email}`, email });
+  // 相手の端末で始めて、戻ってくる住所(引換券つき)を横取りする
+  await other.route('http://localhost:8130/**', (r) => r.fulfill({ body: 'stop' }));
+  await other.locator('#auth-signup-social .oauth-google').click();
+  await expect.poll(() => other.url()).toContain('ticket=');
+  const stolen = other.url();
+  await a.goto(stolen.replace(/^http:\/\/localhost:8130\//, './'));
+  await expect(a.locator('#auth-login-msg')).toHaveText('Googleでのログインを完了できませんでした。もう一度お試しください。');
+  await expect(a.locator('#library')).toBeHidden();
+  expect(a.url()).not.toContain('ticket');
+  await a.context().close();
+  await other.context().close();
+});

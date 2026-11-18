@@ -220,3 +220,25 @@ export function onBackButton(back) {
     app.minimizeApp().catch(() => {});
   });
 }
+
+// ---- Apple・Google でのログイン(js/account-ui.js) ----------------------------------
+// アプリ版は、ログインの画面を OS のブラウザの画面(iOS は SFSafariViewController、Android は Custom Tabs)で開く。
+// アプリの中の WebView では Google がログインを断るため。ログインが済むと、アプリの住所(APP_RETURN)で戻ってくる。
+
+/** ログインの画面を開く。ブラウザ版は、このページのまま移る */
+export async function openAuthPage(url) {
+  const browser = plugin('Browser');
+  if (browser) await browser.open({ url, presentationStyle: 'popover' });
+  else location.assign(url);
+}
+/** 開いたログインの画面を閉じる(アプリ版だけ) */
+export function closeAuthPage() {
+  plugin('Browser')?.close().catch(() => {});
+}
+/** アプリの住所で開かれたら fn(url) を呼ぶ(アプリ版だけ)。アプリが閉じていて、その住所で起動したときも */
+export function onAppUrl(fn) {
+  const app = plugin('App');
+  if (!app) return;
+  app.addListener('appUrlOpen', (e) => fn(e.url));
+  app.getLaunchUrl?.().then((r) => r?.url && fn(r.url)).catch(() => {});
+}
