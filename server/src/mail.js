@@ -7,7 +7,8 @@
 // vars の MAIL_PROVIDER に 'ses' か 'resend' を書くと、どちらかに決められる(切り替えて戻すときのため)。
 //
 // SES は AWS の署名(Signature Version 4)が要る。Workers には AWS の部品がないので、ここで Web Crypto だけで作る
-// (署名は test/mail.test.mjs で、AWS が配っている Python の部品 botocore と同じになることを確かめた値と比べている)。
+// (署名は test/oauth.test.mjs で、AWS が配っている Python の部品 botocore と同じになることを確かめた値と比べている)。
+// SES_CONFIGURATION_SET(vars)を書くと、その設定セットで送る(届かなかった・迷惑メールにされた数を SES の画面で見るため。任意)。
 
 const enc = new TextEncoder();
 const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -44,8 +45,16 @@ export function encodeFrom(from) {
   if (!name) return addr;
   // eslint-disable-next-line no-control-regex
   if (/^[\x20-\x7e]*$/.test(name)) return `"${name.replace(/["\\]/g, '\\$&')}" <${addr}>`;
-  const b64 = btoa(String.fromCharCode(...enc.encode(name)));
-  return `=?UTF-8?B?${b64}?= <${addr}>`;
+  // 1つの encoded-word は75文字まで(RFC 2047)。文字の途中で切らないよう、45バイトまでずつに分ける
+  const words = [];
+  let cur = [];
+  for (const ch of name) {
+    const bytes = [...enc.encode(ch)];
+    if (cur.length + bytes.length > 45) { words.push(cur); cur = []; }
+    cur.push(...bytes);
+  }
+  if (cur.length) words.push(cur);
+  return `${words.map((w) => `=?UTF-8?B?${btoa(String.fromCharCode(...w))}?=`).join(' ')} <${addr}>`;
 }
 
 /**

@@ -18,7 +18,7 @@ const APPLE_PEM = `-----BEGIN PRIVATE KEY-----\n${pkcs8.match(/.{1,64}/g).join('
 
 let env, srv, mail;
 // Apple・Google の受け口の代わり。次に返す ID トークンの中身を idp.claims に入れる
-const idp = { claims: null, requests: [], status: 200 };
+const idp = { claims: null, requests: [], status: 200, revoked: [], refresh: null };
 
 const logs = [];
 const consoleLog = console.log;
@@ -26,6 +26,7 @@ before(async () => {
   console.log = (...a) => logs.push(a.map(String).join(' '));
   env = fakeEnv({
     OTP_BURST_SECONDS: '0',
+    DEV_OAUTH_RETURNS: '1',
     AWS_ACCESS_KEY_ID: 'AKIDEXAMPLE',
     AWS_SECRET_ACCESS_KEY: 'secret',
     GOOGLE_CLIENT_ID: 'g-client', GOOGLE_CLIENT_SECRET: 'g-secret',
@@ -36,11 +37,15 @@ before(async () => {
   const inner = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
     const url = typeof input === 'string' ? input : input.url;
+    if (url === 'https://appleid.apple.com/auth/revoke') {
+      idp.revoked.push(Object.fromEntries(new URLSearchParams(String(init.body))));
+      return new Response('', { status: 200 });
+    }
     if (url === 'https://oauth2.googleapis.com/token' || url === 'https://appleid.apple.com/auth/token') {
       const form = Object.fromEntries(new URLSearchParams(String(init.body)));
       idp.requests.push({ url, form });
       if (idp.status !== 200) return new Response('{"error":"invalid_grant"}', { status: idp.status });
-      return Response.json({ access_token: 'x', id_token: jwt(idp.claims) });
+      return Response.json({ access_token: 'x', id_token: jwt(idp.claims), ...(idp.refresh ? { refresh_token: idp.refresh } : {}) });
     }
     return inner(input, init);
   };
@@ -50,7 +55,7 @@ after(async () => {
   mail.restore();
   await srv.close();
 });
-beforeEach(() => { idp.claims = null; idp.requests.length = 0; idp.status = 200; });
+beforeEach(() => { idp.claims = null; idp.requests.length = 0; idp.status = 200; idp.revoked.length = 0; idp.refresh = null; });
 
 const get = (path, opts = {}) => fetch(srv.url + path, { redirect: 'manual', ...opts });
 const api = async (path, body) => {
@@ -71,7 +76,13 @@ async function flow(provider, claims, { returnTo = WEB, verifier = b64url(crypto
   const cb = provider === 'google'
     ? await get(`/oauth/google/callback?${new URLSearchParams(params)}`)
     : await get('/oauth/apple/callback', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(params) });
-  const loc = cb.headers.get('location');
+  // ブラウザ版へはリダイレクト、アプリへは meta refresh のページで戻す
+  let loc = cb.headers.get('location');
+  if (!loc && /text\/html/.test(cb.headers.get('content-type') ?? '')) {
+    const html = await cb.clone().text();
+    const m = /http-equiv="refresh" content="0;url=([^"]*)"/.exec(html);
+    if (m) loc = m[1].replace(/&amp;/g, '&').replace(/&quot;/g, '"');
+  }
   const hash = loc ? new URLSearchParams(loc.split('#/oauth?')[1]) : null;
   return { auth, cb, loc, hash, verifier, state };
 }
@@ -96,6 +107,13 @@ test('SES: 送り元の日本語の名前は RFC 2047 の形にする', () => {
   assert.equal(encodeFrom('大学ノート <no-reply@quiz-make.com>'), '=?UTF-8?B?5aSn5a2m44OO44O844OI?= <no-reply@quiz-make.com>');
   assert.equal(encodeFrom('Daigaku "Note" <a@b.c>'), '"Daigaku \\"Note\\"" <a@b.c>');
   assert.equal(encodeFrom('<a@b.c>'), 'a@b.c');
+  // 長い名前は、75文字までの encoded-word に分ける(文字の途中では切らない)
+  const long = encodeFrom(`${'あ'.repeat(40)} <a@b.c>`);
+  const words = long.replace(' <a@b.c>', '').split(' ');
+  assert.ok(words.length > 1);
+  for (const w of words) assert.ok(w.length <= 75, w);
+  const decoded = words.map((w) => Buffer.from(w.slice(10, -2), 'base64').toString('utf8')).join('');
+  assert.equal(decoded, 'あ'.repeat(40));
   assert.equal(encodeFrom('a@b.c'), 'a@b.c');
 });
 
@@ -201,11 +219,58 @@ test('Google: ほかの会社のアドレスで前からあるアカウントに
   const r = await redeem(f2.hash.get('ticket'), f2.verifier);
   assert.equal(r.status, 200);
   assert.equal(r.data.existing, true);
-  // 前からのアカウントがなければ、ほかの会社のアドレスでも新しく作る
-  const f3 = await flow('google', { iss: 'https://accounts.google.com', aud: 'g-client', exp: Date.now() / 1000 + 600, sub: 'g-new', email: 'new@corp.example.com', email_verified: true });
+  // 前からのアカウントがなければ、ほかの会社のアドレスでも新しく作る(ただし「持ち主を確かめていない」印を付ける)
+  const claims3 = { iss: 'https://accounts.google.com', aud: 'g-client', exp: Date.now() / 1000 + 600, sub: 'g-new', email: 'new@corp.example.com', email_verified: true };
+  const f3 = await flow('google', claims3);
   const r3 = await redeem(f3.hash.get('ticket'), f3.verifier);
   assert.equal(r3.data.existing, false);
   assert.equal(r3.data.email, 'new@corp.example.com');
+  // 本当の持ち主があとでメールの番号でログインすると、先に作られたアカウントには入らず、新しいアカウントになる(事前の乗っ取りを防ぐ)
+  await api('/otp/send', { email: 'new@corp.example.com', purpose: 'login' });
+  const v = await api('/otp/verify', { email: 'new@corp.example.com', code: mail.lastCode('new@corp.example.com'), purpose: 'login' });
+  assert.equal(v.status, 404); // ログインのページでは「アカウントはありません」(番号はそのまま使える)
+  const v2 = await api('/otp/verify', { email: 'new@corp.example.com', code: mail.lastCode('new@corp.example.com'), purpose: 'signup' });
+  assert.equal(v2.status, 200);
+  assert.equal(v2.data.existing, false);
+  assert.notEqual(v2.data.userId, r3.data.userId);
+  // 先に作られたアカウントは、Google でだけ入れる(アドレスは外れている)
+  const f4 = await flow('google', claims3);
+  const r4 = await redeem(f4.hash.get('ticket'), f4.verifier);
+  assert.equal(r4.data.userId, r3.data.userId);
+  assert.equal(r4.data.email, `${r3.data.userId}@unverified.invalid`);
+  // Gmail の持ち主が Google でログインしたときも、先に(確かめずに)作られたアカウントからアドレスを外す
+  const fa = await flow('apple', { iss: 'https://appleid.apple.com', aud: 'io.github.jagjagyt.daigakunote.web', exp: Date.now() / 1000 + 600, sub: 'a-squat', email: 'squat@gmail.com', email_verified: 'true' });
+  const ra = await redeem(fa.hash.get('ticket'), fa.verifier);
+  const fg = await flow('google', { iss: 'https://accounts.google.com', aud: 'g-client', exp: Date.now() / 1000 + 600, sub: 'g-squat', email: 'squat@gmail.com', email_verified: true });
+  const rg = await redeem(fg.hash.get('ticket'), fg.verifier);
+  assert.equal(rg.data.existing, false);
+  assert.notEqual(rg.data.userId, ra.data.userId);
+});
+
+test('Apple: 持ち主と言い切れるのは「メールを非公開」と iCloud のアドレスだけ', async () => {
+  await api('/otp/send', { email: 'mine@example.org', purpose: 'signup' });
+  await api('/otp/verify', { email: 'mine@example.org', code: mail.lastCode('mine@example.org'), purpose: 'signup' });
+  const base = { iss: 'https://appleid.apple.com', aud: 'io.github.jagjagyt.daigakunote.web', exp: Date.now() / 1000 + 600, email_verified: 'true' };
+  const f = await flow('apple', { ...base, sub: 'a-mine', email: 'mine@example.org' });
+  assert.equal(f.hash.get('error'), 'use_email');
+  await api('/otp/send', { email: 'me@icloud.com', purpose: 'signup' });
+  const v = await api('/otp/verify', { email: 'me@icloud.com', code: mail.lastCode('me@icloud.com'), purpose: 'signup' });
+  const f2 = await flow('apple', { ...base, sub: 'a-icloud', email: 'me@icloud.com' });
+  const r2 = await redeem(f2.hash.get('ticket'), f2.verifier);
+  assert.equal(r2.data.userId, v.data.userId);
+});
+
+test('Apple: 退会すると、Apple に取り消しを頼む', async () => {
+  idp.refresh = 'apple-refresh-1';
+  const f = await flow('apple', { iss: 'https://appleid.apple.com', aud: 'io.github.jagjagyt.daigakunote.web', exp: Date.now() / 1000 + 600, sub: 'a-rev', email: 'rev@privaterelay.appleid.com', email_verified: true, is_private_email: true });
+  const r = await redeem(f.hash.get('ticket'), f.verifier);
+  const del = await fetch(srv.url + '/account', { method: 'DELETE', headers: { authorization: `Bearer ${r.data.token}` } });
+  assert.equal(del.status, 200);
+  assert.equal(idp.revoked.length, 1);
+  assert.equal(idp.revoked[0].token, 'apple-refresh-1');
+  assert.equal(idp.revoked[0].token_type_hint, 'refresh_token');
+  assert.equal(idp.revoked[0].client_id, 'io.github.jagjagyt.daigakunote.web');
+  assert.equal(idp.revoked[0].client_secret.split('.').length, 3);
 });
 
 test('Google: 確かめていないアドレスではアカウントを作らない', async () => {
@@ -268,8 +333,10 @@ test('戻り先は大学ノートの住所だけ', async () => {
   assert.equal(allowedReturn(WEB), WEB);
   assert.equal(allowedReturn(`${WEB}?x=1#/login`), WEB);
   assert.equal(allowedReturn(APP_RETURN), APP_RETURN);
-  assert.equal(allowedReturn('http://localhost:8123/'), 'http://localhost:8123/');
-  for (const bad of ['https://evil.example/', 'https://jagjag-yt.github.io.evil.example/', 'https://user:pw@jagjag-yt.github.io/', 'javascript:alert(1)', 'io.github.jagjagyt.daigakunote://evil', '']) {
+  // 手元の住所は、試験の設定のときだけ
+  assert.equal(allowedReturn('http://localhost:8123/'), null);
+  assert.equal(allowedReturn('http://localhost:8123/', { DEV_OAUTH_RETURNS: '1' }), 'http://localhost:8123/');
+  for (const bad of ['https://evil.example/', 'https://jagjag-yt.github.io/', 'https://jagjag-yt.github.io/other-repo/', 'https://jagjag-yt.github.io.evil.example/', 'https://user:pw@jagjag-yt.github.io/daigaku-note/', 'javascript:alert(1)', 'io.github.jagjagyt.daigakunote://evil', '']) {
     assert.equal(allowedReturn(bad), null, bad);
   }
   const st = await get(`/oauth/google/start?${new URLSearchParams({ return: 'https://evil.example/', challenge: 'a'.repeat(43) })}`);
@@ -295,8 +362,9 @@ test('Apple: 署名した client_secret で引き換え、アプリの住所へ�
   assert.ok(claims.exp - claims.iat <= 300);
   const ok = await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, appleKeys.publicKey, Buffer.from(sig, 'base64url'), new TextEncoder().encode(`${h}.${c}`));
   assert.ok(ok, '署名が Apple の鍵の公開鍵で確かめられる');
-  // アプリへ戻す: リダイレクトと、押せるリンクのページ
-  assert.equal(f.cb.status, 302);
+  // アプリへ戻す: すぐに移るページ(meta refresh)と、押せるリンク
+  assert.equal(f.cb.status, 200);
+  assert.match(f.cb.headers.get('content-security-policy'), /default-src 'none'/);
   assert.ok(f.loc.startsWith(`${APP_RETURN}#/oauth?`), f.loc);
   const html = await f.cb.text();
   assert.match(html, /大学ノートに戻る/);

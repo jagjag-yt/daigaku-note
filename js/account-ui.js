@@ -24,7 +24,7 @@
 import * as account from './account.js';
 import * as dav from './webdav.js';
 import * as db from './db.js';
-import { clearExports, closeAuthPage, isNative, onAppUrl, openAuthPage } from './native.js';
+import { clearExports, closeAuthPage, inAppBrowser, isNative, onAppUrl, openAuthPage, platform } from './native.js';
 
 const $ = (s) => document.querySelector(s);
 const PENDING_KEY = 'daigaku-note.otp';
@@ -48,7 +48,6 @@ let providers = {}; // サーバーで使える Apple・Google { apple: true, go
 let providersAsked = 0; // 最後にサーバーに聞いた時刻
 let oauthReturn = null; // Apple・Google から戻ってきた住所(ログインのページを出したら続きを行う)
 let started = false; // 起動が済んだか(済む前に戻ってきたら、起動の流れでログインのページを出す)
-const seenTickets = new Set(); // 引換券を2回使わない(アプリの住所が2回届くことがあるため)
 
 // ---------- 小さな道具 ----------
 
@@ -164,6 +163,7 @@ function setBusy(on) {
 /** ログインの状態が変わったら(ログイン・ログアウト・鍵が断られた)呼ぶ。ログインが切れたら、ログインのページに戻す */
 export function refresh() {
   started = true; // app.js は同期の準備が済んでから呼ぶ
+  if (oauthReturn && loggedIn()) { oauthReturn = null; account.takeOAuth(); } // 起動の途中に戻ってきたが、もうログインしていた
   const acc = dav.config().account;
   const ok = loggedIn();
   const btn = $('#account-btn');
@@ -194,12 +194,6 @@ function kickToAuth() {
 
 /** ログインしていないときに、本棚・ノートの代わりに出す。hash が #/signup ならアカウント作成、それ以外はログイン */
 export function showAuth(hash) {
-  // Apple・Google から戻ってきた住所(読み込み直さずに # だけ変わったとき): 始めたページにして、続きを行う
-  if (/^#\/oauth\?/.test(hash)) {
-    oauthReturn = location.href;
-    hash = account.peekOAuth()?.purpose === 'signup' ? '#/signup' : '#/login';
-    history.replaceState(null, '', hash);
-  }
   // 住所がログイン・アカウント作成のどちらでもない(本棚など)ときは、この端末で使ったことがあればログイン、なければアカウント作成。
   // 住所もそのページのものに置き換える(ノートの住所は、ログインしたあとに開くので残す)
   if (!/^#\/(login|signup|note\/)/.test(hash)) {
@@ -218,7 +212,8 @@ export function showAuth(hash) {
   const fresh = !was || changed;
   const back = oauthReturn;
   oauthReturn = null;
-  if (back) { savePending(null); editing = false; } // Apple・Google から戻った: 番号の画面ではなく、始めたページに文言を出す
+  // Apple・Google から戻った: 番号の画面ではなく、始めたページに文言を出す(送った番号は覚えたまま。取り消したときに続きから入れられるように)
+  if (back) editing = true;
   render({ focus: fresh });
   if (fresh && !back) focusInput();
   showLocalNotice();
@@ -432,6 +427,7 @@ async function finishLogin(r, asked, el = $('#acct-code-msg')) {
   h.toast(
     r.removedDevices ? `ログインしました。ログインできる端末は${r.maxDevices || 5}台までのため、いちばん長く使っていない端末を外しました`
       : asked === 'signup' && r.existing ? 'このメールアドレスはすでに登録されていたため、ログインしました'
+        : asked === 'oauth-new' ? '新しいアカウントを作成しました。前にメールアドレスで作ったアカウントがある場合は、ログアウトしてメールアドレスでログインしてください'
         : created ? 'アカウントを作成しました。この端末のノートは自動で同期されます'
           : 'ログインしました。この端末のノートとほかの端末のノートを同期します',
     6000,
@@ -546,10 +542,17 @@ function loadProviders() {
 function applyProviders() {
   const names = [];
   for (const p of Object.keys(account.PROVIDER_NAMES)) if (providers[p] === true) names.push(account.PROVIDER_NAMES[p]);
+  // iOS のアプリでは、Apple が使えないときは Google も出さない(App Store の決まり: ほかの会社のログインを出すなら、Apple でのログインも出す)
+  const iosNoApple = isNative && platform === 'ios' && providers.apple !== true;
+  const show = (p) => providers[p] === true && !(p === 'google' && (iosNoApple || inAppBrowser())); // LINE などの中では Google が断る
   for (const how of ['login', 'signup']) {
     const box = $(`#auth-${how}-social`);
-    for (const b of box.querySelectorAll('.oauth-btn')) b.hidden = providers[b.dataset.provider] !== true;
-    box.hidden = !names.length;
+    let any = false;
+    for (const b of box.querySelectorAll('.oauth-btn')) {
+      b.hidden = !show(b.dataset.provider);
+      any ||= !b.hidden;
+    }
+    box.hidden = !any;
   }
   $('#auth-login-lead').textContent = names.length
     ? `${names.join('・')}のアカウント、またはメールアドレスに届く6桁の番号でログインします。パスワードは不要です。`
@@ -578,27 +581,53 @@ async function startOAuth(provider) {
   if (busy) return;
   const el = emailMsg();
   if (!navigator.onLine) { msg(el, 'オフラインのため、今はログインできません。ネットにつながってからお試しください。'); return; }
+  const label = document.querySelector(`#auth-${purpose}-social .oauth-${provider} span`);
+  const text = label.textContent;
   await run(el, async () => {
     await openAuthPage(await account.oauthStartUrl(provider, purpose));
-    // ブラウザ版は、このままページが移る。移るまで押せないままにする(移れなかったときのために、5秒で戻す)
-    if (!isNative) await new Promise((r) => setTimeout(r, 5000));
+    // ブラウザ版は、このままページが移る。移るまで押せないままにする(移れなかったとき・「戻る」で戻ったときは戻す)
+    if (!isNative) {
+      label.textContent = '移動しています…';
+      await new Promise((r) => { setTimeout(r, 5000); window.addEventListener('pageshow', r, { once: true }); });
+    }
   });
+  label.textContent = text;
+}
+
+/**
+ * Apple・Google から戻ってきた住所を受け取る(アプリの住所・ブラウザ版の #/oauth?…)。app.js の route() からも呼ぶ。
+ * この端末で始めたログインの途中(合言葉を覚えている)なら受け取り、始めたページの住所にする(続きは showAuth → processOAuth)。
+ * そうでなければ、住所から外すだけ(引換券が付いていたら「完了できませんでした」と出すために受け取る)。
+ */
+export function acceptOAuth(url) {
+  if (!account.parseOAuthReturn(url)) return;
+  const fromHash = /^#\/oauth\?/.test(location.hash);
+  const saved = account.peekOAuth();
+  if (saved && !(started && loggedIn())) {
+    oauthReturn = url;
+    history.replaceState(null, '', saved.purpose === 'signup' ? '#/signup' : '#/login');
+    return;
+  }
+  if (saved) account.takeOAuth(); // ほかの方法でログインし終えていた
+  if (!fromHash) return;
+  // 合言葉がないのに引換券が届いた: この端末で始めたものではない(時間がたちすぎた・ホーム画面から開いたなど)。ログインしていなければ知らせる
+  const known = !!saved || loggedIn() || localOnly();
+  if (!known && account.parseOAuthReturn(url).ticket) oauthReturn = url;
+  history.replaceState(null, '', known ? '#/' : '#/login');
 }
 
 // アプリの住所で開かれた(アプリ版で、Apple・Google から戻ってきた)
 function receiveOAuth(url) {
-  if (!account.parseOAuthReturn(url)) return;
+  if (!account.peekOAuth()) return; // ログインの途中ではない(もう受け取った・取り消した・前に開かれた住所がもう一度届いた)
   closeAuthPage();
-  if (started && loggedIn()) { // ほかの方法でログインし終えていた
-    account.takeOAuth();
-    if (/^#\/oauth\?/.test(location.hash)) history.replaceState(null, '', '#/');
-    return;
-  }
-  oauthReturn = url;
-  history.replaceState(null, '', account.peekOAuth()?.purpose === 'signup' ? '#/signup' : '#/login');
-  if (!started) return; // 起動の途中: 起動の流れで route() → showAuth() が続きを行う
-  for (const d of document.querySelectorAll('dialog[open]')) d.close();
-  h.route();
+  acceptOAuth(url);
+  if (!started || !oauthReturn || busy) return; // 起動の途中なら、起動の流れで route() → showAuth() が続きを行う
+  const go = () => {
+    if (h.penBusy?.()) { setTimeout(go, 500); return; } // ペンで書いている途中なら、書き終わるまで待つ
+    for (const d of document.querySelectorAll('dialog[open]')) d.close();
+    h.route();
+  };
+  go();
 }
 
 const OAUTH_ERRORS = {
@@ -614,18 +643,22 @@ const OAUTH_ERRORS = {
 async function processOAuth(url) {
   const r = account.parseOAuthReturn(url);
   if (!r) return;
+  if (loggedIn()) return;
   const saved = account.takeOAuth();
   const el = emailMsg();
-  const name = account.PROVIDER_NAMES[r.provider || saved?.provider] || 'Apple・Google';
+  const name = account.PROVIDER_NAMES[r.provider || saved?.provider];
+  const show = (text) => { msg(el, text); el.tabIndex = -1; el.focus(); }; // 読み上げで聞き逃さないよう、文言に移る
   if (r.error) {
-    if (r.error !== 'cancelled') msg(el, (OAUTH_ERRORS[r.error] || ((n) => `${n}でログインできませんでした。もう一度お試しください。`))(name));
+    if (r.error === 'cancelled') return;
+    if (r.error === 'no_email' && purpose === 'signup') show(`${name}のアカウントのメールアドレスを確かめられませんでした。メールアドレスで作成してください。`);
+    else show((OAUTH_ERRORS[r.error] || ((n) => `${n}でログインできませんでした。もう一度お試しください。`))(name || 'この方法'));
     return;
   }
-  if (!r.ticket || seenTickets.has(r.ticket)) return;
-  seenTickets.add(r.ticket);
+  if (!r.ticket) return;
   // 合言葉がない: この端末(このブラウザ)で始めたログインではない、または時間がたちすぎた
   if (!saved || (r.provider && saved.provider !== r.provider)) {
-    msg(el, `${name}でのログインを完了できませんでした。もう一度お試しください。`);
+    const standalone = !isNative && (navigator.standalone === true || matchMedia('(display-mode: standalone)').matches);
+    show(`${name ? `${name}での` : ''}ログインを完了できませんでした。もう一度お試しください。${standalone ? 'うまくいかないときは、メールアドレスでログインしてください。' : ''}`);
     return;
   }
   const res = await run(el, () => account.oauthRedeem(r.ticket, saved.verifier));
@@ -635,7 +668,8 @@ async function processOAuth(url) {
     await discard();
     return;
   }
-  await finishLogin(res, purpose, el);
+  // ログインのページから始めて、新しいアカウントができた: 前にメールアドレスで作ったアカウントとは別になることを伝える
+  await finishLogin(res, purpose === 'login' && res.existing === false ? 'oauth-new' : purpose, el);
 }
 
 // ---------- アカウントの画面(ログイン中) ----------
@@ -784,8 +818,9 @@ export function init(helpers) {
   pending = loadPending();
   providers = loadProviders();
   // Apple・Google から戻ってきた(ブラウザ版): 住所から引換券を外して、始めたページの住所にしておく(続きは showAuth で)
-  if (/^#\/oauth\?/.test(location.hash)) receiveOAuth(location.href);
-  onAppUrl((url) => { if (url.startsWith(account.APP_RETURN)) receiveOAuth(url); });
+  if (/^#\/oauth\?/.test(location.hash)) acceptOAuth(location.href);
+  // アプリ版: 起動のときの住所は、ログインの途中のときだけ見る(iOS は最後に開かれた住所をずっと返すため)
+  onAppUrl((url) => { if (url.startsWith(account.APP_RETURN)) receiveOAuth(url); }, { launch: !!account.peekOAuth() });
   for (const b of document.querySelectorAll('#auth .oauth-btn')) b.onclick = () => startOAuth(b.dataset.provider);
   resumeAfterWipe();
   refreshPerks();

@@ -411,7 +411,8 @@ async function fakeIdp(ctx, who, { cancel = false } = {}) {
 }
 
 test('Google・Apple で続けると、アカウントができて本棚へ。2回目は同じアカウント', async ({ browser }, testInfo) => {
-  const email = freshEmail('g', testInfo);
+  // Gmail のアドレス(Google が持ち主を管理しているので、メールの番号のアカウントとつながる)
+  const email = freshEmail('g', testInfo).replace('@example.com', '@gmail.com');
   const a = await open(browser);
   await fakeIdp(a.context(), { sub: `g-${email}`, email });
   // サーバーで設定が済んでいるので、ボタンが出る。アカウント作成の説明も合わせる
@@ -439,13 +440,19 @@ test('Google・Apple で続けると、アカウントができて本棚へ。2�
   await login(b, email);
   await expect(b.locator('#notes .card', { hasText: '解剖学' })).toBeVisible();
 
-  // Apple(フォームの POST で戻る)も同じアドレスなら同じアカウント
+  // Apple(フォームの POST で戻る)に同じ Gmail のアドレスを付けていても、Apple は Gmail の持ち主を管理していないので、
+  // 前からのアカウントにはつながず、メールの番号でログインするよう案内する
   const c = await open(browser);
   await fakeIdp(c.context(), { sub: `a-${email}`, email });
   await c.locator('#auth-signup-social .oauth-apple').click();
+  await expect(c.locator('#auth-signup-msg')).toHaveText('このメールアドレスのアカウントがすでにあります。メールアドレスに届く番号でログインしてください。');
+  await expect(c.locator('#auth-signup-msg')).toBeFocused();
+  await expect(c.locator('#library')).toBeHidden();
+  // Apple の「メールを非公開」なら、別の新しいアカウント
+  await fakeIdp(c.context(), { sub: `a2-${email}`, email: `x${seq}@privaterelay.appleid.com`, is_private_email: true });
+  await c.locator('#auth-signup-social .oauth-apple').click();
   await expect(c.locator('#library')).toBeVisible();
-  await expect(c.locator('#toast-msg')).toContainText('すでに登録されていたため、ログインしました');
-  await expect(c.locator('#notes .card', { hasText: '解剖学' })).toBeVisible();
+  await expect(c.locator('#toast-msg')).toContainText('アカウントを作成しました');
   for (const p of [a, b, c]) await p.context().close();
 });
 

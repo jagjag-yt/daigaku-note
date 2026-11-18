@@ -129,6 +129,7 @@ CREATE TABLE IF NOT EXISTS identities (
   subject    TEXT NOT NULL,               -- Apple・Google の ID トークンの sub
   user_id    TEXT NOT NULL,
   email      TEXT,                        -- つないだときのアドレス(Apple の「メールを非公開」なら、Apple が作った転送用のアドレス)
+  refresh_token TEXT,                     -- Apple だけ。退会のときに Apple に取り消しを頼むため(App Store の決まり)
   created_at TEXT NOT NULL,
   PRIMARY KEY (provider, subject),
   FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
@@ -149,4 +150,14 @@ CREATE TABLE IF NOT EXISTS oauth_flows (
   ticket_hash TEXT UNIQUE,                -- 引換券のハッシュ(戻ってきたあとの行だけ)
   user_id     TEXT,
   existing    INTEGER
+);
+
+-- 持ち主を確かめられないアドレスで、Apple・Google から作ったアカウント(src/index.js の loginUser)。
+-- Google のアカウントにほかの会社のアドレスを付けた人などは、そのアドレスを今も持っているとは限らない。
+-- あとで本当の持ち主がメールの番号でログインしたら、このアカウントからアドレスを外し(…@unverified.invalid)、
+-- 持ち主には新しいアカウントを作る(他人が先にアカウントを作って、持ち主のノートを受け取る「事前の乗っ取り」を防ぐ)。
+CREATE TABLE IF NOT EXISTS unverified_emails (
+  user_id    TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 );

@@ -248,6 +248,8 @@ function route() {
   closePopover();
   if (!$('#toast-act').hidden) $('#toast').hidden = true; // 「元に戻す」付きのトーストだけ、画面が変わったら消す
   for (const d of document.querySelectorAll('dialog[open]')) d.close();
+  // Apple・Google から戻ってきた住所(# だけ変わったとき): 引換券を住所から外し、始めたページの住所にする
+  if (/^#\/oauth\?/.test(location.hash)) accountUI.acceptOAuth(location.href);
   // ログインしていない(この端末だけで使うとも決めていない)なら、本棚・ノートの代わりにログイン・アカウント作成のページを出す。
   // この端末だけで使っているときも、ログイン・アカウント作成の住所を開いたら、そのページを出す
   if (!accountUI.canUse() || (!accountUI.loggedIn() && /^#\/(login|signup)\b/.test(location.hash))) {

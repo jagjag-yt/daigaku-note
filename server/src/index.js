@@ -52,7 +52,7 @@ import { activePerks, handleCouponRedeem } from './coupon.js';
 import { planFromPerks, userPlan } from './plan.js';
 import { sweepInactive } from './inactive.js';
 import { mailLimitDefaults, sendMail } from './mail.js';
-import { cleanupOAuth, handleOAuth } from './oauth.js';
+import { cleanupOAuth, handleOAuth, revokeApple } from './oauth.js';
 
 /**
  * 配信されている版。/health に載せて、外から「どれが動いているか」を確かめられるようにする。
@@ -224,14 +224,14 @@ async function handleOtpSend(request, env) {
   if (!(await rate(`otp:burst:${email}${ip ? `:${ip}` : ''}`, 1, otpBurstSeconds(env)))) return fail(429, '続けて送信できません。1分ほど待ってからお試しください。');
   const tooMany = () => fail(429, '送信の回数が上限に達しました。しばらく待ってからお試しください。');
   if (ip && !(await rate(`otp:pair:${email}:${ip}`, 10, 24 * 60 * 60))) return tooMany();
-  // IP ごとの1日の上限は、サービス全体の1日の枠の3割(/48 は45%)で、多くても200通(/48 は300通)。
+  // IP ごとの1日の上限は、サービス全体の1日の枠の3割(/48 は45%)で、多くても100通(/48 は150通)。
   // 1か所からサービス全体の枠を使い切れない・届かないアドレスへ大量に送らされて SES に止められないようにする。
-  // 大学など大勢が1つの IP を共有する場所でも、1日200人までは足りる(Apple・Google でのログインは数えない)。
+  // 大学など大勢が1つの IP を共有する場所でも、1日100人までは足りる(Apple・Google でのログインは数えない)。
   // IPv6 は /64 に加えて /48 でも数える(/48 をまるごと借りられるサービスがあるため)
   const daily = otpLimit(env, 'OTP_DAILY_LIMIT', mailLimitDefaults(env).day);
-  if (ip && !(await rate(`otp:ipday:${ip}`, Math.min(200, Math.max(10, Math.floor(daily * 0.3))), 24 * 60 * 60))) return tooMany();
+  if (ip && !(await rate(`otp:ipday:${ip}`, Math.min(100, Math.max(10, Math.floor(daily * 0.3))), 24 * 60 * 60))) return tooMany();
   const ip48 = ip && ip.endsWith('::/64') ? `${ip.split(':').slice(0, 3).join(':')}::/48` : null;
-  if (ip48 && !(await rate(`otp:ipday:${ip48}`, Math.min(300, Math.max(15, Math.floor(daily * 0.45))), 24 * 60 * 60))) return tooMany();
+  if (ip48 && !(await rate(`otp:ipday:${ip48}`, Math.min(150, Math.max(15, Math.floor(daily * 0.45))), 24 * 60 * 60))) return tooMany();
   // アドレスごとの上限(受信箱を埋められないため)。ただし、その IP からそのアドレスへの1日の最初の2通は数えない
   // (他人が4つまでの IP から送り続けて、アドレスの枠を使い切っても、本人は自分の IP から番号を受け取れるように。
   // それより多くの IP から送られると防げない。Turnstile などで機械からの送信を止める必要がある)
@@ -313,7 +313,8 @@ async function handleOtpVerify(request, env) {
   // ログインなのにアカウントがない: 鍵は出さず、番号も使用済みにしない(このままアカウントを作れるように)
   const settled = await settleUser(env, await env.DB.prepare('SELECT id FROM users WHERE email = ?').bind(email).first(), email);
   if (settled === 'busy') return fail(503, 'ただいまログインできません。時間をおいてお試しください。');
-  const existing = settled;
+  // 番号を確かめた = このアドレスの持ち主。持ち主を確かめずに Apple・Google から作られたアカウントなら、そちらからアドレスを外す
+  const existing = settled && (await detachUnverified(env, settled));
   if (purpose === 'login' && !existing) {
     // この回の試行は数えない(間違えたあとに正しい番号を入れた人が、同じ番号でアカウントを作れなくならないように)
     await env.DB.prepare('UPDATE otp_requests SET attempts = attempts - 1 WHERE id = ? AND attempts > 0').bind(row.id).run();
@@ -345,6 +346,20 @@ async function settleUser(env, user, email) {
   return done ? null : 'busy';
 }
 
+/**
+ * 持ち主を確かめられないアドレスで Apple・Google から作ったアカウント(unverified_emails)なら、アドレスを外して null を返す。
+ * そのアカウントは Apple・Google でのログインでだけ使い続けられる(アドレスは …@unverified.invalid になる)。
+ * 本当の持ち主(メールの番号を確かめた人・Google や Apple が持ち主と認めた人)が来たときに呼ぶ。そうでなければ user をそのまま返す
+ */
+async function detachUnverified(env, user) {
+  const mark = await env.DB.prepare('DELETE FROM unverified_emails WHERE user_id = ? RETURNING user_id').bind(user.id).first()
+    .catch((err) => (/no such table/i.test(String(err)) ? null : Promise.reject(err)));
+  if (!mark) return user;
+  await env.DB.prepare('UPDATE users SET email = ? WHERE id = ?').bind(`${user.id}@unverified.invalid`, user.id).run();
+  console.log('detached unverified email', user.id);
+  return null;
+}
+
 /** そのアドレスの利用者を返す(なければ作る。同時に2回来ても1人だけ) */
 async function ensureUser(env, email) {
   await env.DB.prepare('INSERT INTO users (id, email, created_at, last_seen_at) VALUES (?, ?, ?, ?) ON CONFLICT (email) DO NOTHING')
@@ -357,29 +372,48 @@ async function ensureUser(env, email) {
 /**
  * Apple・Google でログインした人の利用者を決める(src/oauth.js から呼ぶ)。
  *   1. 前に同じ Apple・Google のアカウントでログインしていたら、その利用者
- *   2. なければ、Apple・Google が確かめたメールアドレスの利用者(メールの番号で作ったアカウントにつなぐ)
- *   3. それもなければ、そのアドレスで新しく作る
- * email は Apple・Google が「確かめ済み」としたときだけ渡す(確かめていないアドレスで、他人のアカウントにつながないように)。
- * owns は、そのアドレスの今の持ち主だと言い切れるか(src/oauth.js)。言い切れなければ、前からあるアカウントにはつながない。
+ *   2. なければ、Apple・Google が確かめたメールアドレスの利用者(メールの番号で作ったアカウントにつなぐ)。
+ *      ただし、そのアドレスの今の持ち主だと言い切れるとき(owns)だけ。言い切れなければ { error: 'use_email' }
+ *   3. それもなければ、そのアドレスで新しく作る。言い切れないときは unverified_emails に印を付けておき、
+ *      あとで本当の持ち主が来たら、アドレスを外す(detachUnverified。先に作って持ち主のノートを受け取る「事前の乗っ取り」を防ぐ)
+ * email は Apple・Google が「確かめ済み」としたときだけ渡す。refreshToken は Apple だけ(退会のときの取り消しに使う)。
  * @returns {{ userId, existing } | { error }}
  */
-async function loginUser(env, { provider, subject, email, owns }) {
+async function loginUser(env, { provider, subject, email, owns, refreshToken = null }) {
+  const link = (userId) => env.DB.prepare(
+    'INSERT INTO identities (provider, subject, user_id, email, refresh_token, created_at) VALUES (?, ?, ?, ?, ?, ?) ' +
+      'ON CONFLICT (provider, subject) DO UPDATE SET user_id = excluded.user_id, email = COALESCE(excluded.email, identities.email), ' +
+      'refresh_token = COALESCE(excluded.refresh_token, identities.refresh_token)',
+  ).bind(provider, subject, userId, email, refreshToken, nowIso()).run();
   const linked = await env.DB.prepare('SELECT u.id, u.email FROM identities i JOIN users u ON u.id = i.user_id WHERE i.provider = ? AND i.subject = ?')
     .bind(provider, subject).first();
   if (linked) {
     const settled = await settleUser(env, linked, linked.email);
     if (settled === 'busy') return { error: 'busy' };
-    if (settled) return { userId: settled.id, existing: true };
+    if (settled) {
+      if (refreshToken) await link(settled.id); // 新しい取り消し用の鍵を覚える
+      return { userId: settled.id, existing: true };
+    }
     // 片づけで消し切った(つながりも一緒に消えている): 新しく作る
   }
   if (!email) return { error: 'no_email' };
-  const byEmail = await settleUser(env, await env.DB.prepare('SELECT id, email FROM users WHERE email = ?').bind(email).first(), email);
+  let byEmail = await settleUser(env, await env.DB.prepare('SELECT id, email FROM users WHERE email = ?').bind(email).first(), email);
   if (byEmail === 'busy') return { error: 'busy' };
+  // 持ち主と認められた人が来た: 持ち主を確かめずに作られたアカウントなら、そちらからアドレスを外す
+  if (byEmail && owns) byEmail = await detachUnverified(env, byEmail);
   // そのアドレスのアカウントが前からあるが、持ち主だと言い切れない: つながずに、メールの番号でログインしてもらう
   if (byEmail && !owns) return { error: 'use_email' };
-  const user = byEmail || (await ensureUser(env, email));
-  await env.DB.prepare('INSERT INTO identities (provider, subject, user_id, email, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (provider, subject) DO UPDATE SET user_id = excluded.user_id, email = excluded.email')
-    .bind(provider, subject, user.id, email, nowIso()).run();
+  let user = byEmail;
+  if (!user) {
+    const id = newId('u');
+    const created = await env.DB.prepare('INSERT INTO users (id, email, created_at, last_seen_at) VALUES (?, ?, ?, ?) ON CONFLICT (email) DO NOTHING RETURNING id')
+      .bind(id, email, nowIso(), nowIso()).first();
+    // 同時にメールの番号で作られた: 持ち主と言い切れなければつながない
+    if (!created && !owns) return { error: 'use_email' };
+    user = await env.DB.prepare('SELECT id, email FROM users WHERE email = ?').bind(email).first();
+    if (created && !owns) await env.DB.prepare('INSERT INTO unverified_emails (user_id, created_at) VALUES (?, ?)').bind(user.id, nowIso()).run();
+  }
+  await link(user.id);
   return { userId: user.id, existing: !!byEmail };
 }
 
@@ -479,6 +513,10 @@ async function handleDeleteAccount(env, device) {
  */
 export async function purgeUser(env, uid, email, { keepOtp = false } = {}) {
   await env.DB.prepare('DELETE FROM devices WHERE user_id = ?').bind(uid).run();
+  // Apple でログインしていたら、Apple に取り消しを頼む(App Store の決まり。「Apple でサインイン」の一覧から消える)。失敗しても消すのは続ける
+  const apple = await env.DB.prepare("SELECT refresh_token FROM identities WHERE user_id = ? AND provider = 'apple' AND refresh_token IS NOT NULL")
+    .bind(uid).all().catch(() => ({ results: [] }));
+  for (const r of apple.results) await revokeApple(env, r.refresh_token);
   try {
     await deletePrefix(env.FILES, `u/${uid}/`);
   } catch (err) {

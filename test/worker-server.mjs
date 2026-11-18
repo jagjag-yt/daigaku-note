@@ -36,7 +36,7 @@ globalThis.fetch = async (input, init) => {
   return Response.json({ id_token: idToken });
 };
 const srv = await startWorker(testWorker, fakeEnv({
-  DEV_ECHO_OTP: '1', OTP_BURST_SECONDS: '0',
+  DEV_ECHO_OTP: '1', OTP_BURST_SECONDS: '0', DEV_OAUTH_RETURNS: '1',
   GOOGLE_CLIENT_ID: 'test-google', GOOGLE_CLIENT_SECRET: 'test-secret',
   APPLE_CLIENT_ID: 'test.apple', APPLE_TEAM_ID: 'TEAM', APPLE_KEY_ID: 'KEY', APPLE_PRIVATE_KEY: applePem,
 }), port);

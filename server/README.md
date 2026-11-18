@@ -63,12 +63,13 @@ WebDAV の URL・ユーザー名・アプリパスワードを手で入れなく
 ### 守り
 
 - 6桁の番号と端末の鍵は、`SECRET_PEPPER` を混ぜたハッシュだけを保存する。番号は長さをそろえて比べる。
-- 番号は1つにつき5回まで。送信は、アドレスと IP の組ごとに1分1回・1日10回、アドレスごとに1日30回(ただし、その IP からそのアドレスへの1日の最初の2通は数えない。数えない分はアドレスごとに1日10通まで)、IP ごとに1日はサービス全体の1日の枠の3割(既定で27回。IPv6 は /64 ごとにまとめ、/48 でも45%まで)。断った送信は、そのあとに調べる上限には数えない(順番は 続けての送信・組 → IP → アドレス → 全体)。確かめるのも回数を数える。
+- 番号は1つにつき5回まで。送信は、アドレスと IP の組ごとに1分1回・1日10回、アドレスごとに1日30回(ただし、その IP からそのアドレスへの1日の最初の2通は数えない。数えない分はアドレスごとに1日10通まで)、IP ごとに1日はサービス全体の1日の枠の3割で多くても100回(IPv6 は /64 ごとにまとめ、/48 でも45%・150回まで)。断った送信は、そのあとに調べる上限には数えない(順番は 続けての送信・組 → IP → アドレス → 全体)。確かめるのも回数を数える。
   他人が同じアドレスへ送り続けても、4つまでの IP からなら、本人は自分の IP から番号を受け取れる。5つ以上の IP から送り続けられると、本人もその日は受け取れなくなる。また、使えるのは最後に送った番号だけなので、送り続けられている間は届いた番号がすぐ使えなくなることがある。これらは Turnstile などで機械からの送信を止めて防ぐ(未対応)。
 - サービス全体で送るメール(番号と、長く使われていないアカウントへのお知らせの合計)は、暦の1日(UTC)に `OTP_DAILY_LIMIT` 通・暦の1か月に `OTP_MONTHLY_LIMIT` 通まで。お知らせはその半分までしか使わない。
   既定は SES なら1日2,000通・月3万通(いたずらで大量に送らされても月3ドルまで)、Resend なら無料枠の少し下の1日90通・月2,900通。超えると 503 で「この端末だけで使うことはできます」と出る。
   変えるときは `wrangler.jsonc` の `vars` に `"OTP_DAILY_LIMIT": "5000"` のように書く。
-  IP ごとの1日の上限は、全体の1日の枠の3割で、多くても200通(/48 は300通)。
+  多くの IP から送られると、全体の枠を使い切られる・届かないアドレスへ送らされて SES に止められるおそれがある。
+  利用者が増えたら、Turnstile などで機械からの送信を止める(未対応)。
   上限に届くとログに `otp global limit reached` が出るので、Cloudflare のダッシュボードの Workers のログで見張る。
 - 「そのアドレスが登録されているか」は、どの応答からも分からない(利用者を作るのは番号を確かめたとき)。
 - 1人5台まで。6台目でログインすると、いちばん長く使っていない端末が外れる。180日使わなかった端末の鍵は切れる。
@@ -158,7 +159,10 @@ Resend の無料枠(1日100通)では足りないので、ログインの番号�
      "Condition": { "StringEquals": { "ses:FromAddress": "no-reply@quiz-make.com" } } }] }
    ```
 
-5. 本番アクセスが認められたら、鍵を入れて配信する。
+5. (任意)「設定セット」を作り、届かなかった・迷惑メールにされた数を見られるようにする。名前を `wrangler.jsonc` の `vars` に
+   `"SES_CONFIGURATION_SET": "…"` と書く。「アカウントレベルのサプレッションリスト」(届かなかったアドレスへ二度と送らない)は、はじめから有効になっている。
+   届かない割合が 5% を超えると SES の審査に入るので、ダッシュボードの「評判メトリクス」をときどき見る。
+6. 本番アクセスが認められたら、鍵を入れて配信する。
 
    ```
    npx wrangler secret put AWS_ACCESS_KEY_ID
@@ -166,12 +170,14 @@ Resend の無料枠(1日100通)では足りないので、ログインの番号�
    npx wrangler deploy
    ```
 
+   入れたら、自分のアドレスでログインの番号を送ってみて、届くことを確かめる(IAM の条件の書き方が合っていないと `ses failed 403` になる)。
    SES で送れないとき、ログに `ses failed 403 …` などが出る。Resend に戻すには `wrangler.jsonc` の `vars` に `"MAIL_PROVIDER": "resend"` と書いて配信する。
 
 ## Apple・Google でログインする
 
 メールを使わずにログインできるようにする(`src/oauth.js`)。設定の値を入れた方法だけ、アプリにボタンが出る。
-はじめに表を足す(`identities`・`oauth_flows`): `npx wrangler d1 execute daigaku-note --remote --file=schema.sql`
+はじめに表を足す(`identities`・`oauth_flows`・`unverified_emails`): `npx wrangler d1 execute daigaku-note --remote --file=schema.sql`
+(配信より先に流す。何度流しても壊れない)
 
 **Google**(Google Cloud のコンソール)
 
@@ -192,7 +198,8 @@ Resend の無料枠(1日100通)では足りないので、ログインの番号�
 2. Identifiers →「+」→「Services IDs」で、例えば `io.github.jagjagyt.daigakunote.signin` を作る。
    「Sign in with Apple」を有効にして Configure: Primary App ID は 1 のもの、Domains に `note-api.quiz-make.com`、
    Return URLs に `https://note-api.quiz-make.com/oauth/apple/callback`。
-3. Keys →「+」→「Sign in with Apple」を有効にして作り、.p8 をダウンロードする(1回しかできない)。Key ID を控える。
+3. Keys →「+」→「Sign in with Apple」を有効にし、横の Configure で Primary App ID に 1 のものを選んで作る。
+   .p8 をダウンロードする(1回しかできない)。Key ID を控える。
 4. Team ID(右上の名前の下、または Membership)を控えて、4つを入れる。
 
    ```
@@ -204,15 +211,22 @@ Resend の無料枠(1日100通)では足りないので、ログインの番号�
 
 5. 「メールを非公開」を選んだ人には、Apple が作った転送用のアドレス(…@privaterelay.appleid.com)が届く。
    そこへお知らせを届けるため、Services →「Sign in with Apple for Email Communication」に `quiz-make.com` と `no-reply@quiz-make.com` を登録する。
+   登録したら、転送用のアドレスの人へ実際に届くかを確かめる(届かなければ `ses.quiz-make.com` も登録する)。
 
 入れたら `npx wrangler deploy`。`curl https://note-api.quiz-make.com/oauth/providers` で `{"apple":true,"google":true}` になればよい。
 
 アカウントのつなぎ方:
 - 同じ Apple・Google のアカウントなら、メールアドレスが変わっても同じ大学ノートのアカウント。
-- メールの番号で作ったアカウントと同じアドレスなら、そのアカウントにつなぐ。ただし Google は、Gmail か Google Workspace のアドレスのときだけ
-  (Google のアカウントにほかの会社のアドレスを付けた人は、そのアドレスを今も持っているとは限らないため)。それ以外はメールの番号でログインしてもらう。
+- メールの番号で作ったアカウントと同じアドレスなら、そのアカウントにつなぐ。ただし、そのアドレスの今の持ち主だと言い切れるときだけ:
+  Google は Gmail か Google Workspace のアドレス、Apple は「メールを非公開」の転送用のアドレスか iCloud のアドレス。
+  (Google・Apple のアカウントにほかの会社のアドレスを付けた人は、そのアドレスを今も持っているとは限らない。卒業した大学のアドレスなど)
+  それ以外で前からのアカウントがあるときは、つながずに「メールアドレスに届く番号でログインしてください」と出す。
+- 持ち主と言い切れないアドレスで新しく作ったアカウントには印(`unverified_emails`)を付ける。あとで本当の持ち主がメールの番号でログインしたら、
+  そのアカウントからアドレスを外し(`<id>@unverified.invalid`。Apple・Google でだけ入れる)、持ち主には新しいアカウントを作る。
+- 退会・長く使われていないアカウントの片づけでは、Apple に取り消し(revoke)を頼む(App Store の決まり)。
+- ブラウザ版で戻すのは `https://jagjag-yt.github.io/daigaku-note/` だけ。手元の試験の住所(localhost)は `DEV_OAUTH_RETURNS=1` のときだけ。
 - アプリ版は、ログインの画面を OS のブラウザの画面で開き、`io.github.jagjagyt.daigakunote:/auth` で戻ってくる(Info.plist・AndroidManifest.xml に登録)。
-  アプリを作り直す(`npm run cap:sync`)まで、アプリ版ではボタンを押しても戻ってこない。
+  アプリ版のボタンは、アプリを作り直して(`npm run cap:sync` のあと Xcode・Android Studio でビルド)出し直した版から出る。
 
 ## クーポンコードを配る
 
@@ -256,7 +270,7 @@ npx wrangler deploy
 
 ```
 npx wrangler d1 execute daigaku-note --local --file=schema.sql
-npx wrangler dev --var SECRET_PEPPER:testpepper --var RESEND_API_KEY:dummy --var DEV_ECHO_OTP:1 --var OTP_BURST_SECONDS:0
+npx wrangler dev --var SECRET_PEPPER:testpepper --var RESEND_API_KEY:dummy --var DEV_ECHO_OTP:1 --var OTP_BURST_SECONDS:0 --var DEV_OAUTH_RETURNS:1
 ```
 
 `DEV_ECHO_OTP=1` のときは、メールを送らずに番号を応答(`devCode`)に入れる。手元から呼んだときだけ効き、
