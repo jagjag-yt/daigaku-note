@@ -76,6 +76,21 @@ const otpLimit = (env, key, def) => {
   return Number.isFinite(v) && v > 0 ? v : def;
 };
 
+/**
+ * メールを1通送る前に、サービス全体の枠を1通ぶん取る。取れたら true。
+ * Resend の枠は暦の日・月(UTC)で数えるので、こちらも暦の日・月ごとの行で数える。
+ * share は使ってよい割合(お知らせのメールは 0.5 = ログインの番号のために半分を残す)。
+ */
+export async function reserveMail(env, share = 1) {
+  const now = new Date().toISOString();
+  const day = Math.floor(otpLimit(env, 'OTP_DAILY_LIMIT', 90) * share);
+  const month = Math.floor(otpLimit(env, 'OTP_MONTHLY_LIMIT', 2900) * share);
+  // 数えるのは同じ行(ログインの番号とお知らせで合計)。share は「この数までなら取ってよい」という線だけを変える
+  const okDay = await allowRate(env.DB, `mail:day:${now.slice(0, 10)}`, day, 2 * 24 * 60 * 60);
+  if (!okDay) return false;
+  return allowRate(env.DB, `mail:month:${now.slice(0, 7)}`, month, 32 * 24 * 60 * 60);
+}
+
 /** 続けて番号を送れない間隔(秒)。手元の試験だけ短くできる(本番では設定しない = 60秒)。 */
 const otpBurstSeconds = (env) => Number(env.OTP_BURST_SECONDS ?? 60);
 
@@ -107,12 +122,23 @@ function corsHeaders(request) {
 }
 
 /**
- * 呼び出し元の IP。Cloudflare のネットワークを通った要求(本番)にだけ値が入る。
+ * 呼び出し元の IP(回数制限で数える単位)。Cloudflare のネットワークを通った要求(本番)にだけ値が入る。
  * 手元の wrangler dev はループバックを付けることがあるので、それは「付いていない」ものとして扱う。
+ * IPv6 は1つの契約に /64 がまるごと割り当てられ、その中で自由に変えられるので、/64 ごとにまとめて数える。
  */
 function clientIp(request) {
   const ip = request.headers.get('cf-connecting-ip');
-  return !ip || ip === '127.0.0.1' || ip === '::1' ? null : ip;
+  if (!ip || ip === '127.0.0.1' || ip === '::1') return null;
+  return ip.includes(':') ? `${ipv6Prefix64(ip)}::/64` : ip;
+}
+
+/** IPv6 の先頭 64 ビット(4つの区切り)。'::' の省略を戻してから取る */
+export function ipv6Prefix64(ip) {
+  const [head, tail] = ip.toLowerCase().split('%')[0].split('::');
+  const h = head ? head.split(':') : [];
+  const t = tail === undefined ? [] : tail ? tail.split(':') : [];
+  const full = tail === undefined ? h : [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t];
+  return full.slice(0, 4).map((g) => (g || '0').replace(/^0+(?=.)/, '')).join(':');
 }
 
 /**
@@ -188,15 +214,14 @@ async function handleOtpSend(request, env) {
   const ip = clientIp(request);
   const okPair = !ip || (await allowRate(env.DB, `otp:pair:${email}:${ip}`, 10, 24 * 60 * 60));
   const okEmail = await allowRate(env.DB, `otp:send:${email}`, 30, 24 * 60 * 60);
-  const okIp = !ip || (await allowRate(env.DB, `otp:ip:${ip}`, 20, 60 * 60));
+  // 大学など、大勢が1つの IP を共有する場所があるので、1時間の上限は大きめ。1日の上限で、1か所からサービス全体の枠を使い切れないようにする
+  const okIp = !ip || ((await allowRate(env.DB, `otp:ip:${ip}`, 30, 60 * 60)) && (await allowRate(env.DB, `otp:ipday:${ip}`, 40, 24 * 60 * 60)));
   const okBurst = await allowRate(env.DB, `otp:burst:${email}`, 1, otpBurstSeconds(env));
   if (!okPair || !okEmail || !okIp) return fail(429, '送信の回数が上限に達しました。しばらく待ってからお試しください。');
   if (!okBurst) return fail(429, '続けて送信できません。1分ほど待ってからお試しください。');
   // サービス全体の上限(メールの送信サービスの枠を使い切らない・大量に送らされて止められないため)。ほかの上限を通ったものだけを数える
-  const okDay = await allowRate(env.DB, 'otp:all:day', otpLimit(env, 'OTP_DAILY_LIMIT', 90), 24 * 60 * 60);
-  const okMonth = okDay && (await allowRate(env.DB, 'otp:all:month', otpLimit(env, 'OTP_MONTHLY_LIMIT', 2900), 30 * 24 * 60 * 60));
-  if (!okDay || !okMonth) {
-    console.log('otp global limit reached', okDay ? 'month' : 'day');
+  if (!(await reserveMail(env))) {
+    console.log('mail global limit reached');
     return fail(503, 'ただいまログインの番号を送れません。時間をおいてお試しください。この端末だけで使うことはできます。');
   }
 
@@ -304,7 +329,8 @@ async function handleOtpVerify(request, env) {
 
   // 端末が多いときは、いちばん長く使っていないものを外す
   const devices = await env.DB.prepare('SELECT id FROM devices WHERE user_id = ? ORDER BY last_used_at ASC, created_at ASC').bind(user.id).all();
-  const maxDevices = (await userPlan(env, user.id)).devices;
+  // プランが一時的に読めないときは外さない(Pro の人の端末を、無料の台数まで外してしまわないように)
+  const maxDevices = await userPlan(env, user.id).then((p) => p.devices, (err) => (console.log('plan lookup failed', String(err)), Infinity));
   const over = devices.results.length - (maxDevices - 1);
   const removed = over > 0 ? devices.results.slice(0, over).map((d) => d.id) : [];
   for (const id of removed) await env.DB.prepare('DELETE FROM devices WHERE id = ?').bind(id).run();
@@ -324,6 +350,7 @@ async function handleOtpVerify(request, env) {
     deviceId,
     deviceLabel: label,
     removedDevices: removed.length,
+    maxDevices: Number.isFinite(maxDevices) ? maxDevices : null, // ログインできる端末の数(プランで変わる)
     existing: !!existing, // 前からあったアカウントか(アカウント作成の画面で、すでにあったときに知らせるため)
     // 同期の置き場の URL(アプリはこれを WebDAV の URL として使う)
     dav: new URL('/dav/', request.url).href,
@@ -382,9 +409,10 @@ async function handleDeleteAccount(env, device) {
 
 /**
  * 利用者を消す(退会・長く使われていないアカウントの片づけ)。消せたら true。
+ * idleSince を渡すと(片づけ)、その時刻より後に使われていた利用者の行は消さない。
  * R2 で失敗したら false(利用者の行は残るので、もう一度やれば続きから消せる)。
  */
-export async function purgeUser(env, uid, email) {
+export async function purgeUser(env, uid, email, idleSince = null) {
   await env.DB.prepare('DELETE FROM devices WHERE user_id = ?').bind(uid).run();
   try {
     await deletePrefix(env.FILES, `u/${uid}/`);
@@ -404,7 +432,10 @@ export async function purgeUser(env, uid, email) {
     env.DB.prepare('DELETE FROM rate_limits WHERE bucket = ?').bind(`coupon:u:${uid}`),
     env.DB.prepare('DELETE FROM otp_requests WHERE email = ?').bind(String(email ?? '').toLowerCase()),
     env.DB.prepare('DELETE FROM rate_limits WHERE bucket = ?').bind(`dav:w:${uid}`),
-    env.DB.prepare('DELETE FROM users WHERE id = ?').bind(uid),
+    // 長く使われていないアカウントの片づけでは、途中でログインし直した人の行は残す(idleSince より後に使われていたら)
+    idleSince
+      ? env.DB.prepare('DELETE FROM users WHERE id = ? AND last_seen_at <= ?').bind(uid, idleSince)
+      : env.DB.prepare('DELETE FROM users WHERE id = ?').bind(uid),
   ]);
   return true;
 }
@@ -427,7 +458,9 @@ async function deletePrefix(bucket, prefix) {
 export async function cleanup(env) {
   await cleanupRows(env);
   // 長く使われていないアカウントの片づけ(お知らせ → 30日後に削除)。失敗しても、ほかの掃除は済んでいる
-  await sweepInactive(env, { sendMail: (email, subject, text) => sendMail(env, email, subject, text), purge: (uid, email) => purgeUser(env, uid, email) })
+  // お知らせのメールもログインの番号と同じ Resend の枠を使うので、枠を取ってから送る(半分はログインの番号のために残す)
+  const sendNotice = async (email, subject, text) => ((await reserveMail(env, 0.5)) ? sendMail(env, email, subject, text) : { ok: false });
+  await sweepInactive(env, { sendMail: sendNotice, purge: (uid, email, idleSince) => purgeUser(env, uid, email, idleSince) })
     .catch((err) => console.log('inactive sweep failed', String(err)));
 }
 

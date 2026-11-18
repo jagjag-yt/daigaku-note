@@ -50,7 +50,7 @@ const label = () => (isNative ? (platform === 'ios' ? 'iPhone・iPad のアプ�
 
 // purpose: 'login'(ログイン)・'signup'(アカウント作成)
 export const sendCode = (email, purpose) => call('/otp/send', { method: 'POST', body: { email, purpose } });
-// → { token, email, userId, deviceId, deviceLabel, dav, removedDevices, existing }
+// → { token, email, userId, deviceId, deviceLabel, dav, removedDevices, maxDevices, existing }
 // ログインでアカウントがなければ、reason: 'no_account' のエラー(番号は使用済みにならない)
 export const verify = (email, code, purpose) => call('/otp/verify', { method: 'POST', body: { email, code, purpose, label: label() } });
 export const me = (token) => call('/me', { token });

@@ -405,7 +405,7 @@ async function finishLogin(r, asked) {
   for (const id of ['#auth-login-email', '#auth-signup-email']) $(id).value = '';
   const created = r.existing === false; // 以前のサーバーは existing を返さない
   h.toast(
-    r.removedDevices ? 'ログインしました。ログインできる端末は5台までのため、いちばん長く使っていない端末を外しました'
+    r.removedDevices ? `ログインしました。ログインできる端末は${r.maxDevices || 5}台までのため、いちばん長く使っていない端末を外しました`
       : asked === 'signup' && r.existing ? 'このメールアドレスはすでに登録されていたため、ログインしました'
         : created ? 'アカウントを作成しました。この端末のノートは自動で同期されます'
           : 'ログインしました。この端末のノートとほかの端末のノートを同期します',
@@ -654,8 +654,10 @@ export function init(helpers) {
   for (const b of document.querySelectorAll('#auth .auth-skip')) {
     b.onclick = async () => {
       if (busy) return;
-      // ログインが切れたアカウントの同期の設定は外す(残すと、またログインのページに戻されるため。ノートは消えない)
-      if (dav.config().account && dav.authExpired()) await accountOff();
+      // ログインが切れたアカウントの同期の設定は外す(残すと、またログインのページに戻されるため。ノートは消えない)。
+      // 以前の版で設定した WebDAV(自分のサーバー)の同期も外す(もう使えないと案内しているのに、裏で同期し続けないように)
+      const cfg = dav.config();
+      if ((cfg.account && dav.authExpired()) || (cfg.url && !cfg.account)) await accountOff();
       setLocalOnly(true);
       savePending(null);
       editing = false;

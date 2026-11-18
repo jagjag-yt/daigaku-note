@@ -391,9 +391,9 @@ function bindNative() {
     if (!$('#auth').hidden) {
       // アカウント作成のページからはログインのページへ。番号の画面からはメールアドレスの画面へ
       if (!$('#acct-code-form').hidden) { $('#acct-back').click(); return true; }
-      if (/^#\/signup\b/.test(location.hash)) { location.replace('#/login'); return true; }
-      // この端末だけで使っている人が、本棚からログインのページに来ていたなら本棚へ戻す
+      // この端末だけで使っている人が、本棚からログイン・アカウント作成のページに来ていたなら本棚へ戻す
       if (accountUI.localOnly()) { location.replace('#/'); return true; }
+      if (/^#\/signup\b/.test(location.hash)) { location.replace('#/login'); return true; }
       return false;
     }
     if (/^#\/note\//.test(location.hash)) {

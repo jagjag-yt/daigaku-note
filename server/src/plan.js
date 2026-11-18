@@ -4,7 +4,9 @@
 // (scripts/coupon.mjs make --perk pro --days 30 など)でも付けられる。両方あれば Max。
 // 価格(2026-11 に決めたもの): Pro 月250円・年2,400円、Max 月600円・年6,000円。広告なしの買い切りは600円。
 //
-// 特典の表がまだない(schema.sql を流す前に配信した)ときや、読めなかったときは無料として扱う。
+// 特典の表がまだない(schema.sql を流す前に配信した)ときは無料として扱う。
+// それ以外の読み込みの失敗(一時的な D1 の障害など)は投げる。無料として扱うと、Pro の人の端末を外したり、
+// 容量の上限で書き込みを断ったりしてしまうため。
 
 const GB = 1024 * 1024 * 1024;
 
@@ -23,7 +25,7 @@ export function planFromPerks(perks, env = {}) {
   return { ...base, quota, adFree: base.adFree || has('adfree') };
 }
 
-/** 利用者のいまのプラン。読めなければ無料 */
+/** 利用者のいまのプラン。特典の表がまだなければ無料。ほかの失敗は投げる */
 export async function userPlan(env, userId) {
   try {
     const rows = await env.DB.prepare(
@@ -31,7 +33,7 @@ export async function userPlan(env, userId) {
     ).bind(userId, new Date().toISOString()).all();
     return planFromPerks(rows.results, env);
   } catch (err) {
-    console.log('plan lookup failed', String(err));
-    return planFromPerks([], env);
+    if (/no such table/i.test(String(err))) return planFromPerks([], env);
+    throw err;
   }
 }

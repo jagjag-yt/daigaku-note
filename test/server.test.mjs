@@ -3,7 +3,7 @@
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import worker, { cleanup } from '../server/src/index.js';
+import worker, { cleanup, ipv6Prefix64 } from '../server/src/index.js';
 import { parseDavPath } from '../server/src/dav.js';
 import { fakeEnv, startWorker, captureMail } from './cf-fakes.mjs';
 import { couponHash, newCouponCode, normalizeCoupon } from '../server/src/coupon.js';
@@ -254,10 +254,16 @@ test('ログイン: 送信の回数の上限(続けての送信・IP ごと)', a
     const r = await send('burst@example.com');
     assert.equal(r.status, 429);
     assert.match((await r.json()).message, /続けて/);
-    // IP ごと: 1時間に20回まで(アドレスを変えても)
-    let last;
-    for (let i = 0; i < 21; i++) last = await send(`ip${i}@example.com`, '203.0.113.9');
-    assert.equal(last.status, 429);
+    // IP ごと: 1時間に30回まで(アドレスを変えても)
+    const st = [];
+    for (let i = 0; i < 31; i++) st.push((await send(`ip${i}@example.com`, '203.0.113.9')).status);
+    assert.deepEqual(st.slice(0, 30), Array(30).fill(200));
+    assert.equal(st[30], 429);
+    // IPv6 は /64 ごとにまとめて数える(下の64ビットを変えても同じ枠)
+    const st6 = [];
+    for (let i = 0; i < 31; i++) st6.push((await send(`v6-${i}@example.com`, `2001:db8:1:2::${(i + 1).toString(16)}`)).status);
+    assert.equal(st6[30], 429);
+    assert.equal((await send('v6-other@example.com', '2001:db8:1:3::1')).status, 200);
     // 本番(cf-connecting-ip あり)では DEV_ECHO_OTP を入れても番号を返さない
     burstEnv.DEV_ECHO_OTP = '1';
     const echoed = await (await send('echo@example.com')).json();
@@ -266,6 +272,31 @@ test('ログイン: 送信の回数の上限(続けての送信・IP ごと)', a
     assert.equal(prod.devCode, undefined);
   } finally {
     await s2.close();
+  }
+});
+
+test('IP: IPv6 の /64 の取り出し', () => {
+  assert.equal(ipv6Prefix64('2001:db8:1:2::5'), '2001:db8:1:2');
+  assert.equal(ipv6Prefix64('2001:0db8:0001:0002:aaaa:bbbb:cccc:dddd'), '2001:db8:1:2');
+  assert.equal(ipv6Prefix64('2001:db8::1'), '2001:db8:0:0');
+  assert.equal(ipv6Prefix64('::ffff:1'), '0:0:0:0');
+  assert.equal(ipv6Prefix64('fe80::1%eth0'), 'fe80:0:0:0');
+});
+
+test('ログイン: 1つの IP からは1日40通まで(サービス全体の枠を1か所で使い切れない)', async () => {
+  const e3 = fakeEnv({ OTP_BURST_SECONDS: '0' });
+  const s3 = await startWorker(worker, e3);
+  try {
+    const send = (email) => fetch(s3.url + '/otp/send', { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': '203.0.113.77' }, body: JSON.stringify({ email }) });
+    for (let i = 0; i < 30; i++) assert.equal((await send(`d${i}@example.com`)).status, 200);
+    // 1時間の枠を戻して(時間がたったことにして)、続きを送る
+    e3.DB.x("UPDATE rate_limits SET reset_at = '2000-01-01T00:00:00.000Z' WHERE bucket = 'otp:ip:203.0.113.77'");
+    const st = [];
+    for (let i = 30; i < 41; i++) st.push((await send(`d${i}@example.com`)).status);
+    assert.deepEqual(st.slice(0, 10), Array(10).fill(200));
+    assert.equal(st[10], 429);
+  } finally {
+    await s3.close();
   }
 });
 
@@ -281,6 +312,7 @@ test('端末: 5台まで(6台目でいちばん古い端末が外れる)。一�
   }
   const sixth = await login(email, '端末5');
   assert.equal(sixth.removedDevices, 1);
+  assert.equal(sixth.maxDevices, 5);
   assert.equal((await api('/me', { token: tokens[0] })).status, 401);
   assert.equal((await api('/me', { token: tokens[1] })).status, 200);
 
@@ -553,11 +585,13 @@ test('定期実行: 長く使われていないアカウントは、お知らせ
   const a = await login('idle-a@example.com'); // お知らせ → 消す
   const b = await login('idle-b@example.com'); // お知らせ → ログインし直したので残す
   const c = await login('idle-c@example.com'); // Max なので片づけない
+  const c2 = await login('idle-c2@example.com'); // 広告なしの買い切りなので片づけない
   const d = await login('idle-d@example.com'); // 最近使っている
   await call('/dav/daigaku-note/files/' + '2'.repeat(64) + '.pdf', { method: 'PUT', body: 'pdf', headers: { authorization: basic(a.token) } });
-  for (const u of [a, b, c]) env.DB.x('UPDATE users SET last_seen_at = ? WHERE id = ?', old, u.userId);
+  for (const u of [a, b, c, c2]) env.DB.x('UPDATE users SET last_seen_at = ? WHERE id = ?', old, u.userId);
   env.DB.x("INSERT INTO perks (user_id, perk, granted_at) VALUES (?, 'max', ?)", c.userId, old);
-  const ids = [a, b, c, d].map((u) => u.userId);
+  env.DB.x("INSERT INTO perks (user_id, perk, granted_at) VALUES (?, 'adfree', ?)", c2.userId, old);
+  const ids = [a, b, c, c2, d].map((u) => u.userId);
   const notices = () => env.DB.q(`SELECT user_id FROM inactive_notices WHERE user_id IN (${ids.map(() => '?').join(',')}) ORDER BY user_id`, ...ids).map((r) => r.user_id);
   const users = () => env.DB.q(`SELECT id FROM users WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids).length;
 
@@ -572,7 +606,7 @@ test('定期実行: 長く使われていないアカウントは、お知らせ
   const before2 = mail.mails.length;
   await cleanup(env);
   assert.equal(mail.mails.slice(before2).filter((m) => /idle-/.test(m.to[0])).length, 0);
-  assert.equal(users(), 4);
+  assert.equal(users(), 5);
 
   // 31日たった。b はその間にログインした
   env.DB.x('UPDATE inactive_notices SET sent_at = ? WHERE user_id IN (?, ?)', '2020-06-01T00:00:00.000Z', a.userId, b.userId);
@@ -580,8 +614,65 @@ test('定期実行: 長く使われていないアカウントは、お知らせ
   await cleanup(env);
   assert.equal(env.DB.q('SELECT COUNT(*) AS n FROM users WHERE id = ?', a.userId)[0].n, 0);
   assert.ok(![...env.FILES.objects.keys()].some((k) => k.startsWith(`u/${a.userId}/`)));
-  assert.equal(users(), 3);
+  assert.equal(users(), 4);
   assert.deepEqual(notices(), []);
+});
+
+test('定期実行: メールに書いた日までは消さない。お知らせのメールはサービス全体の枠を使う', async () => {
+  const u = await login('idle-time@example.com');
+  env.DB.x('UPDATE users SET last_seen_at = ? WHERE id = ?', '2020-01-01T00:00:00.000Z', u.userId);
+  const before = mail.mails.length;
+  const dayBucket = () => env.DB.q('SELECT count FROM rate_limits WHERE bucket = ?', `mail:day:${new Date().toISOString().slice(0, 10)}`)[0]?.count ?? 0;
+  const used = dayBucket();
+  await cleanup(env);
+  const m = mail.mails.slice(before).find((x) => x.to[0] === 'idle-time@example.com');
+  assert.ok(dayBucket() > used, 'お知らせのメールも数える');
+  const promised = /(\d{4}-\d{2}-\d{2}) 以降に/.exec(m.text)[1];
+  const sentAt = env.DB.q('SELECT sent_at FROM inactive_notices WHERE user_id = ?', u.userId)[0].sent_at;
+  const shift = (days) => env.DB.x('UPDATE inactive_notices SET sent_at = ? WHERE user_id = ?', new Date(Date.now() - days * 86_400_000).toISOString(), u.userId);
+  const alive = () => env.DB.q('SELECT COUNT(*) AS n FROM users WHERE id = ?', u.userId)[0].n === 1;
+  // 30日と半日: メールに書いた日(日本時間)の当日なので、まだ消さない
+  env.DB.x('UPDATE users SET last_seen_at = ? WHERE id = ?', '2020-01-01T00:00:00.000Z', u.userId);
+  shift(30.5);
+  await cleanup(env);
+  assert.ok(alive());
+  // 31日と少し: 消す。消した時刻(日本時間の日付)は、メールに書いた日より後
+  shift(31.1);
+  await cleanup(env);
+  assert.ok(!alive());
+  const todayJst = new Date(Date.now() + 9 * 3_600_000).toISOString().slice(0, 10);
+  const promisedFor = new Date(Date.parse(sentAt) + 30 * 86_400_000 + 9 * 3_600_000).toISOString().slice(0, 10);
+  assert.equal(promised, promisedFor);
+  assert.ok(new Date(Date.now() - 31.1 * 86_400_000 + 30 * 86_400_000 + 9 * 3_600_000).toISOString().slice(0, 10) < todayJst);
+});
+
+test('定期実行: お知らせのメールは、1日の枠の半分を超えては送らない(ログインの番号のために残す)', async () => {
+  const e4 = fakeEnv({ OTP_DAILY_LIMIT: '4' });
+  const D = e4.DB;
+  for (let i = 0; i < 5; i++) D.x("INSERT INTO users (id, email, created_at, last_seen_at) VALUES (?, ?, '2020-01-01T00:00:00.000Z', '2020-01-01T00:00:00.000Z')", `uh${i}`, `half${i}@example.com`);
+  const before = mail.mails.length;
+  await cleanup(e4);
+  assert.equal(mail.mails.slice(before).filter((x) => /^half/.test(x.to[0])).length, 2);
+  assert.equal(D.q('SELECT COUNT(*) AS n FROM inactive_notices')[0].n, 2);
+});
+
+test('表がまだない(schema.sql を流す前に配信した)ときも、ログイン・同期・定期実行は動く', async () => {
+  const e5 = fakeEnv({ OTP_BURST_SECONDS: '0' });
+  for (const t of ['perks', 'inactive_notices', 'coupons']) e5.DB.x(`DROP TABLE ${t}`);
+  const s5 = await startWorker(worker, e5);
+  try {
+    const post = (p, body) => fetch(s5.url + p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    assert.equal((await post('/otp/send', { email: 'old@example.com' })).status, 200);
+    const acc = await (await post('/otp/verify', { email: 'old@example.com', code: mail.lastCode('old@example.com') })).json();
+    assert.ok(acc.token);
+    const me = await (await fetch(s5.url + '/me', { headers: { authorization: `Bearer ${acc.token}` } })).json();
+    assert.equal(me.plan.id, 'free');
+    const put = await fetch(s5.url + '/dav/daigaku-note/ops/dev1/000000001-000000001.json', { method: 'PUT', headers: { authorization: `Bearer ${acc.token}` }, body: '{}' });
+    assert.ok(put.status < 300, String(put.status));
+    await cleanup(e5);
+  } finally {
+    await s5.close();
+  }
 });
 
 test('定期実行: お知らせのメールが送れなかった人は、記録も削除もしない', async () => {

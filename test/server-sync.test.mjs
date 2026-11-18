@@ -277,10 +277,10 @@ test('大学ノートアカウント(js/account.js)でログインした端末: 
     assert.deepEqual(list.filter((d) => d.current).map((d) => d.id), [r2.deviceId]);
     assert.equal((await account.me(r2.token)).email, email);
 
-    // 容量いっぱい: 「容量の上限(1GB)」と出る
+    // 容量いっぱい: 「保存できる量の上限」と出る
     env.QUOTA_BYTES = '1';
     await A.write('m', 'note.rename', { title: 'いっぱい' });
-    assert.match(await A.sync(), /容量の上限\(1GB\)に達したため、この端末の変更を送れませんでした/);
+    assert.match(await A.sync(), /保存できる量の上限に達したため、この端末の変更を送れませんでした/);
     delete env.QUOTA_BYTES;
 
     // 外されたら「ログインが切れました」と出し、authExpired() が true になる(ログインし直すまで)
