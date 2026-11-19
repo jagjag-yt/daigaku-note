@@ -852,3 +852,8 @@ body:has(#editor.tb-bottom:not([hidden])) #toast { bottom: calc(72px + var(--sa-
 /* 横に 1 ページずつ送る */
 #editor.hs:not(.present) #pages { flex-direction: row; align-items: center; min-height: 100%; width: max-content; padding: 12px 50vw; gap: 32px; box-sizing: border-box; }
 #editor.hs:not(.present) #add-tile { width: 200px !important; height: auto !important; min-height: 160px; align-self: center; }
+
+/* アカウント作成・ログインの、利用規約への同意の一文 */
+.auth-legal { margin: 12px 0 0; color: var(--muted); font-size: 13px; text-align: center; line-height: 1.6; }
+.auth-legal a { color: var(--accent); }
+.set-legal a { color: var(--accent); }

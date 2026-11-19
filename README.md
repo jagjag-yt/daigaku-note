@@ -169,6 +169,10 @@ npm i pdf-lib && URL=http://localhost:8124/ GN=見本.goodnotes node test/e2e.cj
 - フォルダ分け(設計は `docs/設計.md`)、ページのサムネイル一覧からのドラッグでの並べ替え
 - Google ドライブ・OneDrive への直接の同期
 
+## 利用規約・プライバシーポリシー
+
+[利用規約](terms.html)と[プライバシーポリシー](privacy.html)は、ログインの画面と設定の「このアプリについて」から開けます。問い合わせ先は quizmake.official@gmail.com です。規約を変えるときは、2つのページと、`js/app.js` の問い合わせ先をそろえてください。
+
 ## ライセンス
 
 かきためノート本体は MIT。同梱の pdf.js は Apache-2.0、pdf-lib は MIT(`vendor/` にライセンス文)。

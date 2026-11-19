@@ -232,6 +232,12 @@ export async function openAuthPage(url) {
   if (browser) await browser.open({ url, presentationStyle: 'fullscreen' });
   else location.assign(url);
 }
+/** 利用規約などの外のページを開く。アプリ版は OS のブラウザの画面で、公開している URL を開く(アプリの画面から離れないように) */
+export async function openPage(url) {
+  const browser = plugin('Browser');
+  if (isNative && browser) await browser.open({ url, presentationStyle: 'fullscreen' });
+  else window.open(url, '_blank', 'noopener');
+}
 /** 開いたログインの画面を閉じる(アプリ版だけ) */
 export function closeAuthPage() {
   plugin('Browser')?.close().catch(() => {});
