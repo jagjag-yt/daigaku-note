@@ -51,7 +51,7 @@ const PEN_NIBS = {
 };
 const PEN_DEFAULTS = { nib: 'fountain', sens: 50, stab: 0, dash: '', shape: '' }; // shape: ドラッグで描く図形(空ならふつうに書く)
 
-const APP_VERSION = 'v54'; // sw.js の VERSION と合わせる
+const APP_VERSION = 'v55'; // sw.js の VERSION と合わせる
 const MAX_TABS = 12; // 開いておけるタブの数
 const DEFAULT_HIDDEN = ['laser']; // 最初は隠しておく道具(設定やその他のメニューから使う)
 
@@ -220,6 +220,7 @@ async function init() {
   }
   fillIcons();
   bindDialogs();
+  bindDocLinks();
   fillSelects();
   bindLibrary();
   bindHomeTip();
@@ -299,6 +300,19 @@ function showDialog(d, focusEl) {
   d.showModal();
   if (coarse()) { d.focus(); } else if (focusEl) { focusEl.focus(); focusEl.select?.(); }
 }
+// 利用規約・プライバシーポリシーのページ(a[data-doc])。ブラウザ版は新しいタブで開く(書いている途中の画面を離れないように)。
+// アプリ版は、公開している Web 版の同じページを OS のブラウザの画面で開く(アプリの画面の中で移ると戻れないため)
+const PUBLIC_WEB = 'https://jagjag-yt.github.io/daigaku-note/';
+function bindDocLinks() {
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest?.('a[data-doc]');
+    if (!a || !native.isNative) return;
+    e.preventDefault();
+    if (!navigator.onLine) { toast('インターネットにつながっていないため、開けません。'); return; }
+    native.openPage(new URL(a.getAttribute('href'), PUBLIC_WEB).href).catch(() => toast('ページを開けませんでした。'));
+  });
+}
+
 // どのダイアログにも右上の × と、背景を押したら閉じる動きを付ける
 function bindDialogs() {
   for (const d of document.querySelectorAll('dialog')) {
@@ -1972,6 +1986,10 @@ function openSettings() {
   ver.className = 'set-hint set-about';
   ver.textContent = `大学ノート ${APP_VERSION}`;
   body.appendChild(ver);
+  const legal = document.createElement('p');
+  legal.className = 'set-hint set-about set-legal';
+  legal.innerHTML = '<a href="terms.html" target="_blank" rel="noopener" data-doc>利用規約</a> ・ <a href="privacy.html" target="_blank" rel="noopener" data-doc>プライバシーポリシー</a> ・ 問い合わせ: <a href="mailto:quizmake.official@gmail.com">quizmake.official@gmail.com</a>';
+  body.appendChild(legal);
   showDialog($('#settings-dialog'));
 }
 
