@@ -4,7 +4,7 @@
 //   2. お知らせから NOTICE_DAYS 日(30日)たっても使われていなければ、アカウントとノートを消す
 //
 // お知らせのあとに一度でも同期・ログインすれば取り消される(src/index.js の authenticate とログイン)。
-// お金を払った人(Pro・Max・広告なしの買い切り。クーポンで付いたものも含む。期限内のもの)は片づけない。メールはログインの番号と同じ Resend の枠を使うので、1回に送る数を絞る。
+// お金を払った人(Pro・Max・広告なしの買い切り。クーポンで付いたものも含む。期限内のもの)は片づけない。メールはログインの番号と同じ送信サービスの枠を使うので、1回に送る数を絞る。
 
 export const NOTICE_DAYS = 30;
 const PER_RUN = 20;
@@ -76,8 +76,10 @@ export async function sweepInactive(env, { sendMail, purge }) {
   const mail = noticeMail(days, deleteOn);
   for (const u of idle.results) {
     // 送れなかった人は記録しない(次の回にもう一度送る)。お知らせなしには消さない
-    const sent = await sendMail(u.email, mail.subject, mail.text);
-    if (!sent?.ok) break; // Resend の枠が尽きたなど。続けても無駄なので止める
+    // 持ち主を確かめられなかったアドレスを外したアカウント(…@unverified.invalid。src/index.js の detachUnverified)には送れないので、
+    // 送ったものとして扱う(Apple・Google でしかログインできず、お知らせの届け先がない)
+    const sent = /\.invalid$/.test(u.email) ? { ok: true } : await sendMail(u.email, mail.subject, mail.text);
+    if (!sent?.ok) break; // 送信サービスの枠が尽きたなど。続けても無駄なので止める
     await env.DB.prepare('INSERT INTO inactive_notices (user_id, sent_at) VALUES (?, ?) ON CONFLICT (user_id) DO NOTHING').bind(u.id, now).run();
     noticed++;
   }

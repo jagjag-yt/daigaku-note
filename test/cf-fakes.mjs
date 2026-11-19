@@ -183,8 +183,17 @@ export function captureMail() {
   globalThis.fetch = async (input, init) => {
     const url = typeof input === 'string' ? input : input.url;
     if (url.startsWith('https://api.resend.com/')) {
-      mails.push({ ...JSON.parse(init.body), auth: init.headers.authorization });
+      mails.push({ ...JSON.parse(init.body), auth: init.headers.authorization, via: 'resend' });
       return ctl.fail ? new Response('{"message":"boom"}', { status: 500 }) : new Response('{"id":"x"}', { status: 200 });
+    }
+    // Amazon SES(v2 の SendEmail)。Resend と同じ形 { from, to, subject, text } にそろえて記録する
+    if (/^https:\/\/email\.[a-z0-9-]+\.amazonaws\.com\/v2\/email\/outbound-emails$/.test(url)) {
+      const b = JSON.parse(init.body);
+      mails.push({
+        from: b.FromEmailAddress, to: b.Destination.ToAddresses, subject: b.Content.Simple.Subject.Data, text: b.Content.Simple.Body.Text.Data,
+        auth: init.headers.authorization, headers: init.headers, url, via: 'ses', raw: b,
+      });
+      return ctl.fail ? new Response('{"message":"boom"}', { status: 500 }) : new Response('{"MessageId":"x"}', { status: 200 });
     }
     return real(input, init);
   };

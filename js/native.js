@@ -220,3 +220,32 @@ export function onBackButton(back) {
     app.minimizeApp().catch(() => {});
   });
 }
+
+// ---- Apple・Google でのログイン(js/account-ui.js) ----------------------------------
+// アプリ版は、ログインの画面を OS のブラウザの画面(iOS は SFSafariViewController、Android は Custom Tabs)で開く。
+// アプリの中の WebView では Google がログインを断るため。ログインが済むと、アプリの住所(APP_RETURN)で戻ってくる。
+
+/** ログインの画面を開く。ブラウザ版は、このページのまま移る */
+export async function openAuthPage(url) {
+  const browser = plugin('Browser');
+  // iPad で小さな吹き出し(popover)にすると、外を触っただけで閉じてしまうので、全画面で開く
+  if (browser) await browser.open({ url, presentationStyle: 'fullscreen' });
+  else location.assign(url);
+}
+/** 開いたログインの画面を閉じる(アプリ版だけ) */
+export function closeAuthPage() {
+  plugin('Browser')?.close().catch(() => {});
+}
+/**
+ * アプリの住所で開かれたら fn(url) を呼ぶ(アプリ版だけ)。
+ * launch: true なら、アプリが閉じていてその住所で起動したときの住所も渡す(Android で、ログインの途中にアプリが終わっていたとき)。
+ * iOS の getLaunchUrl は、起動のときに限らず、最後に開かれた住所をずっと返すので、呼ぶ側は「ログインの途中か」で絞ること
+ */
+export function onAppUrl(fn, { launch = false } = {}) {
+  const app = plugin('App');
+  if (!app) return;
+  app.addListener('appUrlOpen', (e) => fn(e.url));
+  if (launch) app.getLaunchUrl?.().then((r) => r?.url && fn(r.url)).catch(() => {});
+}
+/** LINE・Instagram などのアプリの中のブラウザか(Google はそこでのログインを断る) */
+export const inAppBrowser = () => !isNative && /Line\/|FBAN|FBAV|Instagram|Twitter|MicroMessenger/.test(navigator.userAgent);

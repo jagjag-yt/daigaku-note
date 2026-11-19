@@ -227,11 +227,13 @@ test('同期のダイアログ', async ({ page }) => {
 test('ログイン・アカウント作成(ログインのページ)', async ({ page }) => {
   await page.locator('#auth-to-login').click();
   await expect(page.locator('#auth-login-form')).toBeVisible();
+  await expect(page.locator('#auth-login-social .oauth-google')).toBeVisible(); // Apple・Google のボタン(サーバーに聞いてから出る)
   await check(page, 'auth-login');
 });
 
 test('ログイン・アカウント作成(アカウント作成のページ)', async ({ page }) => {
   await expect(page.locator('#auth-signup-form')).toBeVisible(); // この端末で使ったことがなければ、最初はアカウント作成
+  await expect(page.locator('#auth-signup-social .oauth-google')).toBeVisible(); // Apple・Google のボタン(サーバーに聞いてから出る)
   await check(page, 'auth-signup');
 });
 
