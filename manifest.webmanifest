@@ -1,6 +1,6 @@
 {
   "name": "かきためノート",
-  "short_name": "かきためノート",
+  "short_name": "かきため",
   "description": "無料・オフラインで使える手書きノート",
   "start_url": "./",
   "scope": "./",
