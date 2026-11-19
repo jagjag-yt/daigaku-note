@@ -1,4 +1,4 @@
--- 大学ノートの同期サーバーのデータベース(Cloudflare D1 / SQLite)
+-- かきためノートの同期サーバーのデータベース(Cloudflare D1 / SQLite)
 --
 -- 流し方(はじめの1回。何度流しても壊れない):
 --   npx wrangler d1 execute daigaku-note --remote --file=schema.sql

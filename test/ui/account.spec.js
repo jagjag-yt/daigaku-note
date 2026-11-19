@@ -1,4 +1,4 @@
-// 大学ノートアカウントの画面のテスト(npm run test:ui)。
+// かきためノートアカウントの画面のテスト(npm run test:ui)。
 // 手元で動かした同期サーバー(test/worker-server.mjs。playwright.config.js が起動する)を使い、
 // ログインしないと使えないこと、アカウント作成とログインのページ、2台(ブラウザの別々の保存場所)でノートが届くこと、
 // 端末を外す・ログアウト・アカウントの削除までを、画面の操作で確かめる。
@@ -82,13 +82,13 @@ test('ログインしていないと、最初はログイン・アカウント�
   await a.goto('./#/note/abc');
   await expect(a.locator('#auth-login-form')).toBeVisible();
   await expect(a.locator('#editor')).toBeHidden();
-  await expect(a).toHaveTitle('ログイン - 大学ノート');
+  await expect(a).toHaveTitle('ログイン - かきためノート');
   // ページの行き来(住所も変わる)
   await a.locator('#auth-to-signup').click();
   await expect(a.locator('#auth-signup-form')).toBeVisible();
   await expect(a.locator('#auth-login-form')).toBeHidden();
   await expect(a).toHaveURL(/#\/signup$/);
-  await expect(a).toHaveTitle('アカウントを作成 - 大学ノート');
+  await expect(a).toHaveTitle('アカウントを作成 - かきためノート');
   await a.locator('#auth-to-login').click();
   await expect(a.locator('#auth-login-form')).toBeVisible();
   await expect(a).toHaveURL(/#\/login$/);
@@ -291,7 +291,7 @@ test('番号の入力の間違い・全角の入力・読み込み直したと�
     const dt = new DataTransfer();
     dt.setData('text/plain', text);
     el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
-  }, `大学ノートのログイン番号: ${zen}\nこの番号は 10 分で使えなくなります。`);
+  }, `かきためノートのログイン番号: ${zen}\nこの番号は 10 分で使えなくなります。`);
   await expect(a.locator('#library')).toBeVisible();
   await a.locator('#account-btn').click();
   await expect(a.locator('#acct-who')).toHaveText(email);

@@ -332,9 +332,9 @@ dialog h3 { font-size: 15px; margin: 18px 0 4px; }
 .field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); margin-bottom: 10px; }
 .field input, .field select { min-height: 36px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 15px; color: var(--text); -webkit-user-select: text; user-select: text; }
 .check { display: flex; gap: 8px; align-items: center; font-size: 14px; margin-bottom: 8px; }
-/* 同期のダイアログ: 大学ノートアカウント */
+/* 同期のダイアログ: かきためノートアカウント */
 dialog h4 { font-size: 14px; margin: 14px 0 4px; }
-/* 大学ノートアカウント */
+/* かきためノートアカウント */
 .acct-btn { position: relative; }
 .acct-btn.in > svg.ic { display: none; }
 .acct-avatar {

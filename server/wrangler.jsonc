@@ -1,5 +1,5 @@
 {
-  // 大学ノートの同期サーバーのデプロイ設定(Cloudflare Workers)。手順は server/README.md。
+  // かきためノートの同期サーバーのデプロイ設定(Cloudflare Workers)。手順は server/README.md。
   //
   // Cloudflare 側の「Root directory」を server にして、このファイルを使わせる
   // (リポジトリの直下はアプリ本体。Workers の設定ファイルはここだけ)。
@@ -20,7 +20,7 @@
 
   "vars": {
     // 送信元。SES(と Resend)で認証したドメイン(quiz-make.com)のアドレスにする
-    "MAIL_FROM": "大学ノート <no-reply@quiz-make.com>",
+    "MAIL_FROM": "かきためノート <no-reply@quiz-make.com>",
     // SES の地域(東京)。SES の画面で本番の利用(サンドボックスの解除)を申し込んだのと同じ地域にする
     "SES_REGION": "ap-northeast-1"
   },

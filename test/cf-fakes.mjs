@@ -120,7 +120,7 @@ export function fakeEnv(extra = {}) {
     FILES: fakeR2(),
     SECRET_PEPPER: 'test-pepper',
     RESEND_API_KEY: 're_test',
-    MAIL_FROM: '大学ノート <no-reply@example.com>',
+    MAIL_FROM: 'かきためノート <no-reply@example.com>',
     // テストはたくさんログインするので、サービス全体の送信の上限は大きくしておく(上限そのもののテストでは小さくする)
     OTP_DAILY_LIMIT: '100000',
     OTP_MONTHLY_LIMIT: '100000',

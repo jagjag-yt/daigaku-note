@@ -51,7 +51,7 @@ const PEN_NIBS = {
 };
 const PEN_DEFAULTS = { nib: 'fountain', sens: 50, stab: 0, dash: '', shape: '' }; // shape: ドラッグで描く図形(空ならふつうに書く)
 
-const APP_VERSION = 'v55'; // sw.js の VERSION と合わせる
+const APP_VERSION = 'v56'; // sw.js の VERSION と合わせる
 const MAX_TABS = 12; // 開いておけるタブの数
 const DEFAULT_HIDDEN = ['laser']; // 最初は隠しておく道具(設定やその他のメニューから使う)
 
@@ -838,7 +838,7 @@ function bindLibrary() {
   $('#sync-close').onclick = () => $('#sync-dialog').close();
   $('#sync-export').onclick = async () => {
     const json = await buildSyncFile(S.rec.device);
-    if ((await download(JSON.stringify(json), `大学ノート同期-${S.rec.device}-${stamp()}.json`, 'application/json')) === 'saved') {
+    if ((await download(JSON.stringify(json), `かきためノート同期-${S.rec.device}-${stamp()}.json`, 'application/json')) === 'saved') {
       toast(`${json.ops.length}件の変更を書き出しました`);
     }
   };
@@ -923,7 +923,7 @@ async function showLibrary() {
   closePopover();
   $('#library').hidden = false;
   $('#editor').hidden = true;
-  document.title = '大学ノート';
+  document.title = 'かきためノート';
   S.unlocked.clear(); // 本棚に戻ったら、ロック中のノートはまた閉じる
   const readAt = Date.now();
   const [ops, metas] = await Promise.all([db.noteLevelOps(), db.allNoteMeta()]);
@@ -1098,7 +1098,7 @@ function renderCrumbs(fs, here) {
   };
   add('書類', '#/');
   path.forEach((c, i) => add(c.name, i < path.length - 1 ? '#/f/' + c.id : null));
-  document.title = `${path[path.length - 1].name} - 大学ノート`;
+  document.title = `${path[path.length - 1].name} - かきためノート`;
 }
 
 function folderCard(fo, fs, liveNotes) {
@@ -1984,7 +1984,7 @@ function openSettings() {
   section('このアプリについて');
   const ver = document.createElement('p');
   ver.className = 'set-hint set-about';
-  ver.textContent = `大学ノート ${APP_VERSION}`;
+  ver.textContent = `かきためノート ${APP_VERSION}`;
   body.appendChild(ver);
   const legal = document.createElement('p');
   legal.className = 'set-hint set-about set-legal';
@@ -2121,7 +2121,7 @@ async function renameNote() {
   if (!title || title === S.note.title) return;
   await commit([mk('note.rename', { title })]);
   $('#title').textContent = S.note.title;
-  document.title = S.note.title + ' - 大学ノート';
+  document.title = S.note.title + ' - かきためノート';
   const tab = S.tabs.find((x) => x.id === S.note.id);
   if (tab) { tab.title = S.note.title.slice(0, 200); savePrefs(); renderTabs(); }
 }
@@ -2267,7 +2267,7 @@ async function openNote(id, pageId) {
     $('#library').hidden = true;
     $('#editor').hidden = false;
     $('#title').textContent = note.title;
-    document.title = note.title + ' - 大学ノート';
+    document.title = note.title + ' - かきためノート';
     setSaved(true);
     if (window.innerWidth <= 700) S.sidebar = false; // スマホではノートを開くたびに閉じた状態から
     $('#sidebar').hidden = !S.sidebar;

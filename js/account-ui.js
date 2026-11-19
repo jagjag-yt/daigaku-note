@@ -1,4 +1,4 @@
-// 大学ノートアカウントの画面(ログイン・アカウント作成・アカウントの管理)。
+// かきためノートアカウントの画面(ログイン・アカウント作成・アカウントの管理)。
 // 通信は js/account.js、同期そのものは js/webdav.js。ここは画面だけを受け持つ。
 //
 // ログインしていないときは、はじめに次のページを出す(js/app.js の route())。
@@ -210,7 +210,7 @@ export function showAuth(hash) {
   purpose = next;
   if (changed) editing = false;
   $('#auth').hidden = false;
-  document.title = purpose === 'signup' ? 'アカウントを作成 - 大学ノート' : 'ログイン - 大学ノート';
+  document.title = purpose === 'signup' ? 'アカウントを作成 - かきためノート' : 'ログイン - かきためノート';
   // 初めて出したとき・ページを替えたときは見出しに移す(隠れた本棚のボタンなどに残ったままだと、読み上げで迷子になるため。
   // 見出しならスマホでもキーボードは出ない)。パソコンでは、続けてメールアドレスの欄へ
   const fresh = !was || changed;
@@ -274,7 +274,7 @@ async function showLocalNotice() {
   try { n = await h.countNotes(); } catch { /* 数えられなくても、お知らせを出さないだけ */ }
   $('#auth-offline').hidden = navigator.onLine;
   const parts = [];
-  if (cfg.url && !cfg.account) parts.push('自分のサーバー(WebDAV)での同期は、このバージョンから使えなくなりました。ログインすると、この端末で書いた内容を大学ノートアカウントで同期します。ほかの端末で書いた内容は、その端末でもログインすると同期されます。');
+  if (cfg.url && !cfg.account) parts.push('自分のサーバー(WebDAV)での同期は、このバージョンから使えなくなりました。ログインすると、この端末で書いた内容をかきためノートアカウントで同期します。ほかの端末で書いた内容は、その端末でもログインすると同期されます。');
   if (n > 0) parts.push(`この端末にあるノート(${n}冊)は消えません。この端末で書いた内容は、ログインすると、ログイン先のアカウントに同期されます。`);
   el.textContent = parts.join('');
   el.hidden = !parts.length;
@@ -525,7 +525,7 @@ async function wipeDevice(email, how, { provider, discard } = {}) {
     await discard?.();
     await clearExports(); // アプリ版: 書き出した PDF のキャッシュも消す
     await db.wipeAll({
-      onBlocked: () => msg(shownMsg(), 'ほかのタブ・ウィンドウで開いている大学ノートを閉じてください。すべて閉じると、この端末のノートの削除に進みます。'),
+      onBlocked: () => msg(shownMsg(), 'ほかのタブ・ウィンドウで開いている「かきためノート」を閉じてください。すべて閉じると、この端末のノートの削除に進みます。'),
     });
     // 消せてから、前のアカウントの印を消す(消せなかったのに印だけ消すと、次は確かめずに同期してしまうため)
     try {
@@ -538,7 +538,7 @@ async function wipeDevice(email, how, { provider, discard } = {}) {
     console.warn(err);
     busy = false;
     setBusy(false);
-    msg(shownMsg(), 'この端末のノートを消せませんでした。ほかのタブで大学ノートを開いていたら閉じて、もう一度お試しください。');
+    msg(shownMsg(), 'この端末のノートを消せませんでした。ほかのタブで「かきためノート」を開いていたら閉じて、もう一度お試しください。');
   }
 }
 
@@ -939,7 +939,7 @@ export function init(helpers) {
   // 全部を選んでいるとき(すべてを選択 → 削除)はそのままにする
   const toEndUnlessAll = () => { if (!(code.selectionStart === 0 && code.selectionEnd === code.value.length && code.value)) toEnd(); };
   for (const ev of ['click', 'keyup', 'select']) code.addEventListener(ev, toEndUnlessAll);
-  // 貼り付けは、文の中の最初の6桁の数字を使う(メールの件名「大学ノートのログイン番号: 123456」をそのまま貼ったときなど)
+  // 貼り付けは、文の中の最初の6桁の数字を使う(メールの件名「かきためノートのログイン番号: 123456」をそのまま貼ったときなど)
   code.addEventListener('paste', (e) => {
     const text = (e.clipboardData?.getData('text') || '').replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
     const m = /\d{6}/.exec(text.replace(/[\s-]/g, '')) || /\d{6}/.exec(text);

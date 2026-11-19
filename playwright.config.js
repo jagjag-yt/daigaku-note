@@ -43,7 +43,7 @@ export default defineConfig({
       url: 'http://localhost:8130/',
       reuseExistingServer: !process.env.CI,
     },
-    // 同期サーバー(server/)のテスト用(大学ノートアカウントのログインの画面のテスト。test/ui/account.spec.js)
+    // 同期サーバー(server/)のテスト用(かきためノートアカウントのログインの画面のテスト。test/ui/account.spec.js)
     {
       command: 'node test/worker-server.mjs 8131',
       url: 'http://127.0.0.1:8131/health',

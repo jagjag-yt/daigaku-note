@@ -1,7 +1,7 @@
 // ブラウザでの通し確認(Playwright)。
 //   node serve.mjs 8124 &  /  node test/worker-server.mjs 8131 &
 //   URL=http://localhost:8124/ API=http://127.0.0.1:8131 GN=見本.goodnotes node test/e2e.cjs <出力フォルダ>
-// 大学ノートはログインしないと使えないので、手元で動かした同期サーバー(test/worker-server.mjs)でアカウントを作ってから始める。
+// かきためノートはログインしないと使えないので、手元で動かした同期サーバー(test/worker-server.mjs)でアカウントを作ってから始める。
 // pdf-lib と playwright は NODE_PATH などで解決できるようにしておく。
 const { chromium } = require('playwright');
 const fs = require('fs');
@@ -294,7 +294,7 @@ const countT = (page, t) => idb(page, `return ops.filter(o => o.t === ${JSON.str
     await page.click('#back');
   }
 
-  // クラウド同期(大学ノートアカウント): 端末Aから送り、端末Bで受け取り、Bの変更をAへ
+  // クラウド同期(かきためノートアカウント): 端末Aから送り、端末Bで受け取り、Bの変更をAへ
   console.log('  A:', await syncNow(page));
   const ctxB = await browser.newContext({ viewport: { width: 820, height: 1180 } });
   await ctxB.addInitScript((api) => localStorage.setItem('daigaku-note.api', api), API);

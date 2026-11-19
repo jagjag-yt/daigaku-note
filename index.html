@@ -6,7 +6,7 @@
        通信先は同期サーバーと、開発・試験用の手元のサーバーだけ。広告などを足すときは、ここに足す -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' blob: https://note-api.quiz-make.com http://localhost:* http://127.0.0.1:*; frame-src 'self' blob:; worker-src 'self' blob:; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <title>大学ノート</title>
+  <title>かきためノート</title>
   <meta name="description" content="無料・オフラインで使える手書きノート">
   <meta name="theme-color" content="#2f5d9e">
   <script src="js/theme-boot.js"></script>
@@ -15,14 +15,14 @@
   <link rel="apple-touch-icon" href="icons/icon-192.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="大学ノート">
+  <meta name="apple-mobile-web-app-title" content="かきためノート">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <!-- ログイン・アカウント作成(ログインしていないときに最初に出る。ログインせずに、この端末だけで使うこともできる) -->
   <section id="auth" class="auth" hidden>
     <div class="auth-wrap">
-      <div class="auth-brand"><img src="icons/icon.svg" alt="" width="40" height="40"><span>大学ノート</span></div>
+      <div class="auth-brand"><img src="icons/icon.svg" alt="" width="40" height="40"><span>かきためノート</span></div>
       <main class="auth-card" id="auth-card">
         <p class="auth-offline" id="auth-offline" role="status" hidden>オフラインのため、今はログインできません。ネットにつながってからお試しください。</p>
         <!-- ログイン -->
@@ -247,7 +247,7 @@
   <dialog id="sync-dialog" class="wide">
     <h2>同期</h2>
     <section id="acct-summary" class="acct-summary">
-      <h3>大学ノートアカウント</h3>
+      <h3>かきためノートアカウント</h3>
       <div id="acct-summary-out" hidden>
         <p>ログインしていません。ノートはこの端末だけに保存されています。ログインすると、ほかの端末と同期できます。</p>
         <div class="row">
