@@ -13,7 +13,7 @@
 // ETag を返さないサーバーや、ETag の付け方があやしいサーバーのために、起動後の最初・手動・5分ごとの同期では全部のフォルダを見る。
 // 全部見たときに「ETag は同じなのに新しいファイルがあった」なら、そのサーバーでは ETag を使わない。
 //
-// 大学ノートアカウント(js/account.js・server/)で同期するときも、同期サーバーの /dav/ を WebDAV としてこのまま使う
+// かきためノートアカウント(js/account.js・server/)で同期するときも、同期サーバーの /dav/ を WebDAV としてこのまま使う
 // (cfg.account がある)。違いは、変更のあとの待ちを長くすること(flush() で画面を離れるとき・ノートを閉じるときにすぐ送る)と、
 // ログイン切れ(401)・容量の上限(507)の知らせ方だけ。
 
@@ -33,7 +33,7 @@ const GAP_WAIT = 2 * 60_000; // 自分の op の番号の抜けが埋まるの�
 
 export const config = () => ({ ...cfg });
 const enabled = () => !!(cfg.url && cfg.user);
-// 大学ノートアカウント(js/account.js)で同期しているか。cfg.account = { email, deviceId }
+// かきためノートアカウント(js/account.js)で同期しているか。cfg.account = { email, deviceId }
 const accountMode = () => !!cfg.account;
 // アカウントの鍵がサーバーに断られたか(外された・退会した・長く使わなかった)。設定し直すまで true。
 // 読み込み直しても続くように、同期の設定(cfg.expired)にも保存する。断られた鍵ではもう同期しない
@@ -492,7 +492,7 @@ export async function syncNow(manual = false) {
     }
     const time = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
     let note = '';
-    if (newer) note = '。ほかの端末が新しいバージョンの大学ノートで書いた変更があります。アプリを更新してください';
+    if (newer) note = '。ほかの端末が新しいバージョンの「かきためノート」で書いた変更があります。アプリを更新してください';
     else if (broken) note = '。ほかの端末の変更のファイルに読めないものがありました。次の同期で読み直します';
     if (st.lost) {
       note += `。ほかの端末の変更のファイルのうち ${st.lost} 個が壊れていて読めませんでした`;

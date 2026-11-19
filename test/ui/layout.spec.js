@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
 // 日付・時刻の表示を毎回同じにする(2026-04-01 10:00 日本時間)
 const NOW = new Date('2026-04-01T10:00:00+09:00');
 
-// 大学ノートはログインしないと使えないので、手元で動かした同期サーバー(test/worker-server.mjs。playwright.config.js が起動する)で
+// かきためノートはログインしないと使えないので、手元で動かした同期サーバー(test/worker-server.mjs。playwright.config.js が起動する)で
 // アカウントを作ってから本棚を開く。アドレスはテストごとに変える(同じアドレスだと、ほかのテストのログインで端末が外れるため)
 const API = 'http://127.0.0.1:8131';
 let seq = 0;

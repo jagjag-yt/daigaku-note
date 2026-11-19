@@ -40,7 +40,7 @@ test('細工したノートを取り込んでも、スクリプトは動かず�
   await expect(page.locator('#notes')).toContainText('表紙に細工'); // 色だけを外して残す
   await expect(page.locator('#notes')).not.toContainText('ID に細工');
   await expect(page.locator('#pwned')).toHaveCount(0);
-  expect(await page.title()).toBe('大学ノート');
+  expect(await page.title()).toBe('かきためノート');
   expect(violations).toEqual([]);
 });
 

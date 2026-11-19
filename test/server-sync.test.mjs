@@ -239,7 +239,7 @@ test('PDF が大きすぎる(413)なら変更だけ送る。容量がいっぱ�
   }
 });
 
-test('大学ノートアカウント(js/account.js)でログインした端末: 変更のあとの待ちは約20秒、閉じるときはすぐ送る、ログイン切れ・容量の知らせ', async () => {
+test('かきためノートアカウント(js/account.js)でログインした端末: 変更のあとの待ちは約20秒、閉じるときはすぐ送る、ログイン切れ・容量の知らせ', async () => {
   const storage = new Map([['daigaku-note.api', srv.url]]);
   globalThis.localStorage = { getItem: (k) => storage.get(k) ?? null };
   const account = await import('../js/account.js');

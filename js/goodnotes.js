@@ -302,7 +302,7 @@ function strokeLine(raw) {
     } else if (nseg === 0 && start.length >= 3) line = [[start[0], start[1], start[2] * 2]];
   } else if ((k = findForm(t.top, PENCIL)) >= 0) {
     if (allEmpty(v, k)) return { empty: true };
-    // 筆圧を太さに焼き込む(大学ノート側で決めた近似): 線の中でいちばん強いところ(1 より弱ければ 1)を基本の太さにし、
+    // 筆圧を太さに焼き込む(かきためノート側で決めた近似): 線の中でいちばん強いところ(1 より弱ければ 1)を基本の太さにし、
     // 弱いところは細く(最小で 0.3 倍)。筆圧が 1 を超える値で入っていても一定の太さに張り付かないように、線ごとに割る
     const base = widthBefore(t, k);
     if (!(base > 0) || v[k + 1].length < 5) return { bad: true };
@@ -321,7 +321,7 @@ function strokeLine(raw) {
   return { line, width };
 }
 
-// 読んだ中心線を大学ノートの線にする。s は色・道具を決めた線(pts は空)。ox, oy = 投げ縄で動かした量
+// 読んだ中心線をかきためノートの線にする。s は色・道具を決めた線(pts は空)。ox, oy = 投げ縄で動かした量
 // 太さが変わる線は、太さの比を筆圧として持たせる(model.js の widthAt: 太さ = width × (0.3 + 筆圧))
 function fillStroke(s, got, ox = 0, oy = 0) {
   const r2 = (x) => Math.round(x * 100) / 100;
@@ -582,7 +582,7 @@ export async function importGoodnotes(file, recorder) {
     pdfHash.set(paper.att, hash);
   }
 
-  // 3) 大学ノートの変更記録として書き込む
+  // 3) かきためノートの変更記録として書き込む
   // 番号(端末内の連番)は、全部そろってから一度に取る。取り込みの途中(ファイルの読み書きを待つ間)に番号を取っておくと、
   // その間に書いた線が先に同期で送られ、取り込んだ分の番号が「送り済み」の後ろに取り残されるため
   const later = (n, t, p) => ({ n, t, p });

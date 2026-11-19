@@ -1,7 +1,7 @@
 // アプリ版(Android)の動きを、ブラウザの中で再現して確かめる(Playwright)。
 // 本物のアプリの代わりに window.Capacitor とプラグイン(DavHttp・App・Filesystem・Share)のふりを入れる。
 //   DavHttp は Node 側で本当に同期サーバーへ送る(ブラウザからは送らない = CORS を通らない)。
-//   大学ノートはログインしないと使えないので、手元で動かした同期サーバー(test/worker-server.mjs)でアカウントを作ってログインする。
+//   かきためノートはログインしないと使えないので、手元で動かした同期サーバー(test/worker-server.mjs)でアカウントを作ってログインする。
 //
 //   node serve.mjs 8124 &  /  node test/worker-server.mjs 8131 &
 //   URL=http://localhost:8124/ API=http://127.0.0.1:8131 node test/native-e2e.cjs

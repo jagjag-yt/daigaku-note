@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "大学ノート: 無料・オフライン・クロスプラットフォームの手書きノート(PWA / Android / iOS)",
+  "description": "かきためノート: 無料・オフライン・クロスプラットフォームの手書きノート(PWA / Android / iOS)",
   "scripts": {
     "start": "node serve.mjs 8123",
     "test": "node --test test/model.test.mjs test/transform.test.mjs test/erase.test.mjs test/pen.test.mjs test/shapes.test.mjs test/shape.test.mjs test/webdav.test.mjs test/validate.test.mjs test/goodnotes.test.mjs test/http.test.mjs test/build.test.mjs test/server.test.mjs test/server-sync.test.mjs test/oauth.test.mjs",

@@ -35,7 +35,7 @@ export function mailLimitDefaults(env) {
 }
 
 /**
- * 「大学ノート <no-reply@example.com>」の名前の部分を、日本語のままでも SES が受け取れる形(RFC 2047)にする。
+ * 「かきためノート <no-reply@example.com>」の名前の部分を、日本語のままでも SES が受け取れる形(RFC 2047)にする。
  * SES は送り元の名前に ASCII 以外の文字があると断るため。
  */
 export function encodeFrom(from) {

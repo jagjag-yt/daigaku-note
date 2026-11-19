@@ -55,7 +55,7 @@ test('先頭に値が1つ多いペン(ペン種別4)も読める(並び順はど
   assert.equal(strokeLine(pen([['A(v)', [1]], ['v', 2]])), null);
 });
 
-test('実物の鉛筆: 基本の太さで書き、書き終わりで筆圧が下がると細くなる。大学ノートの線にしても太さが戻る', () => {
+test('実物の鉛筆: 基本の太さで書き、書き終わりで筆圧が下がると細くなる。かきためノートの線にしても太さが戻る', () => {
   const got = strokeLine(real(REAL_PENCIL));
   assert.ok(got.line.length > 100);
   const ws = got.line.map((q) => q[2]);

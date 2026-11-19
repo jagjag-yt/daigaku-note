@@ -137,7 +137,7 @@ async function make(opts) {
   }
   const what = `${PERKS[perk]}(${days ? `${days}日` : 'ずっと'})`;
   const header = [
-    `大学ノート クーポンコード ${count}個`,
+    `かきためノート クーポンコード ${count}個`,
     `特典: ${what}`,
     `コードを使える期限: ${opts.until ? `${opts.until} まで` : 'なし'}`,
     `メモ: ${note || 'なし'}`,

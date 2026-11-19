@@ -1,6 +1,6 @@
 {
   "appId": "io.github.jagjagyt.daigakunote",
-  "appName": "大学ノート",
+  "appName": "かきためノート",
   "webDir": "www",
   "loggingBehavior": "none",
   "plugins": {

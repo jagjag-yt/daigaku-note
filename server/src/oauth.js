@@ -147,9 +147,9 @@ function backTo(returnTo, params) {
     // OS のブラウザの画面(とくに Apple のフォームの POST のあとの Android の Custom Tabs)は、操作なしでアプリの住所へ移るのを止めることがあり、
     // リダイレクトの本文は表示されないため
     const href = target.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-    const html = `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="0;url=${href}"><title>大学ノート</title>`
+    const html = `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="0;url=${href}"><title>かきためノート</title>`
       + `<style>body{font:16px/1.6 system-ui,sans-serif;text-align:center;padding:48px 24px;color:#222}a{display:inline-block;margin-top:16px;padding:12px 24px;border-radius:10px;background:#2f6fde;color:#fff;text-decoration:none}</style></head>`
-      + `<body><p>大学ノートに戻ります。</p><a href="${href}">大学ノートに戻る</a></body></html>`;
+      + `<body><p>かきためノートに戻ります。</p><a href="${href}">かきためノートに戻る</a></body></html>`;
     return new Response(html, {
       status: 200,
       headers: { 'content-type': 'text/html; charset=utf-8', 'x-page-csp': "default-src 'none'; style-src 'unsafe-inline'" },
@@ -160,9 +160,9 @@ function backTo(returnTo, params) {
 
 /** 戻り先が分からないときの、ことばだけのページ */
 function errorPage(message, status = 400) {
-  const html = `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>大学ノート</title>`
+  const html = `<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>かきためノート</title>`
     + `<style>body{font:16px/1.6 system-ui,sans-serif;text-align:center;padding:48px 24px;color:#222}</style></head>`
-    + `<body><p>${message}</p><p>この画面を閉じて、大学ノートからもう一度お試しください。</p></body></html>`;
+    + `<body><p>${message}</p><p>この画面を閉じて、「かきためノート」からもう一度お試しください。</p></body></html>`;
   return new Response(html, { status, headers: { 'content-type': 'text/html; charset=utf-8', 'x-page-csp': "default-src 'none'; style-src 'unsafe-inline'" } });
 }
 

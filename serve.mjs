@@ -21,7 +21,7 @@ http.createServer((req, res) => {
     res.end(data);
   });
 }).listen(port, () => {
-  console.log(`大学ノート: http://localhost:${port}/`);
+  console.log(`かきためノート: http://localhost:${port}/`);
   for (const list of Object.values(os.networkInterfaces())) for (const a of list || []) {
     if (a.family === 'IPv4' && !a.internal) console.log(`  iPadなどから: http://${a.address}:${port}/`);
   }

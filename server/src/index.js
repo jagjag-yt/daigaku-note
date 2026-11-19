@@ -1,4 +1,4 @@
-// 大学ノートの同期サーバー(Cloudflare Workers + D1 + R2 + Amazon SES(または Resend))。
+// かきためノートの同期サーバー(Cloudflare Workers + D1 + R2 + Amazon SES(または Resend))。
 //
 // できること: メールアドレスと6桁の番号でログインし、その鍵でクラウド同期の置き場(/dav/)を使う。
 // アプリから見ると /dav/ は WebDAV のファイル置き場で、js/webdav.js がそのまま使える(src/dav.js)。
@@ -265,16 +265,16 @@ async function handleOtpSend(request, env) {
  */
 async function sendOtpMail(env, email, code, purpose) {
   const signup = purpose === 'signup';
-  const subject = signup ? `大学ノートのアカウント作成の確認番号: ${code}` : `大学ノートのログイン番号: ${code}`;
+  const subject = signup ? `かきためノートのアカウント作成の確認番号: ${code}` : `かきためノートのログイン番号: ${code}`;
   const text = [
-    signup ? '大学ノートのアカウント作成の確認番号は次のとおりです。' : '大学ノートのログイン番号は次のとおりです。',
+    signup ? 'かきためノートのアカウント作成の確認番号は次のとおりです。' : 'かきためノートのログイン番号は次のとおりです。',
     '',
     `    ${code}`,
     '',
     `この番号は ${OTP_MINUTES} 分で使えなくなります。`,
     'お心当たりがない場合は、このメールを破棄してください。番号は誰にも教えないでください。',
     '',
-    '大学ノート https://jagjag-yt.github.io/daigaku-note/',
+    'かきためノート https://jagjag-yt.github.io/daigaku-note/',
   ].join('\n');
   return sendMail(env, email, subject, text);
 }

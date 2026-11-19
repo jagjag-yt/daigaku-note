@@ -92,7 +92,7 @@ const redeem = (ticket, verifier, label) => api('/oauth/redeem', { ticket, verif
 // ---- メール(SES) ----
 
 test('SES: AWS の部品(botocore)と同じ署名になる', async () => {
-  // 期待値は botocore 1.44 の SigV4Auth で同じ入力から作ったもの
+  // 期待値は botocore 1.44 の SigV4Auth で同じ入力から作ったもの。入力の名前は署名を作ったときのまま(旧名)にしている
   const body = `{"FromEmailAddress":"${encodeFrom('大学ノート <no-reply@quiz-make.com>')}","Destination":{"ToAddresses":["a@example.com"]}}`;
   const h = await signAws({
     method: 'POST', host: 'email.ap-northeast-1.amazonaws.com', path: '/v2/email/outbound-emails', region: 'ap-northeast-1', service: 'ses', body,
@@ -104,7 +104,7 @@ test('SES: AWS の部品(botocore)と同じ署名になる', async () => {
 });
 
 test('SES: 送り元の日本語の名前は RFC 2047 の形にする', () => {
-  assert.equal(encodeFrom('大学ノート <no-reply@quiz-make.com>'), '=?UTF-8?B?5aSn5a2m44OO44O844OI?= <no-reply@quiz-make.com>');
+  assert.equal(encodeFrom('かきためノート <no-reply@quiz-make.com>'), '=?UTF-8?B?44GL44GN44Gf44KB44OO44O844OI?= <no-reply@quiz-make.com>');
   assert.equal(encodeFrom('Daigaku "Note" <a@b.c>'), '"Daigaku \\"Note\\"" <a@b.c>');
   assert.equal(encodeFrom('<a@b.c>'), 'a@b.c');
   // 長い名前は、75文字までの encoded-word に分ける(文字の途中では切らない)
@@ -133,7 +133,7 @@ test('SES: ログインの番号は SES の東京から送られ、署名と本�
   assert.equal(m.url, 'https://email.ap-northeast-1.amazonaws.com/v2/email/outbound-emails');
   assert.match(m.auth, /^AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE\/\d{8}\/ap-northeast-1\/ses\/aws4_request, SignedHeaders=content-type;host;x-amz-date, Signature=[0-9a-f]{64}$/);
   assert.deepEqual(m.to, ['ses@example.com']);
-  assert.equal(m.from, '=?UTF-8?B?5aSn5a2m44OO44O844OI?= <no-reply@example.com>');
+  assert.equal(m.from, '=?UTF-8?B?44GL44GN44Gf44KB44OO44O844OI?= <no-reply@example.com>');
   assert.match(m.subject, /アカウント作成の確認番号: \d{6}/);
   assert.equal(m.raw.Content.Simple.Body.Text.Charset, 'UTF-8');
   const v = await api('/otp/verify', { email: 'ses@example.com', code: mail.lastCode('ses@example.com'), purpose: 'signup' });
@@ -340,7 +340,7 @@ test('引換券は始めた端末の合言葉がないと使えず、1回だけ'
   assert.equal((await redeem('short', f2.verifier)).status, 400);
 });
 
-test('戻り先は大学ノートの住所だけ', async () => {
+test('戻り先はかきためノートの住所だけ', async () => {
   assert.equal(allowedReturn(WEB), WEB);
   assert.equal(allowedReturn(`${WEB}?x=1#/login`), WEB);
   assert.equal(allowedReturn(APP_RETURN), APP_RETURN);
@@ -378,7 +378,7 @@ test('Apple: 署名した client_secret で引き換え、アプリの住所へ�
   assert.match(f.cb.headers.get('content-security-policy'), /default-src 'none'/);
   assert.ok(f.loc.startsWith(`${APP_RETURN}#/oauth?`), f.loc);
   const html = await f.cb.text();
-  assert.match(html, /大学ノートに戻る/);
+  assert.match(html, /かきためノートに戻る/);
   assert.ok(html.includes(f.loc.replace(/&/g, '&amp;')));
   const r = await redeem(f.hash.get('ticket'), f.verifier, 'iPhone・iPad のアプリ');
   assert.equal(r.status, 200, JSON.stringify(r.data));
