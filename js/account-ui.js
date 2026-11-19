@@ -274,8 +274,8 @@ async function showLocalNotice() {
   try { n = await h.countNotes(); } catch { /* 数えられなくても、お知らせを出さないだけ */ }
   $('#auth-offline').hidden = navigator.onLine;
   const parts = [];
-  if (cfg.url && !cfg.account) parts.push('自分のサーバー(WebDAV)での同期は、この版から使えなくなりました。ログインすると、この端末で書いた内容を大学ノートアカウントで同期します。ほかの端末で書いた内容は、その端末でもログインすると同期されます。');
-  if (n > 0) parts.push(`この端末にあるノート(${n}冊)は消えません。この端末で書いた内容は、ログインするとログインしたアカウントに同期されます。`);
+  if (cfg.url && !cfg.account) parts.push('自分のサーバー(WebDAV)での同期は、このバージョンから使えなくなりました。ログインすると、この端末で書いた内容を大学ノートアカウントで同期します。ほかの端末で書いた内容は、その端末でもログインすると同期されます。');
+  if (n > 0) parts.push(`この端末にあるノート(${n}冊)は消えません。この端末で書いた内容は、ログインすると、ログイン先のアカウントに同期されます。`);
   el.textContent = parts.join('');
   el.hidden = !parts.length;
 }
@@ -525,7 +525,7 @@ async function wipeDevice(email, how, { provider, discard } = {}) {
     await discard?.();
     await clearExports(); // アプリ版: 書き出した PDF のキャッシュも消す
     await db.wipeAll({
-      onBlocked: () => msg(shownMsg(), 'ほかのタブ・ウィンドウで開いている大学ノートを閉じてください。閉じると続きます。'),
+      onBlocked: () => msg(shownMsg(), 'ほかのタブ・ウィンドウで開いている大学ノートを閉じてください。すべて閉じると、この端末のノートの削除に進みます。'),
     });
     // 消せてから、前のアカウントの印を消す(消せなかったのに印だけ消すと、次は確かめずに同期してしまうため)
     try {
@@ -928,7 +928,7 @@ export function init(helpers) {
     const v = setCode(digits);
     toEnd();
     if (noAccountCode && v !== noAccountCode) setNoAccount(''); // 番号を打ち直したら、ふつうのログインに戻す
-    if (v.length === 6 && v === lastTried) msg($('#acct-code-msg'), 'この番号は先ほど違っていました。メールの番号をもう一度確かめてください。');
+    if (v.length === 6 && v === lastTried) msg($('#acct-code-msg'), 'この番号は、先ほど入力して違っていました。メールの番号をもう一度確かめてください。');
     else msg($('#acct-code-msg'), '');
     // 6桁そろったら、そのまま確かめる(貼り付け・自動入力のときも)。断られたのと同じ番号は自動では送らない
     if (v.length === 6 && v !== lastTried && v !== noAccountCode) verify();
@@ -1007,14 +1007,14 @@ export function init(helpers) {
     });
     if (done) {
       h.toast(offline
-        ? 'サーバーに接続できなかったため、この端末の中だけでログアウトしました。ほかの端末の「ログイン中の端末」から外せます'
+        ? 'サーバーに接続できなかったため、この端末の中だけでログアウトしました。この端末は、ほかの端末の「ログイン中の端末」から外せます'
         : 'ログアウトしました。この端末のノートはそのまま残っています', 6000);
     }
   };
   $('#acct-delete').onclick = async () => {
     const yes = await h.askConfirm({
       heading: 'アカウントを削除しますか?',
-      message: 'サーバーに預けた変更・PDF・画像をすべて削除し、すべての端末でログアウトします。元に戻せません。この端末の中のノートは消えずに残ります(ほかの端末の中のノートも残ります)。',
+      message: 'サーバーに預けた変更・PDF・画像をすべて削除し、すべての端末でログアウトします。元に戻せません。この端末とほかの端末の中のノートは消えずに残ります。',
       ok: '削除する',
       danger: true,
     });

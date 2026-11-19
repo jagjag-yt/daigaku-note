@@ -88,7 +88,7 @@ async function loadDoc(hash) {
   if (!docCache.has(hash)) {
     docCache.set(hash, (async () => {
       const f = await db.getFile(hash);
-      if (!f) throw new Error('PDFが見つかりません(同期ファイルに含まれていなかった可能性があります)');
+      if (!f) throw new Error('PDFが見つかりません。同期ファイルに含まれていなかった可能性があります');
       const buf = await f.data.arrayBuffer();
       const lib = await pdfjs();
       return lib.getDocument({ data: new Uint8Array(buf), isEvalSupported: false }).promise;

@@ -48,7 +48,7 @@ async function sha256Hex(buf) {
 
 export async function importSyncFile(json, recorder) {
   if (!json || json.format !== FORMAT) throw new Error('大学ノートの同期ファイルではありません');
-  if (json.version > 1) throw new Error('新しい版の大学ノートで作られたファイルです。アプリを更新してください');
+  if (json.version > 1) throw new Error('新しいバージョンの大学ノートで作られたファイルです。アプリを更新してください');
   let newFiles = 0;
   for (const f of Array.isArray(json.files) ? json.files : []) {
     // 他人のファイルは信用しない: data: の URL だけを読み(ほかの住所へは取りに行かない)、中身がハッシュと合うものだけを入れる
