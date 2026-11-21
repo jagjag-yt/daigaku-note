@@ -91,7 +91,8 @@ jobs:
           test -s "$aab" || { echo "::error::.aab ができていません"; exit 1; }
           unzip -l "$aab" 'base/assets/public/index.html' > /dev/null || { echo "::error::画面のファイルが .aab に入っていません"; exit 1; }
           if [ "$RELEASE" = true ]; then
-            jarsigner -verify "$aab" > /dev/null || { echo "::error::.aab に署名されていません"; exit 1; }
+            # jarsigner は署名がなくても 0 で終わるので、「jar verified.」が出るかで確かめる
+            jarsigner -verify "$aab" | grep -q '^jar verified' || { echo "::error::.aab に署名されていません"; exit 1; }
             keytool -printcert -jarfile "$aab" | grep -m1 'SHA256:' | sed 's/^/アップロード鍵の指紋 /'
           fi
           mkdir -p release-out
@@ -169,6 +170,9 @@ jobs:
             DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_STYLE=Automatic \
             MARKETING_VERSION="$VERSION_NAME" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
             "${auth[@]}" archive > build-archive.log 2>&1 || { grep -E 'error:|ARCHIVE FAILED' build-archive.log | head -n 40; echo "::error::アーカイブを作れませんでした"; exit 1; }
+          app=build/App.xcarchive/Products/Applications/App.app
+          test -f "$app/PrivacyInfo.xcprivacy" || { echo "::error::PrivacyInfo.xcprivacy がアプリに入っていません"; exit 1; }
+          [ "$(/usr/libexec/PlistBuddy -c 'Print :ITSAppUsesNonExemptEncryption' "$app/Info.plist")" = false ] || { echo "::error::Info.plist の暗号の申告がありません"; exit 1; }
           cat > "$RUNNER_TEMP/export.plist" <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

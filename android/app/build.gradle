@@ -9,7 +9,8 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         // バージョンの番号。ふだんは作った時刻(2026年1月1日からの分)にする。手元でも GitHub Actions でも、
         // 新しく作った APK ほど大きい番号になり、前のバージョンの上から入れ直せる(番号が下がると入れられない)。
-        // ストアに出すもの(.github/workflows/release.yml)は、環境変数 VERSION_CODE・VERSION_NAME で決める
+        // ストアに出すもの(.github/workflows/release.yml)も同じ決め方。見せるバージョンは環境変数 VERSION_NAME で決める
+        // (VERSION_CODE を渡すと番号もそれにする。手で上げ直したいとき用)
         versionCode((System.getenv('VERSION_CODE') ?: String.valueOf(System.currentTimeMillis().intdiv(60000) - 29453760)) as int)
         versionName(System.getenv('VERSION_NAME') ?: "1.0")
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"

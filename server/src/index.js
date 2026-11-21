@@ -218,18 +218,6 @@ async function handleOtpSend(request, env) {
   const purpose = purposeOf(body);
   if (!looksLikeEmail(email)) return fail(400, 'メールアドレスの形式が正しくありません。');
 
-  // 審査用のアカウント(App Store・Google Play の審査の担当者が使う。docs/ストア公開.md)。
-  // secret の REVIEW_EMAIL・REVIEW_CODE を両方入れたときだけ。メールは送らず、決めておいた番号を「送った番号」にする。
-  // 番号が決まっているので総当たりされやすい。番号を出す回数をサービス全体で1日20回に絞る(1回5つまで試せるので、1日100通り)
-  const reviewCode = reviewCodeFor(env, email);
-  if (reviewCode) {
-    if (!(await allowRate(env.DB, 'otp:review', 20, 24 * 60 * 60))) return fail(429, '送信の回数が上限に達しました。しばらく待ってからお試しください。');
-    await env.DB.prepare('INSERT INTO otp_requests (id, email, code_hash, expires_at, attempts, created_at) VALUES (?, ?, ?, ?, 0, ?)')
-      .bind(newId('otp'), email, await hashSecret(reviewCode, env.SECRET_PEPPER), new Date(Date.now() + OTP_MINUTES * 60_000).toISOString(), nowIso())
-      .run();
-    return json({ ok: true, expiresInMinutes: OTP_MINUTES });
-  }
-
   // 回数の上限。他人がそのアドレスへ送り続けて本人を締め出せないよう、アドレスだけでなくアドレスと IP の組でも数える
   // (アドレスだけの上限は、受信箱を埋められないための大きめの値)
   // 回数は断ったものも数えるので、順番に意味がある。断ったらその先は数えない。
@@ -239,6 +227,22 @@ async function handleOtpSend(request, env) {
   const rate = (bucket, limit, sec) => allowRate(env.DB, bucket, limit, sec);
   // 続けての送信はアドレスと IP の組で数える(アドレスだけだと、他人が送り続けて本人を締め出せるため)
   if (!(await rate(`otp:burst:${email}${ip ? `:${ip}` : ''}`, 1, otpBurstSeconds(env)))) return fail(429, '続けて送信できません。1分ほど待ってからお試しください。');
+
+  // 審査用のアカウント(App Store・Google Play の審査の担当者が使う。docs/ストア公開.md)。
+  // secret の REVIEW_EMAIL・REVIEW_CODE を両方入れたときだけ。メールは送らず、決めておいた番号を「送った番号」にする。
+  // 番号が決まっているので総当たりされやすい。番号を出す回数を IP ごとに1日5回、サービス全体で1日50回に絞る
+  // (1回5つまで試せるので、全体で1日250通り)。IP ごとの上限は、1か所から全体の枠を使い切って審査の人を締め出せないように。
+  // 続けての送信の上限(上の otp:burst)はほかのアドレスと同じにする(応答の違いから審査用のアドレスだと分からないように)
+  const reviewCode = reviewCodeFor(env, email);
+  if (reviewCode) {
+    const tooManyReview = () => fail(429, '送信の回数が上限に達しました。しばらく待ってからお試しください。');
+    if (ip && !(await rate(`otp:review:${ip}`, 5, 24 * 60 * 60))) return tooManyReview();
+    if (!(await rate('otp:review', 50, 24 * 60 * 60))) return tooManyReview();
+    await env.DB.prepare('INSERT INTO otp_requests (id, email, code_hash, expires_at, attempts, created_at) VALUES (?, ?, ?, ?, 0, ?)')
+      .bind(newId('otp'), email, await hashSecret(reviewCode, env.SECRET_PEPPER), new Date(Date.now() + OTP_MINUTES * 60_000).toISOString(), nowIso())
+      .run();
+    return json({ ok: true, expiresInMinutes: OTP_MINUTES });
+  }
   const tooMany = () => fail(429, '送信の回数が上限に達しました。しばらく待ってからお試しください。');
   if (ip && !(await rate(`otp:pair:${email}:${ip}`, 10, 24 * 60 * 60))) return tooMany();
   // IP ごとの1日の上限は、サービス全体の1日の枠の3割(/48 は45%)で、多くても100通(/48 は150通)。

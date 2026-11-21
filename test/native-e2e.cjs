@@ -128,8 +128,8 @@ async function syncNow(p) {
     if (!(await page.evaluate(() => document.documentElement.classList.contains('native-android')))) fail('アプリ版の印(class)が付いていない');
     if ((await page.evaluate(() => navigator.serviceWorker.getRegistrations())).length) fail('アプリ版なのにサービスワーカーを登録した');
     if ((await page.getAttribute('#gn-input', 'accept')) !== '') fail('GoodNotes の取り込みで種類を絞っている');
-    if (!(await page.evaluate(() => document.querySelector('#acct-coupon-form').hidden))) fail('アプリ版なのにクーポンコードの入力を出している(ストアの決まりで出せない)');
-    log('アプリ版として起動(サービスワーカーなし・取り込みの種類を絞らない・クーポンの入力なし)');
+    if (!(await page.evaluate(() => document.querySelector('#acct-perks-card').hidden))) fail('アプリ版なのに特典(クーポンコードの入力)を出している(ストアの決まりで出せない)');
+    log('アプリ版として起動(サービスワーカーなし・取り込みの種類を絞らない・特典の欄なし)');
 
     // ログインしないと使えない。戻る: アカウント作成のページ → ログインのページ → アプリを裏へ
     await page.evaluate(() => { location.hash = '#/signup'; });
