@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const FILES = ['index.html', 'terms.html', 'privacy.html', 'legal.css', 'style.css', 'sw.js', 'manifest.webmanifest', 'js', 'vendor', 'icons'];
+const FILES = ['index.html', 'terms.html', 'privacy.html', 'account-deletion.html', 'legal.css', 'style.css', 'sw.js', 'manifest.webmanifest', 'js', 'vendor', 'icons'];
 const out = path.resolve(root, process.argv[2] || 'www');
 // 消してから作るので、リポジトリそのものやその上のフォルダを指定したら止める
 if (out === root || root.startsWith(out + path.sep) || out === path.parse(out).root) {

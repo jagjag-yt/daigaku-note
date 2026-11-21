@@ -1,0 +1,192 @@
+# ストアに出すアプリを作る(手順は docs/ストア公開.md)。
+#   android: Google Play に上げる .aab(署名つき)を作り、Artifacts に残す。Play Console へは手で上げる
+#   ios:     App Store Connect に上げる(TestFlight に届く)。そこから審査に出す
+#
+# 署名して上げるのは、Actions の画面から手で走らせたとき(workflow_dispatch)だけ。
+# このファイルやアプリの設定を変えた push では、署名なしで「作れるか」だけを確かめる(ストアには何も送らない)。
+#
+# 使う Secrets(リポジトリの Settings → Secrets and variables → Actions):
+#   Android: ANDROID_KEYSTORE_BASE64(アップロード鍵の .jks を base64 にしたもの)・ANDROID_KEYSTORE_PASSWORD・ANDROID_KEY_ALIAS・ANDROID_KEY_PASSWORD(鍵のパスワードがストアのパスワードと同じなら省略可)
+#   iOS:     APPLE_TEAM_ID・APPSTORE_API_KEY_ID・APPSTORE_API_ISSUER_ID・APPSTORE_API_KEY_P8(.p8 の中身をそのまま)
+name: ストア用に作る
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'ストアに出すバージョン(例: 1.0、1.0.1)'
+        required: true
+        default: '1.0'
+      platforms:
+        description: '作るもの'
+        type: choice
+        options: [両方, Android だけ, iOS だけ]
+        default: 両方
+  push:
+    branches-ignore: [gh-pages]
+    paths:
+      - .github/workflows/release.yml
+      - android/app/build.gradle
+      - ios/App/App.xcodeproj/**
+      - ios/App/App/Info.plist
+      - ios/App/App/PrivacyInfo.xcprivacy
+concurrency:
+  group: release-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+permissions:
+  contents: read
+
+env:
+  RELEASE: ${{ github.event_name == 'workflow_dispatch' }}
+  VERSION_NAME: ${{ inputs.version || '1.0' }}
+
+jobs:
+  android:
+    if: github.event_name != 'workflow_dispatch' || inputs.platforms != 'iOS だけ'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: バージョンの形を確かめる
+        run: |
+          [[ "$VERSION_NAME" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || { echo "::error::バージョンは 1.0 や 1.0.1 の形で入れてください(今は $VERSION_NAME)"; exit 1; }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci
+      - name: 画面のファイルをアプリに入れる
+        run: npm run build:web && npx cap sync android
+      - name: 署名の鍵を用意する
+        if: env.RELEASE == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ]; then
+            echo "::error::Secrets の ANDROID_KEYSTORE_BASE64・ANDROID_KEYSTORE_PASSWORD・ANDROID_KEY_ALIAS が入っていません(docs/ストア公開.md)"
+            exit 1
+          fi
+          f="$RUNNER_TEMP/upload.jks"
+          echo "$KEYSTORE_BASE64" | base64 -d > "$f"
+          {
+            echo "RELEASE_STORE_FILE=$f"
+            echo "RELEASE_STORE_PASSWORD=$STORE_PASSWORD"
+            echo "RELEASE_KEY_ALIAS=$KEY_ALIAS"
+            echo "RELEASE_KEY_PASSWORD=${KEY_PASSWORD:-$STORE_PASSWORD}"
+          } >> "$GITHUB_ENV"
+      - name: .aab を作る
+        working-directory: android
+        run: ./gradlew bundleRelease --no-daemon
+      - name: できたものを確かめる
+        run: |
+          aab=android/app/build/outputs/bundle/release/app-release.aab
+          test -s "$aab" || { echo "::error::.aab ができていません"; exit 1; }
+          unzip -l "$aab" 'base/assets/public/index.html' > /dev/null || { echo "::error::画面のファイルが .aab に入っていません"; exit 1; }
+          if [ "$RELEASE" = true ]; then
+            jarsigner -verify "$aab" > /dev/null || { echo "::error::.aab に署名されていません"; exit 1; }
+            keytool -printcert -jarfile "$aab" | grep -m1 'SHA256:' | sed 's/^/アップロード鍵の指紋 /'
+          fi
+          mkdir -p release-out
+          cp "$aab" "release-out/kakitame-note-$VERSION_NAME.aab"
+      - uses: actions/upload-artifact@v4
+        if: env.RELEASE == 'true'
+        with:
+          name: kakitame-note-android-aab
+          path: release-out/
+          retention-days: 30
+
+  ios:
+    if: github.event_name != 'workflow_dispatch' || inputs.platforms != 'Android だけ'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: バージョンの形を確かめる
+        run: |
+          [[ "$VERSION_NAME" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || { echo "::error::バージョンは 1.0 や 1.0.1 の形で入れてください(今は $VERSION_NAME)"; exit 1; }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: いちばん新しい正式版の Xcode を使う(Capacitor 8 は Xcode 26 以上が要る)
+        run: |
+          x=$(ls -d /Applications/Xcode_*.app | grep -Eiv 'beta|release_candidate|_rc' | sort -V | tail -1)
+          echo "使う Xcode: $x"
+          sudo xcode-select -s "$x"
+          major=$(xcodebuild -version | awk 'NR==1{split($2,v,"."); print v[1]}')
+          if [ "$major" -lt 26 ]; then echo "::error::Xcode 26 以上が要ります(今は $major)"; exit 1; fi
+      - run: npm ci
+      - name: 画面のファイルをアプリに入れる
+        run: npm run build:web && npx cap sync ios
+      # ビルドの番号は、作った時刻(2026年1月1日からの分)。上げるたびに大きくなる(Android の versionCode と同じ決め方)
+      - name: ビルドの番号を決める
+        run: echo "BUILD_NUMBER=$(( $(date +%s) / 60 - 29453760 ))" >> "$GITHUB_ENV"
+      - name: 署名なしで作れるか確かめる
+        if: env.RELEASE != 'true'
+        run: |
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath build/App.xcarchive \
+            -clonedSourcePackagesDirPath build/spm \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            MARKETING_VERSION="$VERSION_NAME" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            archive > build-archive.log 2>&1 || { grep -E 'error:|ARCHIVE FAILED' build-archive.log | head -n 40; echo "::error::作れませんでした"; exit 1; }
+          app=build/App.xcarchive/Products/Applications/App.app
+          test -f "$app/PrivacyInfo.xcprivacy" || { echo "::error::PrivacyInfo.xcprivacy がアプリに入っていません"; exit 1; }
+          v=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Info.plist")
+          b=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Info.plist")
+          e=$(/usr/libexec/PlistBuddy -c 'Print :ITSAppUsesNonExemptEncryption' "$app/Info.plist")
+          echo "バージョン $v(ビルド $b)・暗号の申告 $e"
+          [ "$v" = "$VERSION_NAME" ] && [ "$b" = "$BUILD_NUMBER" ] && [ "$e" = false ] || { echo "::error::Info.plist の値がおかしい"; exit 1; }
+      - name: 署名して App Store Connect に上げる
+        if: env.RELEASE == 'true'
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          KEY_ID: ${{ secrets.APPSTORE_API_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APPSTORE_API_ISSUER_ID }}
+          KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
+        run: |
+          if [ -z "$TEAM_ID" ] || [ -z "$KEY_ID" ] || [ -z "$ISSUER_ID" ] || [ -z "$KEY_P8" ]; then
+            echo "::error::Secrets の APPLE_TEAM_ID・APPSTORE_API_KEY_ID・APPSTORE_API_ISSUER_ID・APPSTORE_API_KEY_P8 が入っていません(docs/ストア公開.md)"
+            exit 1
+          fi
+          key="$RUNNER_TEMP/AuthKey_$KEY_ID.p8"
+          printf '%s\n' "$KEY_P8" > "$key"
+          auth=(-allowProvisioningUpdates -authenticationKeyPath "$key" -authenticationKeyID "$KEY_ID" -authenticationKeyIssuerID "$ISSUER_ID")
+          # 署名の証明書とプロファイルは、Xcode が API キーで Apple から取ってくる(クラウド署名。Mac がなくてよい)
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath build/App.xcarchive \
+            -clonedSourcePackagesDirPath build/spm \
+            DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_STYLE=Automatic \
+            MARKETING_VERSION="$VERSION_NAME" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            "${auth[@]}" archive > build-archive.log 2>&1 || { grep -E 'error:|ARCHIVE FAILED' build-archive.log | head -n 40; echo "::error::アーカイブを作れませんでした"; exit 1; }
+          cat > "$RUNNER_TEMP/export.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          EOF
+          xcodebuild -exportArchive -archivePath build/App.xcarchive -exportOptionsPlist "$RUNNER_TEMP/export.plist" \
+            -exportPath build/export "${auth[@]}" > build-export.log 2>&1 || { grep -E 'error:|EXPORT FAILED' build-export.log | head -n 40; echo "::error::App Store Connect に上げられませんでした"; exit 1; }
+          rm -f "$key"
+          echo "App Store Connect に上げました: バージョン $VERSION_NAME(ビルド $BUILD_NUMBER)。数十分で TestFlight に出ます" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ios-release-logs
+          path: build-*.log
+          retention-days: 14

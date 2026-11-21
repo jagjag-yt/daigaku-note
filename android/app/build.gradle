@@ -7,10 +7,11 @@ android {
         applicationId "io.github.jagjagyt.daigakunote"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        // 作った時刻(2026年1月1日からの分)を版の番号にする。手元でも GitHub Actions でも、
-        // 新しく作った APK ほど大きい番号になり、前の版の上から入れ直せる(番号が下がると入れられない)
-        versionCode((int) (System.currentTimeMillis().intdiv(60000) - 29453760))
-        versionName "0.2"
+        // バージョンの番号。ふだんは作った時刻(2026年1月1日からの分)にする。手元でも GitHub Actions でも、
+        // 新しく作った APK ほど大きい番号になり、前のバージョンの上から入れ直せる(番号が下がると入れられない)。
+        // ストアに出すもの(.github/workflows/release.yml)は、環境変数 VERSION_CODE・VERSION_NAME で決める
+        versionCode((System.getenv('VERSION_CODE') ?: String.valueOf(System.currentTimeMillis().intdiv(60000) - 29453760)) as int)
+        versionName(System.getenv('VERSION_NAME') ?: "1.0")
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -28,12 +29,24 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        // ストアに出すリリース版の鍵(アップロード鍵)。鍵のファイルとパスワードは環境変数で渡す
+        // (GitHub Actions の Secrets から。.github/workflows/release.yml・docs/ストア公開.md)。
+        // 渡さなければ署名なしの .aab ができる(作れるかどうかの確認用)
+        if (System.getenv('RELEASE_STORE_FILE')) {
+            release {
+                storeFile file(System.getenv('RELEASE_STORE_FILE'))
+                storePassword System.getenv('RELEASE_STORE_PASSWORD')
+                keyAlias System.getenv('RELEASE_KEY_ALIAS')
+                keyPassword System.getenv('RELEASE_KEY_PASSWORD') ?: System.getenv('RELEASE_STORE_PASSWORD')
+            }
+        }
     }
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
         }
         release {
+            if (System.getenv('RELEASE_STORE_FILE')) signingConfig signingConfigs.release
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

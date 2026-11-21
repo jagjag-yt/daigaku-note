@@ -278,6 +278,50 @@ test('ログイン: 送信の回数の上限(続けての送信・IP ごと)', a
   }
 });
 
+test('ログイン: 審査用のアカウントは、メールを送らずに決めておいた番号で入れる', async () => {
+  const er = fakeEnv({ REVIEW_EMAIL: 'Review@Example.com', REVIEW_CODE: '482916' });
+  const sr = await startWorker(worker, er);
+  try {
+    const post = (path, body, ip = '203.0.113.70') => fetch(sr.url + path, { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': ip }, body: JSON.stringify(body) });
+    const before = mail.mails.length;
+    const s = await post('/otp/send', { email: 'review@example.com', purpose: 'signup' });
+    assert.equal(s.status, 200);
+    assert.equal((await s.json()).devCode, undefined);
+    assert.equal(mail.mails.length, before, '審査用のアカウントにはメールを送らない');
+    // 違う番号は通らない・決めておいた番号で作れる
+    assert.equal((await post('/otp/verify', { email: 'review@example.com', code: '000000', purpose: 'signup' })).status, 400);
+    const v = await post('/otp/verify', { email: 'review@example.com', code: '482916', purpose: 'signup', label: '審査' });
+    assert.equal(v.status, 200);
+    assert.ok((await v.json()).token);
+    // 2回目からはログインとして。続けて送っても「続けて」で断らない(審査の人が何度か試せるように)
+    assert.equal((await post('/otp/send', { email: 'review@example.com', purpose: 'login' })).status, 200);
+    assert.equal((await post('/otp/verify', { email: 'review@example.com', code: '482916', purpose: 'login' })).status, 200);
+    // ほかのアドレスはふつうにメールで送る
+    assert.equal((await post('/otp/send', { email: 'other-review@example.com', purpose: 'signup' })).status, 200);
+    assert.equal(mail.mails.length, before + 1);
+    // 番号を出すのはサービス全体で1日20回まで(すでに2回出した)
+    const st = [];
+    for (let i = 0; i < 19; i++) st.push((await post('/otp/send', { email: 'review@example.com', purpose: 'login' }, `198.51.100.${i + 1}`)).status);
+    assert.deepEqual(st.slice(0, 18), Array(18).fill(200));
+    assert.equal(st[18], 429);
+  } finally {
+    await sr.close();
+  }
+});
+
+test('ログイン: 審査用の番号が6桁の数字でなければ、審査用のアカウントとして扱わない', async () => {
+  const er = fakeEnv({ REVIEW_EMAIL: 'review@example.com', REVIEW_CODE: '1234', OTP_BURST_SECONDS: '0' });
+  const sr = await startWorker(worker, er);
+  try {
+    const before = mail.mails.length;
+    const s = await fetch(sr.url + '/otp/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'review@example.com' }) });
+    assert.equal(s.status, 200);
+    assert.equal(mail.mails.length, before + 1, 'ふつうにメールで送る');
+  } finally {
+    await sr.close();
+  }
+});
+
 test('ログイン: 他人が同じアドレスへ続けて送っても、本人は別の IP から待たずに送れる', async () => {
   const e7 = fakeEnv(); // 続けての送信の間隔は60秒
   const s7 = await startWorker(worker, e7);

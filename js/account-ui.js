@@ -970,6 +970,9 @@ export function init(helpers) {
 
   $('#acct-sync').onclick = () => dav.syncNow(true);
   const coupon = $('#acct-coupon');
+  // アプリ版(App Store・Google Play)ではクーポンコードの入力を出さない。ストアの決まりで、ストアの課金を通さずに
+  // 機能を開ける仕組み(コードなど)をアプリの中に置けないため。ブラウザ版で使った特典は、アプリ版でもそのまま効く
+  $('#acct-coupon-form').hidden = isNative;
   coupon.oninput = () => { msg($('#acct-coupon-msg'), ''); $('#acct-coupon-msg').classList.remove('ok'); };
   $('#acct-coupon-form').onsubmit = async (e) => {
     e.preventDefault();

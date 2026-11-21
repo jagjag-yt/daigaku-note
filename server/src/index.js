@@ -150,6 +150,11 @@ export function ipv6Prefix64(ip) {
  * Cloudflare を通った要求には必ず cf-connecting-ip が付くので、本番ではこの設定を入れても返さない。
  */
 const shouldEchoOtp = (request, env) => String(env.DEV_ECHO_OTP) === '1' && !clientIp(request);
+// 審査用のアカウントなら、決めておいた番号(6桁)を返す。そうでなければ null
+const reviewCodeFor = (env, email) => {
+  const code = String(env.REVIEW_CODE ?? '').trim();
+  return env.REVIEW_EMAIL && /^\d{6}$/.test(code) && normalizeEmail(env.REVIEW_EMAIL) === email ? code : null;
+};
 
 /** Authorization から鍵を取り出す(Bearer と、パスワードに鍵を入れた Basic)。 */
 function tokenFrom(request) {
@@ -212,6 +217,18 @@ async function handleOtpSend(request, env) {
   const email = normalizeEmail(body?.email);
   const purpose = purposeOf(body);
   if (!looksLikeEmail(email)) return fail(400, 'メールアドレスの形式が正しくありません。');
+
+  // 審査用のアカウント(App Store・Google Play の審査の担当者が使う。docs/ストア公開.md)。
+  // secret の REVIEW_EMAIL・REVIEW_CODE を両方入れたときだけ。メールは送らず、決めておいた番号を「送った番号」にする。
+  // 番号が決まっているので総当たりされやすい。番号を出す回数をサービス全体で1日20回に絞る(1回5つまで試せるので、1日100通り)
+  const reviewCode = reviewCodeFor(env, email);
+  if (reviewCode) {
+    if (!(await allowRate(env.DB, 'otp:review', 20, 24 * 60 * 60))) return fail(429, '送信の回数が上限に達しました。しばらく待ってからお試しください。');
+    await env.DB.prepare('INSERT INTO otp_requests (id, email, code_hash, expires_at, attempts, created_at) VALUES (?, ?, ?, ?, 0, ?)')
+      .bind(newId('otp'), email, await hashSecret(reviewCode, env.SECRET_PEPPER), new Date(Date.now() + OTP_MINUTES * 60_000).toISOString(), nowIso())
+      .run();
+    return json({ ok: true, expiresInMinutes: OTP_MINUTES });
+  }
 
   // 回数の上限。他人がそのアドレスへ送り続けて本人を締め出せないよう、アドレスだけでなくアドレスと IP の組でも数える
   // (アドレスだけの上限は、受信箱を埋められないための大きめの値)

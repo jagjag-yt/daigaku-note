@@ -10,6 +10,7 @@
   //   GOOGLE_CLIENT_ID・GOOGLE_CLIENT_SECRET … Google でのログイン(src/oauth.js)。入れていなければボタンは出ない
   //   APPLE_CLIENT_ID・APPLE_TEAM_ID・APPLE_KEY_ID・APPLE_PRIVATE_KEY … Apple でのログイン(同上)
   //   SECRET_PEPPER  … ハッシュに混ぜる長い乱数の文字列。変えると全員がログアウトされる(ログインし直せば同期は続く)
+  //   REVIEW_EMAIL・REVIEW_CODE … ストアの審査用のアカウント(メールは送らず、REVIEW_CODE の6桁で入れる)。docs/ストア公開.md
   "name": "daigaku-note-api",
   "main": "src/index.js",
   "compatibility_date": "2026-11-01",
