@@ -815,7 +815,7 @@ async function loadDetails() {
 // プラン(無料・Pro・Max)と、ログインできる端末の数
 function renderPlan(plan) {
   const tag = $('#acct-plan');
-  tag.hidden = !plan;
+  tag.hidden = !plan || isNative; // アプリ版では出さない(下の #acct-perks-card と同じ理由)
   if (!plan) return;
   tag.textContent = `${plan.name}プラン`;
   const n = Number(plan.devices) || 5;
@@ -970,6 +970,10 @@ export function init(helpers) {
 
   $('#acct-sync').onclick = () => dav.syncNow(true);
   const coupon = $('#acct-coupon');
+  // アプリ版(App Store・Google Play)では、特典(クーポンコードの入力と一覧)とプランの名前を出さない。
+  // ストアの決まりで、ストアの課金を通さずに機能を開ける仕組みをアプリの中に置けず、ストアで買えないプランを見せると審査で問われるため。
+  // ブラウザ版で付けた特典は、アプリ版でもそのまま効く(容量・端末の数は出す)。ストアでの販売を始めたら見直す
+  $('#acct-perks-card').hidden = isNative;
   coupon.oninput = () => { msg($('#acct-coupon-msg'), ''); $('#acct-coupon-msg').classList.remove('ok'); };
   $('#acct-coupon-form').onsubmit = async (e) => {
     e.preventDefault();

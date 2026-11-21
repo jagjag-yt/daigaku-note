@@ -278,6 +278,73 @@ test('ログイン: 送信の回数の上限(続けての送信・IP ごと)', a
   }
 });
 
+test('ログイン: 審査用のアカウントは、メールを送らずに決めておいた番号で入れる', async () => {
+  const er = fakeEnv({ REVIEW_EMAIL: 'Review@Example.com', REVIEW_CODE: '482916', OTP_BURST_SECONDS: '0' });
+  const sr = await startWorker(worker, er);
+  try {
+    const post = (path, body, ip = '203.0.113.70') => fetch(sr.url + path, { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': ip }, body: JSON.stringify(body) });
+    const before = mail.mails.length;
+    const s = await post('/otp/send', { email: 'review@example.com', purpose: 'signup' });
+    assert.equal(s.status, 200);
+    assert.equal((await s.json()).devCode, undefined);
+    assert.equal(mail.mails.length, before, '審査用のアカウントにはメールを送らない');
+    // 違う番号は通らない・決めておいた番号で作れる
+    assert.equal((await post('/otp/verify', { email: 'review@example.com', code: '000000', purpose: 'signup' })).status, 400);
+    const v = await post('/otp/verify', { email: 'review@example.com', code: '482916', purpose: 'signup', label: '審査' });
+    assert.equal(v.status, 200);
+    assert.ok((await v.json()).token);
+    // 2回目からはログインとして
+    assert.equal((await post('/otp/send', { email: 'review@example.com', purpose: 'login' })).status, 200);
+    assert.equal((await post('/otp/verify', { email: 'review@example.com', code: '482916', purpose: 'login' })).status, 200);
+    // ほかのアドレスはふつうにメールで送る
+    assert.equal((await post('/otp/send', { email: 'other-review@example.com', purpose: 'signup' })).status, 200);
+    assert.equal(mail.mails.length, before + 1);
+    // 1つの IP から出せるのは1日5回まで(すでに2回出した)。ほかの IP の審査の人は締め出されない
+    const st = [];
+    for (let i = 0; i < 4; i++) st.push((await post('/otp/send', { email: 'review@example.com', purpose: 'login' })).status);
+    assert.deepEqual(st, [200, 200, 200, 429]);
+    assert.equal((await post('/otp/send', { email: 'review@example.com', purpose: 'login' }, '198.51.100.200')).status, 200);
+    // IPv6 は /48 でもまとめて数える(/64 を変えても、同じ /48 からは5回まで)
+    const v6 = [];
+    for (let i = 0; i < 6; i++) v6.push((await post('/otp/send', { email: 'review@example.com', purpose: 'login' }, `2001:db8:5:${i + 1}::1`)).status);
+    assert.deepEqual(v6, [200, 200, 200, 200, 200, 429]);
+    // サービス全体では1日30回まで(ここまでで11回出した)
+    const all = [];
+    for (let i = 0; i < 20; i++) all.push((await post('/otp/send', { email: 'review@example.com', purpose: 'login' }, `198.51.100.${i + 1}`)).status);
+    assert.deepEqual(all.slice(0, 19), Array(19).fill(200));
+    assert.equal(all[19], 429);
+  } finally {
+    await sr.close();
+  }
+});
+
+test('ログイン: 審査用のアカウントにも、続けての送信の上限はほかと同じにかかる', async () => {
+  const er = fakeEnv({ REVIEW_EMAIL: 'review@example.com', REVIEW_CODE: '482916' }); // 続けての送信の間隔は60秒
+  const sr = await startWorker(worker, er);
+  try {
+    const send = (email) => fetch(sr.url + '/otp/send', { method: 'POST', headers: { 'content-type': 'application/json', 'cf-connecting-ip': '203.0.113.71' }, body: JSON.stringify({ email }) });
+    assert.equal((await send('review@example.com')).status, 200);
+    assert.equal((await send('review@example.com')).status, 429);
+    assert.equal((await send('someone@example.com')).status, 200);
+    assert.equal((await send('someone@example.com')).status, 429);
+  } finally {
+    await sr.close();
+  }
+});
+
+test('ログイン: 審査用の番号が6桁の数字でなければ、審査用のアカウントとして扱わない', async () => {
+  const er = fakeEnv({ REVIEW_EMAIL: 'review@example.com', REVIEW_CODE: '1234', OTP_BURST_SECONDS: '0' });
+  const sr = await startWorker(worker, er);
+  try {
+    const before = mail.mails.length;
+    const s = await fetch(sr.url + '/otp/send', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'review@example.com' }) });
+    assert.equal(s.status, 200);
+    assert.equal(mail.mails.length, before + 1, 'ふつうにメールで送る');
+  } finally {
+    await sr.close();
+  }
+});
+
 test('ログイン: 他人が同じアドレスへ続けて送っても、本人は別の IP から待たずに送れる', async () => {
   const e7 = fakeEnv(); // 続けての送信の間隔は60秒
   const s7 = await startWorker(worker, e7);
