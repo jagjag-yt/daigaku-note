@@ -230,14 +230,17 @@ async function handleOtpSend(request, env) {
 
   // 審査用のアカウント(App Store・Google Play の審査の担当者が使う。docs/ストア公開.md)。
   // secret の REVIEW_EMAIL・REVIEW_CODE を両方入れたときだけ。メールは送らず、決めておいた番号を「送った番号」にする。
-  // 番号が決まっているので総当たりされやすい。番号を出す回数を IP ごとに1日5回、サービス全体で1日50回に絞る
-  // (1回5つまで試せるので、全体で1日250通り)。IP ごとの上限は、1か所から全体の枠を使い切って審査の人を締め出せないように。
+  // 番号が決まっているので総当たりされやすい。番号を出す回数を IP ごとに1日5回、サービス全体で1日30回に絞る
+  // (1回5つまで試せるので、全体で1日150通り。審査が終わるたびに REVIEW_CODE を変える前提)。IP ごとの上限は、1か所から全体の枠を使い切って審査の人を締め出せないように。
   // 続けての送信の上限(上の otp:burst)はほかのアドレスと同じにする(応答の違いから審査用のアドレスだと分からないように)
   const reviewCode = reviewCodeFor(env, email);
   if (reviewCode) {
     const tooManyReview = () => fail(429, '送信の回数が上限に達しました。しばらく待ってからお試しください。');
     if (ip && !(await rate(`otp:review:${ip}`, 5, 24 * 60 * 60))) return tooManyReview();
-    if (!(await rate('otp:review', 50, 24 * 60 * 60))) return tooManyReview();
+    // IPv6 は /64 に加えて /48 でも数える(/48 をまるごと借りて、/64 を変えながら全体の枠を使い切れないように)
+    const review48 = ip && ip.endsWith('::/64') ? `${ip.split(':').slice(0, 3).join(':')}::/48` : null;
+    if (review48 && !(await rate(`otp:review:${review48}`, 5, 24 * 60 * 60))) return tooManyReview();
+    if (!(await rate('otp:review', 30, 24 * 60 * 60))) return tooManyReview();
     await env.DB.prepare('INSERT INTO otp_requests (id, email, code_hash, expires_at, attempts, created_at) VALUES (?, ?, ?, ?, 0, ?)')
       .bind(newId('otp'), email, await hashSecret(reviewCode, env.SECRET_PEPPER), new Date(Date.now() + OTP_MINUTES * 60_000).toISOString(), nowIso())
       .run();

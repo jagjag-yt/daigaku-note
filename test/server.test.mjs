@@ -304,11 +304,15 @@ test('ログイン: 審査用のアカウントは、メールを送らずに決
     for (let i = 0; i < 4; i++) st.push((await post('/otp/send', { email: 'review@example.com', purpose: 'login' })).status);
     assert.deepEqual(st, [200, 200, 200, 429]);
     assert.equal((await post('/otp/send', { email: 'review@example.com', purpose: 'login' }, '198.51.100.200')).status, 200);
-    // サービス全体では1日50回まで(ここまでで6回出した)
+    // IPv6 は /48 でもまとめて数える(/64 を変えても、同じ /48 からは5回まで)
+    const v6 = [];
+    for (let i = 0; i < 6; i++) v6.push((await post('/otp/send', { email: 'review@example.com', purpose: 'login' }, `2001:db8:5:${i + 1}::1`)).status);
+    assert.deepEqual(v6, [200, 200, 200, 200, 200, 429]);
+    // サービス全体では1日30回まで(ここまでで11回出した)
     const all = [];
-    for (let i = 0; i < 45; i++) all.push((await post('/otp/send', { email: 'review@example.com', purpose: 'login' }, `198.51.100.${i + 1}`)).status);
-    assert.deepEqual(all.slice(0, 44), Array(44).fill(200));
-    assert.equal(all[44], 429);
+    for (let i = 0; i < 20; i++) all.push((await post('/otp/send', { email: 'review@example.com', purpose: 'login' }, `198.51.100.${i + 1}`)).status);
+    assert.deepEqual(all.slice(0, 19), Array(19).fill(200));
+    assert.equal(all[19], 429);
   } finally {
     await sr.close();
   }
