@@ -125,7 +125,7 @@ async function init() {
   S.rec = new Recorder(device, clock.c, clock.l);
   const prefs = (await db.getMeta('prefs')) || {};
   if (['auto', 'on', 'off'].includes(prefs.finger)) S.finger = prefs.finger;
-  else if (prefs.fingerDraw) S.finger = 'on'; // 以前の版の「指で書く」をオンにしていた
+  else if (prefs.fingerDraw) S.finger = 'on'; // 以前のバージョンで「指で書く」をオンにしていた
   if (prefs.penSeen) S.penSeen = true;
   // 図形補正は v19 から既定オフ。以前の版は既定オンのまま prefs.shapes を保存していたので、
   // その値は読まず、v19 以降に自分でオンにしたとき(shapeSnap)だけオンにする
@@ -1930,7 +1930,7 @@ function openSettings() {
   choice('ページの送り方', 'hs', [['v', '縦にスクロール'], ['h', '横に1ページずつ']], S.hs ? 'h' : 'v', (v) => { S.hs = v === 'h'; savePrefs(); applyHs(); });
   section('書く');
   choice('指で書く', 'finger', [['auto', '自動'], ['on', '書く'], ['off', '書かない']], S.finger, (v) => { S.finger = v; savePrefs(); },
-    '自動: ペンを使うまでは指で書き、ペンを使ったらペンだけで書く。指で書くときは、2本の指でスクロールと拡大');
+    '自動: ペンを使うまでは指で書き、ペンを使ったらペンだけで書く。指で書くときは、2本の指でスクロール・拡大する' + (S.penSeen ? '。この端末ではペンを使ったので、自動では今はペンだけで書く' : ''));
   toggle('筆圧で太さを変える', 'ペンで書いたときだけ', () => S.pressure, (v) => { S.pressure = v; }, 'set-pressure');
   toggle('図形補正', '書き終えると、まっすぐな線や図形に直す。ペンを止めると、離す前に確かめられる', () => S.shapes, (v) => { S.shapes = v; refreshToolbar(); }, 'set-shapes');
   toggle('消したら前の道具に戻す', '消しゴムで1回消したら、その前に使っていた道具に戻る', () => S.eraser.back, (v) => { S.eraser.back = v; }, 'set-eraser-back');
@@ -3252,17 +3252,26 @@ let pasteFallback = 0, fallbackAt = 0;
 const isTouchEv = (e) => e.pointerType === 'touch';
 // 指で書くか。auto はペンを使うまで指で書く(ペンを持っていない人がすぐ書けるように)
 const fingerDraws = () => S.finger === 'on' || (S.finger === 'auto' && !S.penSeen);
-// 指で書いている途中の、その指の位置と書き始めた時刻(2本目の指が触れたときに、スクロールへ切り替えるため)
+// 指で書いている途中の、その指の位置と書き始めた時刻・場所(2本目の指が触れたときに、スクロールへ切り替えるため)。
+// 拡大ウインドウの中の指は入れない(ウインドウ側で扱う)
 const fingerAt = new Map();
-// 2本目の指が触れた: 1本目の指で書き始めて間もなければ、書きかけを取り消して2本指の操作にする
-function fingerToGesture(e) {
-  const a = active, f = a && fingerAt.get(a.id);
-  if (!f || a.id === e.pointerId || !fingerDraws() || performance.now() - f.t > 700) return false;
+// 指で始めた操作(書きかけの線など)を、何も残さずにやめる
+function dropFingerAction() {
+  const a = active;
   active = null;
   cancelAnimationFrame(liveFrame);
   clearTimeout(a.holdTimer);
   if (a.v) { paintLive(a.v, ''); paintInk(a.v); }
   if (S.sel) drawSelection();
+  return a;
+}
+const fingerActive = () => active && !active.pen && fingerAt.has(active.id);
+// 2本目の指が触れた: 1本目の指で書き始めて間もなく、ほとんど動かしていなければ、書きかけを取り消して2本指の操作にする
+function fingerToGesture(e) {
+  if (!fingerActive() || active.id === e.pointerId || !fingerDraws()) return false;
+  const f = fingerAt.get(active.id);
+  if (performance.now() - f.t > 700 || Math.hypot(f.x - f.sx, f.y - f.sy) > 40) return false;
+  const a = dropFingerAction();
   gestureDown({ pointerId: a.id, clientX: f.x, clientY: f.y, target: e.target });
   return true;
 }
@@ -3271,7 +3280,10 @@ function notePen(e) {
   if (e.pointerType !== 'pen' || S.penSeen) return;
   S.penSeen = true;
   savePrefs();
-  if (S.finger === 'auto') toast('ペンを使ったので、これからはペンで書き、指ではスクロールします。設定の「指で書く」で変えられます');
+  if (S.finger !== 'auto') return;
+  // ペンより先に手のひらが触れて線を書き始めていたら、それは取り消して、ペンで書けるようにする
+  if (fingerActive()) dropFingerAction();
+  toast('ペンを使ったので、これからはペンで書き、指ではスクロールします。設定の「指で書く」で変えられます');
 }
 // ペンを離した直後の線。iPad では手のひらが触れたときなどに、書いている途中で
 // ペンの入力がいったん途切れる(pointercancel / pointerup)ことがある。すぐに同じ場所から
@@ -3423,7 +3435,7 @@ function pagePoint(v, e) {
 
 function onDown(e) {
   if (!S.note) return;
-  if (e.pointerType === 'touch') fingerAt.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now() });
+  if (e.pointerType === 'touch' && !e.zw) fingerAt.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, t: performance.now() });
   if (e.target.closest('.sel-bar, .paste-chip, .text-editor')) return;
   hidePasteChip();
   // 書いている途中のテキストボックスの外をペン・マウスで押したら、そこで書き終える(その押した操作は使わない)。
@@ -3481,7 +3493,8 @@ function onDown(e) {
   if (active) return;
   if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 5) return;
   const pageEl = e.target.closest?.('.page');
-  if (!pageEl || e.target.closest('.page-foot')) return;
+  // ページの外で指が触れた: 指で書くときも、そこからはスクロールにする(2本目の指が来たら拡大)
+  if (!pageEl || e.target.closest('.page-foot')) { if (e.pointerType === 'touch' && !e.zw && fingerDraws()) gestureDown(e); return; }
   const v = S.views.get(pageEl.dataset.id);
   if (!v || !v.ready) return;
   e.preventDefault();
@@ -4636,7 +4649,8 @@ function gestureDown(e) {
   if (touches.size === 2) {
     const [a, b] = [...touches.values()];
     const r = sc.getBoundingClientRect();
-    pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y), scale: 1, fx: (a.x + b.x) / 2 - r.left, fy: (a.y + b.y) / 2 - r.top };
+    pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y), scale: 1, fx: (a.x + b.x) / 2 - r.left, fy: (a.y + b.y) / 2 - r.top, ax: 0, ay: 0 };
+    pinch.mx = pinch.fx; pinch.my = pinch.fy;
     const pages = $('#pages');
     pages.style.transformOrigin = `${sc.scrollLeft + pinch.fx - pages.offsetLeft}px ${sc.scrollTop + pinch.fy - pages.offsetTop}px`;
   }
@@ -4654,14 +4668,17 @@ function gestureMove(e) {
     const [a, b] = [...touches.values()];
     pinch.scale = Math.hypot(a.x - b.x, a.y - b.y) / pinch.d0;
     const s = clampZoom(S.zoom * pinch.scale) / S.zoom;
-    // 2本の指をそろえて動かしたら、その分スクロールする(拡大の中心も指の間に合わせて動かす)
-    const r = sc.getBoundingClientRect(), pages = $('#pages');
-    const fx = (a.x + b.x) / 2 - r.left, fy = (a.y + b.y) / 2 - r.top;
-    sc.scrollLeft -= fx - pinch.fx;
-    sc.scrollTop -= fy - pinch.fy;
-    pinch.fx = fx; pinch.fy = fy;
-    pages.style.transformOrigin = `${sc.scrollLeft + fx - pages.offsetLeft}px ${sc.scrollTop + fy - pages.offsetTop}px`;
-    pages.style.transform = `scale(${s})`;
+    // 2本の指をそろえて動かしたら、その分スクロールする。拡大の中心はページの上で動かさず、
+    // 実際にスクロールできた分(端では止まる)だけ、離したときの中心をずらす
+    const r = sc.getBoundingClientRect();
+    const mx = (a.x + b.x) / 2 - r.left, my = (a.y + b.y) / 2 - r.top;
+    const l0 = sc.scrollLeft, t0 = sc.scrollTop;
+    sc.scrollLeft -= mx - pinch.mx;
+    sc.scrollTop -= my - pinch.my;
+    pinch.ax += l0 - sc.scrollLeft;
+    pinch.ay += t0 - sc.scrollTop;
+    pinch.mx = mx; pinch.my = my;
+    $('#pages').style.transform = `scale(${s})`;
   } else if (!pinch) {
     sc.scrollLeft -= dx;
     sc.scrollTop -= dy;
@@ -4689,8 +4706,8 @@ function gestureUp(e) {
       const p = pinch;
       pinch = null;
       $('#pages').style.transform = '';
-      setZoom(S.zoom * p.scale, { x: p.fx, y: p.fy });
-      touches.clear();
+      setZoom(S.zoom * p.scale, { x: p.fx + p.ax, y: p.fy + p.ay });
+      // 残った指は、そのままスクロールに使う(指で書くときに、置き直した指で線を書かないように)
     }
     return;
   }
