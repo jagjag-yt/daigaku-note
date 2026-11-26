@@ -51,7 +51,7 @@ const PEN_NIBS = {
 };
 const PEN_DEFAULTS = { nib: 'fountain', sens: 50, stab: 0, dash: '', shape: '' }; // shape: ドラッグで描く図形(空ならふつうに書く)
 
-const APP_VERSION = 'v58'; // sw.js の VERSION と合わせる
+const APP_VERSION = 'v59'; // sw.js の VERSION と合わせる
 const MAX_TABS = 12; // 開いておけるタブの数
 const DEFAULT_HIDDEN = ['laser']; // 最初は隠しておく道具(設定やその他のメニューから使う)
 
@@ -77,7 +77,9 @@ const S = {
   eraser: { si: 1, mode: 'stroke', pick: { pen: true, marker: true, tape: true }, back: false },
   prevTool: 'pen', // 消しゴムに切り替える前の道具
   fit: true, // 幅に合わせた拡大率のままか(手で拡大したら false)
-  fingerDraw: false,
+  // 指で書くか: auto(ペンを使うまでは指で書き、ペンを使ったらペンだけで書く)/ on / off
+  finger: 'auto',
+  penSeen: false, // この端末でペンを使ったことがあるか(auto のとき使う)
   shapes: false, // 図形補正(既定はオフ)
   pressure: true, // ペンの筆圧で線の太さを変える
   undo: [],
@@ -122,7 +124,9 @@ async function init() {
   const clock = (await db.getMeta('clock')) || { c: 0, l: 0 };
   S.rec = new Recorder(device, clock.c, clock.l);
   const prefs = (await db.getMeta('prefs')) || {};
-  if (prefs.fingerDraw) S.fingerDraw = true;
+  if (['auto', 'on', 'off'].includes(prefs.finger)) S.finger = prefs.finger;
+  else if (prefs.fingerDraw) S.finger = 'on'; // 以前の版の「指で書く」をオンにしていた
+  if (prefs.penSeen) S.penSeen = true;
   // 図形補正は v19 から既定オフ。以前の版は既定オンのまま prefs.shapes を保存していたので、
   // その値は読まず、v19 以降に自分でオンにしたとき(shapeSnap)だけオンにする
   if (prefs.shapeSnap === true) S.shapes = true;
@@ -239,7 +243,7 @@ async function init() {
 }
 
 function savePrefs() {
-  db.setMeta('prefs', { fingerDraw: S.fingerDraw, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lib: { sort: S.lib.sort, view: S.lib.view }, nn: S.nn, theme: S.theme, hs: S.hs, tb: S.tb, tabs: S.tabs, ro: [...S.ro], lockHash: S.lockHash, tape: S.tape, markerMode: S.markerMode, straight: S.straight, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text, sticky: S.sticky });
+  db.setMeta('prefs', { finger: S.finger, penSeen: S.penSeen, shapeSnap: S.shapes, pressure: S.pressure, pen: S.pen, marker: S.marker, slots: S.slots, sidebar: S.sidebar, eraser: S.eraser, tool: S.tool, lib: { sort: S.lib.sort, view: S.lib.view }, nn: S.nn, theme: S.theme, hs: S.hs, tb: S.tb, tabs: S.tabs, ro: [...S.ro], lockHash: S.lockHash, tape: S.tape, markerMode: S.markerMode, straight: S.straight, lasso: S.lasso, palettes: S.palettes, colorHist: S.colorHist, text: S.text, sticky: S.sticky });
 }
 
 function route() {
@@ -1818,10 +1822,10 @@ function moreMenu(anchor) {
     { icon: 'settings', label: '設定…', id: 'open-settings', onClick: openSettings },
     // 図形補正のボタンはスマホ幅ではツールバーに出さないので、ここからも切り替えられるようにする
     { icon: 'shapes', label: '図形補正', id: 'shapes-menu', on: S.shapes, onClick: () => $('#shapes').click() },
-    { icon: 'finger', label: '指で書く', id: 'finger', on: S.fingerDraw, onClick: () => {
-      S.fingerDraw = !S.fingerDraw;
+    { icon: 'finger', label: '指で書く', id: 'finger', on: fingerDraws(), onClick: () => {
+      S.finger = fingerDraws() ? 'off' : 'on';
       savePrefs();
-      toast(S.fingerDraw ? '指でも書けるようにしました' : 'ペンだけで書けるようにしました。指ではスクロールします');
+      toast(S.finger === 'on' ? '指でも書けるようにしました。2本の指でスクロールします' : 'ペンだけで書けるようにしました。指ではスクロールします');
     } },
     { icon: 'pen', label: '筆圧で太さを変える', id: 'pressure', on: S.pressure, onClick: () => {
       S.pressure = !S.pressure;
@@ -1888,11 +1892,14 @@ function openSettings() {
     body.appendChild(h);
   };
   // 選ぶもの(ラジオ)
-  const choice = (label, name, options, value, onChange) => {
+  const choice = (label, name, options, value, onChange, hint) => {
     const row = document.createElement('div');
     row.className = 'set-row';
-    row.innerHTML = `<span class="set-label" id="set-${name}"></span><div class="seg" role="radiogroup" aria-labelledby="set-${name}"></div>`;
+    row.innerHTML = `<span class="set-text"><span class="set-label" id="set-${name}"></span><span class="set-hint"></span></span><div class="seg" role="radiogroup" aria-labelledby="set-${name}"></div>`;
     row.querySelector('.set-label').textContent = label;
+    const h = row.querySelector('.set-hint');
+    if (hint) h.textContent = hint;
+    else h.remove();
     const seg = row.querySelector('.seg');
     for (const [v, text] of options) {
       const l = document.createElement('label');
@@ -1922,7 +1929,8 @@ function openSettings() {
   choice('画面の色', 'theme', [['system', '端末に合わせる'], ['light', 'ライト'], ['dark', 'ダーク']], S.theme, (v) => { S.theme = v; applyTheme(); savePrefs(); });
   choice('ページの送り方', 'hs', [['v', '縦にスクロール'], ['h', '横に1ページずつ']], S.hs ? 'h' : 'v', (v) => { S.hs = v === 'h'; savePrefs(); applyHs(); });
   section('書く');
-  toggle('指で書く', '切ると、指はスクロールと拡大だけになり、書けるのはペンだけになる', () => S.fingerDraw, (v) => { S.fingerDraw = v; }, 'set-finger');
+  choice('指で書く', 'finger', [['auto', '自動'], ['on', '書く'], ['off', '書かない']], S.finger, (v) => { S.finger = v; savePrefs(); },
+    '自動: ペンを使うまでは指で書き、ペンを使ったらペンだけで書く。指で書くときは、2本の指でスクロールと拡大');
   toggle('筆圧で太さを変える', 'ペンで書いたときだけ', () => S.pressure, (v) => { S.pressure = v; }, 'set-pressure');
   toggle('図形補正', '書き終えると、まっすぐな線や図形に直す。ペンを止めると、離す前に確かめられる', () => S.shapes, (v) => { S.shapes = v; refreshToolbar(); }, 'set-shapes');
   toggle('消したら前の道具に戻す', '消しゴムで1回消したら、その前に使っていた道具に戻る', () => S.eraser.back, (v) => { S.eraser.back = v; }, 'set-eraser-back');
@@ -2948,7 +2956,7 @@ function bindZoomWin() {
   let cur = null;
   pad.addEventListener('pointerdown', (e) => {
     if (!S.zw || cur) return;
-    if (e.pointerType === 'touch' && !S.fingerDraw) return; // 指で書かない設定のときは、指では書かない
+    if (e.pointerType === 'touch' && !fingerDraws()) return; // 指で書かない設定のときは、指では書かない
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     const v = S.views.get(S.zw.pageId);
     if (!v) return;
@@ -3242,6 +3250,29 @@ let pinch = null, inertia = null, lastPenTime = 0, liveFrame = 0;
 let tapStart = null; // テキストの道具で指で押したところ
 let pasteFallback = 0, fallbackAt = 0;
 const isTouchEv = (e) => e.pointerType === 'touch';
+// 指で書くか。auto はペンを使うまで指で書く(ペンを持っていない人がすぐ書けるように)
+const fingerDraws = () => S.finger === 'on' || (S.finger === 'auto' && !S.penSeen);
+// 指で書いている途中の、その指の位置と書き始めた時刻(2本目の指が触れたときに、スクロールへ切り替えるため)
+const fingerAt = new Map();
+// 2本目の指が触れた: 1本目の指で書き始めて間もなければ、書きかけを取り消して2本指の操作にする
+function fingerToGesture(e) {
+  const a = active, f = a && fingerAt.get(a.id);
+  if (!f || a.id === e.pointerId || !fingerDraws() || performance.now() - f.t > 700) return false;
+  active = null;
+  cancelAnimationFrame(liveFrame);
+  clearTimeout(a.holdTimer);
+  if (a.v) { paintLive(a.v, ''); paintInk(a.v); }
+  if (S.sel) drawSelection();
+  gestureDown({ pointerId: a.id, clientX: f.x, clientY: f.y, target: e.target });
+  return true;
+}
+// この端末で初めてペンを使った: 自動のときは、これからはペンだけで書き、指はスクロールにする
+function notePen(e) {
+  if (e.pointerType !== 'pen' || S.penSeen) return;
+  S.penSeen = true;
+  savePrefs();
+  if (S.finger === 'auto') toast('ペンを使ったので、これからはペンで書き、指ではスクロールします。設定の「指で書く」で変えられます');
+}
 // ペンを離した直後の線。iPad では手のひらが触れたときなどに、書いている途中で
 // ペンの入力がいったん途切れる(pointercancel / pointerup)ことがある。すぐに同じ場所から
 // 続きが来たら同じ線としてつなぐため、確定を少し待つ。
@@ -3266,6 +3297,7 @@ function bindInput() {
   if (/[?&]debug/.test(location.search)) {
     for (const t of ['pointerdown', 'pointerup', 'pointercancel']) sc.addEventListener(t, (e) => debugCount(`${t.slice(7)}:${e.pointerType}`), true);
   }
+  document.addEventListener('pointerdown', notePen, true);
   sc.addEventListener('pointerdown', onDown);
   sc.addEventListener('pointermove', onMove);
   sc.addEventListener('pointerup', onUp);
@@ -3391,22 +3423,26 @@ function pagePoint(v, e) {
 
 function onDown(e) {
   if (!S.note) return;
+  if (e.pointerType === 'touch') fingerAt.set(e.pointerId, { x: e.clientX, y: e.clientY, t: performance.now() });
   if (e.target.closest('.sel-bar, .paste-chip, .text-editor')) return;
   hidePasteChip();
   // 書いている途中のテキストボックスの外をペン・マウスで押したら、そこで書き終える(その押した操作は使わない)。
   // 指はスクロールに使うので、軽く押したときだけ書き終える(gestureUp)
-  if (S.edit && !(isTouchEv(e) && !S.fingerDraw)) { e.preventDefault(); commitText(); return; }
+  if (S.edit && !(isTouchEv(e) && !fingerDraws())) { e.preventDefault(); commitText(); return; }
   const isTouch = e.pointerType === 'touch';
   // 閲覧専用: 指はスクロール・拡大だけ。ペンとマウスでは何もしない(マウスはホイールでスクロール)
   if (isRO()) {
     if (isTouch && !e.zw && !palmRecent()) return gestureDown(e);
     return;
   }
+  // 指で書くとき: 1本目の指で書き始めてすぐ2本目の指が触れたら、書きかけをやめて2本指のスクロール・拡大にする
+  if (isTouch && fingerToGesture(e)) return gestureDown(e);
   // ペンで書いている最中・直後の指は手のひらとみなして無視する
   if (isTouch && palmRecent()) return;
   // 指でも、投げ縄で選んだ枠のつまみはつかめるようにする(つまみ以外は今までどおりスクロール)
   const onHandle = isTouch && S.tool === 'lasso' && S.sel && e.target.closest?.('.sel-h');
-  if (isTouch && !S.fingerDraw && !onHandle) return gestureDown(e);
+  if (isTouch && !fingerDraws() && !onHandle) return gestureDown(e);
+  if (isTouch && touches.size) return gestureDown(e); // 2本指のスクロール・拡大の途中に、ほかの指が触れた
   if (e.pointerType === 'pen') {
     // 手のひらを先に置いていた場合: 指の操作(スクロール・ズーム)を止める
     if (touches.size) { touches.clear(); pinch = null; $('#pages').style.transform = ''; }
@@ -3510,6 +3546,8 @@ function onDown(e) {
 }
 
 function onMove(e) {
+  const f = e.pointerType === 'touch' && fingerAt.get(e.pointerId);
+  if (f) { f.x = e.clientX; f.y = e.clientY; }
   if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
     if (palmRecent()) return; // 手のひらが動いてもスクロールしない
     return gestureMove(e);
@@ -3769,6 +3807,7 @@ function eraseAt(e) {
 const minPiece = (d) => Math.max(0.3, d.width * 0.6);
 
 async function onUp(e) {
+  fingerAt.delete(e.pointerId);
   if (e.pointerType === 'touch' && touches.has(e.pointerId)) return gestureUp(e);
   if (!active || e.pointerId !== active.id) return;
   const a = active;
@@ -4615,7 +4654,14 @@ function gestureMove(e) {
     const [a, b] = [...touches.values()];
     pinch.scale = Math.hypot(a.x - b.x, a.y - b.y) / pinch.d0;
     const s = clampZoom(S.zoom * pinch.scale) / S.zoom;
-    $('#pages').style.transform = `scale(${s})`;
+    // 2本の指をそろえて動かしたら、その分スクロールする(拡大の中心も指の間に合わせて動かす)
+    const r = sc.getBoundingClientRect(), pages = $('#pages');
+    const fx = (a.x + b.x) / 2 - r.left, fy = (a.y + b.y) / 2 - r.top;
+    sc.scrollLeft -= fx - pinch.fx;
+    sc.scrollTop -= fy - pinch.fy;
+    pinch.fx = fx; pinch.fy = fy;
+    pages.style.transformOrigin = `${sc.scrollLeft + fx - pages.offsetLeft}px ${sc.scrollTop + fy - pages.offsetTop}px`;
+    pages.style.transform = `scale(${s})`;
   } else if (!pinch) {
     sc.scrollLeft -= dx;
     sc.scrollTop -= dy;

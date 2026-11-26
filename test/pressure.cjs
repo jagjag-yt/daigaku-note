@@ -15,6 +15,7 @@ const { chromium } = require('playwright');
     const page = await (await b.newContext({ viewport: { width: 1000, height: 800 }, deviceScaleFactor: 2, hasTouch: true })).newPage();
     page.on('pageerror', (e) => errs.push(mode + ': ' + e.message));
     await page.goto(process.env.URL + '?debug');
+    await page.locator('#auth .auth-skip:visible').first().click(); // ログインせずに使う
     await page.click('#new-note'); await page.click('#new-notebook'); await page.fill('#nn-title', 't'); await page.click('#new-form button[type=submit]');
     await page.waitForSelector('#editor:not([hidden]) .page'); await page.waitForTimeout(300);
     if (mode === 'off') { await page.click('#more-btn'); await page.click('#pressure'); await page.waitForTimeout(100); }
