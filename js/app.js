@@ -4707,7 +4707,9 @@ function gestureUp(e) {
       pinch = null;
       $('#pages').style.transform = '';
       setZoom(S.zoom * p.scale, { x: p.fx + p.ax, y: p.fy + p.ay });
-      // 残った指は、そのままスクロールに使う(指で書くときに、置き直した指で線を書かないように)
+      // 残った指は、そのままスクロールに使う(指で書くときに、置き直した指で線を書かないように)。
+      // 広げたときの速さは使わない(離したときに慣性でスクロールしないように)
+      for (const r of touches.values()) { r.vx = 0; r.vy = 0; }
     }
     return;
   }
